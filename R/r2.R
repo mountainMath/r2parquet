@@ -280,8 +280,8 @@ file_to_filesystem <- function(path,filesystem,destination,chunk_size=8*1024^2){
 #' Expects the R2 account id and the value of an R2 API token with admin read and write permissions
 #' to be available as `R2_ACCOUNT_ID` and `R2_API_TOKEN` environment variables. For connecting a custom
 #' domain the token also needs Zone Read permission for the domain's zone, which has to be an active zone
-#' in the same Cloudflare account. With Zone Cache Purge permission as well, `parquet_to_r2` and
-#' `remove_parquet_from_r2` purge changed files from the cache. Each custom domain can only serve one bucket, use subdomains like
+#' in the same Cloudflare account. With Zone Cache Purge permission as well, `upload_parquet` and
+#' `remove_parquet` purge changed files from the cache. Each custom domain can only serve one bucket, use subdomains like
 #' `data.example.com` to serve several buckets from one zone.
 #'
 #' @param r2_bucket R2 bucket name
@@ -329,18 +329,19 @@ create_r2_bucket <- function(r2_bucket,public=FALSE,custom_domain=NULL) {
 #' permission in the `R2_API_TOKEN` environment variable, see `create_r2_bucket`, and is skipped if it is not set.
 #'
 #' @param path path to local parquet file or directory with (partitioned) parquet files
-#' @param r2_bucket R2 bucket name
-#' @param r2_path path in bucket. If `path` is a file and `r2_path` is a path component ending with a slash (`/`)
-#' the basename of the input path will be appended. If `path` is a directory `r2_path` is the path
+#' @param destination destination on R2 as `r2://bucket/path`. If `path` is a file and `destination` ends with a slash (`/`)
+#' or is just the bucket, the basename of `path` gets appended. If `path` is a directory, `destination` is the directory
 #' under which the content of the directory gets placed.
 #' @param purge_cache if `TRUE`, the default, purge the uploaded files from the Cloudflare cache of custom domains of the bucket
-#' @return (invisibly) the paths in the bucket of the uploaded files
+#' @return (invisibly) the uploaded files as `r2://bucket/path`
 #' @export
-parquet_to_r2 <- function(path,r2_bucket,r2_path="",purge_cache=TRUE) {
+upload_parquet <- function(path,destination,purge_cache=TRUE) {
   if (!requireNamespace("arrow",quietly=TRUE)) {
     stop("The arrow package is required to upload to R2.")
   }
-  r2_path <- sub("^/+","",r2_path)
+  destination <- r2_split_path(destination)
+  r2_bucket <- destination$bucket
+  r2_path <- destination$path
   if (dir.exists(path)) {
     files <- dir(path,"\\.parquet$",recursive=TRUE)
     if (length(files)==0) stop(paste0("No parquet files found in ",path,"."))
@@ -361,7 +362,7 @@ parquet_to_r2 <- function(path,r2_bucket,r2_path="",purge_cache=TRUE) {
     file_to_filesystem(files[i],filesystem,paste0(r2_bucket,"/",r2_paths[i]))
   }
   if (purge_cache) r2_purge_cache_after_change(r2_bucket,r2_paths)
-  invisible(r2_paths)
+  invisible(paste0("r2://",r2_bucket,"/",r2_paths))
 }
 
 #' remove parquet files from Cloudflare R2
@@ -374,18 +375,19 @@ parquet_to_r2 <- function(path,r2_bucket,r2_path="",purge_cache=TRUE) {
 #' environment variables.
 #'
 #' If the bucket is served via a custom domain, the removed files get purged from the Cloudflare cache,
-#' with the same requirements as for `parquet_to_r2`.
+#' with the same requirements as for `upload_parquet`.
 #'
-#' @param r2_bucket R2 bucket name
-#' @param r2_path path in bucket of the parquet file, or of the directory with (partitioned) parquet files
+#' @param path parquet file, or directory with (partitioned) parquet files, on R2 as `r2://bucket/path`
 #' @param purge_cache if `TRUE`, the default, purge the removed files from the Cloudflare cache of custom domains of the bucket
-#' @return (invisibly) the paths in the bucket of the removed files
+#' @return (invisibly) the removed files as `r2://bucket/path`
 #' @export
-remove_parquet_from_r2 <- function(r2_bucket,r2_path,purge_cache=TRUE) {
+remove_parquet <- function(path,purge_cache=TRUE) {
   if (!requireNamespace("arrow",quietly=TRUE)) {
     stop("The arrow package is required to access R2.")
   }
-  r2_path <- sub("/+$","",sub("^/+","",r2_path))
+  path <- r2_split_path(path)
+  r2_bucket <- path$bucket
+  r2_path <- sub("/+$","",path$path)
   if (r2_path=="") stop("Please specify the path of the parquet file or directory to remove.")
   filesystem <- r2_filesystem()
   bucket_path <- paste0(r2_bucket,"/",r2_path)
@@ -403,7 +405,7 @@ remove_parquet_from_r2 <- function(r2_bucket,r2_path,purge_cache=TRUE) {
   r2_delete_objects(r2_bucket,r2_paths)
   if (purge_cache) r2_purge_cache_after_change(r2_bucket,r2_paths)
   message(paste0("Removed ",length(r2_paths)," file",if (length(r2_paths)>1) "s" else ""," from R2 bucket ",r2_bucket,"."))
-  invisible(r2_paths)
+  invisible(paste0("r2://",r2_bucket,"/",r2_paths))
 }
 
 #' presigned URL for a file on Cloudflare R2
@@ -417,21 +419,22 @@ remove_parquet_from_r2 <- function(r2_bucket,r2_path,purge_cache=TRUE) {
 #' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
 #' environment variables. The URL stops working when the API token is revoked.
 #'
-#' @param r2_bucket R2 bucket name
-#' @param r2_path path of the file in the bucket
+#' @param path file on R2 as `r2://bucket/path`
 #' @param expires number of seconds the URL is valid for, between 1 second and 7 days (604800 seconds),
 #' default is one hour
 #' @param method HTTP method the URL is valid for, `"GET"` (the default) to download, `"HEAD"` to
 #' get the file's metadata, or `"PUT"` to upload
 #' @return the presigned URL
 #' @export
-r2_presigned_url <- function(r2_bucket,r2_path,expires=3600,method=c("GET","HEAD","PUT")) {
+presigned_url <- function(path,expires=3600,method=c("GET","HEAD","PUT")) {
   method <- match.arg(method)
   if (!is.numeric(expires) || length(expires)!=1 || expires<1 || expires>604800) {
     stop("expires has to be between 1 and 604800 seconds (7 days).")
   }
-  r2_path <- sub("^/+","",r2_path)
-  if (r2_path=="" || endsWith(r2_path,"/")) stop("The r2_path has to be the path of a file.")
+  path <- r2_split_path(path)
+  r2_bucket <- path$bucket
+  r2_path <- path$path
+  if (r2_path=="" || endsWith(r2_path,"/")) stop("The path has to be the path of a file.")
   credentials <- r2_credentials(c("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
   sigv4_presigned_url(method,r2_endpoint(),r2_canonical_path(r2_bucket,r2_path),expires,
                       access_key=credentials[["R2_ACCESS_KEY_ID"]],
@@ -442,7 +445,7 @@ r2_presigned_url <- function(r2_bucket,r2_path,expires=3600,method=c("GET","HEAD
 r2_split_path <- function(path){
   parts <- regmatches(path,regexec("^r2://([^/]+)/?(.*)$",path))[[1]]
   if (length(parts)!=3) stop("R2 paths have to be of the form r2://bucket/path, got ",path,".")
-  list(bucket=parts[2],path=parts[3])
+  list(bucket=parts[2],path=sub("^/+","",parts[3]))
 }
 
 # path or glob pattern matching the parquet file or all parquet files in the directory

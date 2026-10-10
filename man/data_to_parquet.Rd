@@ -9,27 +9,32 @@ data_to_parquet(
   path,
   sort_by = NULL,
   partition_by = NULL,
-  row_group_size = 10000L
+  row_group_size = 10000L,
+  overwrite = TRUE
 )
 }
 \arguments{
 \item{data}{data frame, sf object or lazy DuckDB table}
 
-\item{path}{path of the parquet file to write, or of the directory if `partition_by` is given. Existing files
-at that path get overwritten, for an existing directory all parquet files in it get replaced.}
+\item{path}{local path or `r2://bucket/path` of the parquet file to write, or of the directory if `partition_by`
+is given. A parquet file on R2 has to end in `.parquet`. Existing files at that path get overwritten.}
 
 \item{sort_by}{optional vector of column names to sort by, for spatial data before sorting spatially}
 
 \item{partition_by}{optional vector of column names to partition by}
 
 \item{row_group_size}{number of rows per row group, rounded up to a multiple of 2048 by DuckDB, default is 10000}
+
+\item{overwrite}{if `TRUE`, the default, parquet files in an existing directory at `path` get removed first,
+so that no partitions from earlier writes remain. With `FALSE` written files replace files with the same path
+and other files are kept, e.g. to add partitions.}
 }
 \value{
-(invisibly) `path`
+(invisibly) `path` for local paths, the uploaded files as `r2://bucket/path` for R2
 }
 \description{
 Writes a data frame, an sf object or a lazy DuckDB table to a parquet file, or to a directory of
-hive partitioned parquet files if `partition_by` is given. Rows get sorted by the `sort_by` columns,
+hive partitioned parquet files if `partition_by` is given, locally or on R2 as `r2://bucket/path`. Rows get sorted by the `sort_by` columns,
 so that the row group statistics of these columns are selective and filters on them only read the
 row groups they need when reading remotely.
 
@@ -53,4 +58,10 @@ The partition values are only stored in the directory names, readers recover the
 DuckDB and polars keep string values like `"001"` as strings, arrow infers the type from the values and
 reads them as integers. Partitioned files get written single threaded, as multi threaded writes don't
 keep the sort order within partitions.
+
+Destinations on R2 get written to a temporary directory and uploaded via `upload_parquet`. The bucket has to
+exist, use `create_r2_bucket` to create it. This expects the R2 account id and the access key id and secret
+access key of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
+environment variables, and needs the arrow package. A directory of partitioned files may be named like a
+parquet file, `parquet_tbl` tells files and directories apart.
 }

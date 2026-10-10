@@ -7,7 +7,7 @@
 #'
 #' @description
 #' Writes a data frame, an sf object or a lazy DuckDB table to a parquet file, or to a directory of
-#' hive partitioned parquet files if `partition_by` is given. Rows get sorted by the `sort_by` columns,
+#' hive partitioned parquet files if `partition_by` is given, locally or on R2 as `r2://bucket/path`. Rows get sorted by the `sort_by` columns,
 #' so that the row group statistics of these columns are selective and filters on them only read the
 #' row groups they need when reading remotely.
 #'
@@ -32,15 +32,30 @@
 #' reads them as integers. Partitioned files get written single threaded, as multi threaded writes don't
 #' keep the sort order within partitions.
 #'
+#' Destinations on R2 get written to a temporary directory and uploaded via `upload_parquet`. The bucket has to
+#' exist, use `create_r2_bucket` to create it. This expects the R2 account id and the access key id and secret
+#' access key of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
+#' environment variables, and needs the arrow package. A directory of partitioned files may be named like a
+#' parquet file, `parquet_tbl` tells files and directories apart.
+#'
 #' @param data data frame, sf object or lazy DuckDB table
-#' @param path path of the parquet file to write, or of the directory if `partition_by` is given. Existing files
-#' at that path get overwritten, for an existing directory all parquet files in it get replaced.
+#' @param path local path or `r2://bucket/path` of the parquet file to write, or of the directory if `partition_by`
+#' is given. A parquet file on R2 has to end in `.parquet`. Existing files at that path get overwritten.
 #' @param sort_by optional vector of column names to sort by, for spatial data before sorting spatially
 #' @param partition_by optional vector of column names to partition by
 #' @param row_group_size number of rows per row group, rounded up to a multiple of 2048 by DuckDB, default is 10000
-#' @return (invisibly) `path`
+#' @param overwrite if `TRUE`, the default, parquet files in an existing directory at `path` get removed first,
+#' so that no partitions from earlier writes remain. With `FALSE` written files replace files with the same path
+#' and other files are kept, e.g. to add partitions.
+#' @return (invisibly) `path` for local paths, the uploaded files as `r2://bucket/path` for R2
 #' @export
-data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L) {
+data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE) {
+  write <- if (startsWith(path,"r2://")) r2_data_to_parquet else local_data_to_parquet
+  write(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,overwrite=overwrite)
+}
+
+# write data to a local parquet file or directory of partitioned files
+local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE) {
   if (row_group_size<2048) warning("DuckDB writes row groups of at least 2048 rows, row_group_size has no effect below that.",call.=FALSE)
   if (inherits(data,"tbl_lazy")) {
     if (!inherits(data,"tbl_duckdb_connection")) stop("Lazy tables have to be DuckDB tables.")
@@ -105,7 +120,7 @@ data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_s
   }
   if (length(partition_by)>0) {
     # DuckDB's OVERWRITE keeps partitions that are not in the new data
-    if (dir.exists(path)) {
+    if (overwrite && dir.exists(path)) {
       unlink(dir(path,"\\.parquet$",recursive=TRUE,full.names=TRUE))
       directories <- rev(list.dirs(path,recursive=TRUE)[-1])
       for (directory in directories) if (length(dir(directory,all.files=TRUE,no..=TRUE))==0) unlink(directory,recursive=TRUE)
@@ -122,53 +137,31 @@ data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_s
   invisible(path)
 }
 
-#' write data to parquet on Cloudflare R2
-#'
-#' @description
-#' Writes data via `data_to_parquet` and uploads it to R2 via `parquet_to_r2`. sf objects and lazy DuckDB tables
-#' with GEOMETRY columns become GeoParquet files, see `data_to_parquet` for details.
-#' The bucket has to exist, use `create_r2_bucket` to create it.
-#' Expects the R2 account id and the access key id and secret access key
-#' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-#' environment variables.
-#'
-#' With `partition_by`, `r2_path` is the directory of the partitioned files. Its name may end in `.parquet`,
-#' the readers of this package tell files and directories apart.
-#'
-#' @param data data frame, sf object or lazy DuckDB table
-#' @param r2_bucket R2 bucket name
-#' @param r2_path path in the bucket, of the parquet file, which has to end in `.parquet`, or with `partition_by`
-#' of the directory of partitioned files
-#' @param sort_by optional vector of column names to sort by, for spatial data before sorting spatially
-#' @param partition_by optional vector of column names to partition by
-#' @param row_group_size number of rows per row group, rounded up to a multiple of 2048 by DuckDB, default is 10000
-#' @param overwrite if `TRUE`, the default, parquet files at `r2_path` get removed before uploading, so that no
-#' partitions from earlier uploads remain. With `FALSE` uploaded files replace files with the same path and other
-#' files are kept, e.g. to add partitions.
-#' @return (invisibly) the paths in the bucket of the uploaded files
-#' @export
-data_to_r2_parquet <- function(data,r2_bucket,r2_path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE) {
+# write data to parquet in a temporary directory and upload it to R2
+r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE) {
   if (!requireNamespace("arrow",quietly=TRUE)) {
     stop("The arrow package is required to upload to R2.")
   }
-  r2_path <- sub("/+$","",sub("^/+","",r2_path))
+  r2_bucket <- r2_split_path(path)$bucket
+  r2_path <- sub("/+$","",r2_split_path(path)$path)
+  r2_url <- paste0("r2://",r2_bucket,"/",r2_path)
   partitioned <- length(partition_by)>0
   if (r2_path=="") stop("Please specify the path in the bucket.")
-  if (!partitioned && !grepl("\\.parquet$",r2_path)) stop("The r2_path has to be the path of a parquet file ending in .parquet.")
+  if (!partitioned && !grepl("\\.parquet$",r2_path)) stop("The path has to be the path of a parquet file ending in .parquet.")
   tmp_dir <- tempfile()
   dir.create(tmp_dir)
   on.exit(unlink(tmp_dir,recursive=TRUE))
-  path <- data_to_parquet(data,file.path(tmp_dir,basename(r2_path)),sort_by=sort_by,
-                          partition_by=partition_by,row_group_size=row_group_size)
+  local_path <- local_data_to_parquet(data,file.path(tmp_dir,basename(r2_path)),sort_by=sort_by,
+                                      partition_by=partition_by,row_group_size=row_group_size)
   if (overwrite) {
     # a file at r2_path gets replaced by the upload anyway, unless the upload is a directory
     file_type <- r2_filesystem()$GetFileInfo(paste0(r2_bucket,"/",r2_path))[[1]]$type
     if (file_type==arrow::FileType$Directory || (partitioned && file_type==arrow::FileType$File)) {
-      remove_parquet_from_r2(r2_bucket,r2_path)
+      remove_parquet(r2_url)
     }
   }
-  files <- if (partitioned) dir(path,"\\.parquet$",recursive=TRUE,full.names=TRUE) else path
+  files <- if (partitioned) dir(local_path,"\\.parquet$",recursive=TRUE,full.names=TRUE) else local_path
   message("Uploading ",format(structure(sum(file.size(files)),class="object_size"),units="auto",standard="SI"),
-          " in ",length(files)," parquet file",if (length(files)>1) "s"," to ",r2_bucket,"/",r2_path,".")
-  parquet_to_r2(path,r2_bucket,r2_path)
+          " in ",length(files)," parquet file",if (length(files)>1) "s"," to ",r2_url,".")
+  upload_parquet(local_path,r2_url)
 }

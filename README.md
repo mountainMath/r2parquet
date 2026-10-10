@@ -14,10 +14,10 @@ Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloud
 ## Uploading and managing data on R2
 
 - **Buckets**: `create_r2_bucket()` creates private or public buckets, public via the `r2.dev` URL or a custom domain.
-- **Files**: `parquet_to_r2()` uploads single parquet files or directories of (partitioned) parquet files, `remove_parquet_from_r2()` removes them. Both purge the changed files from the Cloudflare cache of the bucket's custom domains.
-- **Writing**: `data_to_parquet()` writes data frames, sf objects and lazy DuckDB tables to parquet, optionally sorted (`sort_by`) and partitioned (`partition_by`), so remote queries only download the row groups they need. sf objects become GeoParquet 2.0 files sorted along a Hilbert curve. `data_to_r2_parquet()` writes and uploads in one go, replacing earlier uploads including stale partitions.
+- **Files**: `upload_parquet()` uploads single parquet files or directories of (partitioned) parquet files, `remove_parquet()` removes them. Both purge the changed files from the Cloudflare cache of the bucket's custom domains.
+- **Writing**: `data_to_parquet()` writes data frames, sf objects and lazy DuckDB tables to parquet, optionally sorted (`sort_by`) and partitioned (`partition_by`), so remote queries only download the row groups they need. sf objects become GeoParquet 2.0 files sorted along a Hilbert curve. Given an `r2://bucket/path` destination it writes and uploads in one go, replacing earlier uploads including stale partitions.
 - **Reading private buckets**: `parquet_tbl("r2://bucket/path")` with any of the engines.
-- **Sharing private files**: `r2_presigned_url()` creates time limited download (or upload) URLs for single files.
+- **Sharing private files**: `presigned_url()` creates time limited download (or upload) URLs for single files.
 
 ## Installation
 
@@ -25,7 +25,7 @@ Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloud
 remotes::install_github("mountainMath/r2parquet")
 ```
 
-`arrow` and `polars` are optional and only needed for `parquet_to_r2()`, `remove_parquet_from_r2()` and the arrow and polars engines of `parquet_tbl()`. `polars` is not on CRAN:
+`arrow` and `polars` are optional and only needed for `upload_parquet()`, `remove_parquet()`, `data_to_parquet()` to R2 and the arrow and polars engines of `parquet_tbl()`. `polars` is not on CRAN:
 
 ```r
 install.packages("arrow")
@@ -59,13 +59,13 @@ library(r2parquet)
 create_r2_bucket("census-data", custom_domain = "data.example.com")
 
 nc <- sf::read_sf(system.file("shape/nc.shp", package = "sf"))
-data_to_r2_parquet(nc, "census-data", "nc/counties.parquet")
+data_to_parquet(nc, "r2://census-data/nc/counties.parquet")
 
 # private access with credentials
 counties <- parquet_tbl("r2://census-data/nc/counties.parquet")
 
 # one day download link to share a file in a private bucket
-r2_presigned_url("census-data", "nc/counties.parquet", expires = 24 * 3600)
+presigned_url("r2://census-data/nc/counties.parquet", expires = 24 * 3600)
 ```
 
 ### Accessing published data

@@ -12,16 +12,15 @@ reference:
   - filter_spatial
   - collect_sf
 - title: Uploading and managing data on R2
-  desc: Need the R2 credentials (see the README), except `data_to_parquet()`, which writes local files.
+  desc: Need the R2 credentials (see the README), except `data_to_parquet()` for local paths.
 - subtitle: Buckets
   contents:
   - create_r2_bucket
 - subtitle: Writing and uploading
   contents:
   - data_to_parquet
-  - data_to_r2_parquet
-  - parquet_to_r2
-  - remove_parquet_from_r2
+  - upload_parquet
+  - remove_parquet
 - subtitle: Sharing private files
   contents:
-  - r2_presigned_url
+  - presigned_url

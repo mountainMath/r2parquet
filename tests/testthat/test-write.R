@@ -42,6 +42,9 @@ test_that("partitioned data frames keep string partition values and the sort ord
   # writing again replaces the directory
   data_to_parquet(df[df$group=="001",],file.path(dir,"data"),partition_by="group")
   expect_equal(dir(file.path(dir,"data")),"group=001")
+  # without overwrite other partitions are kept
+  data_to_parquet(df[df$group=="010",],file.path(dir,"data"),partition_by="group",overwrite=FALSE)
+  expect_equal(dir(file.path(dir,"data")),c("group=001","group=010"))
 })
 
 test_that("GeoParquet round trip keeps attributes, geometry and crs", {

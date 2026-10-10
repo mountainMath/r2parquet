@@ -36,11 +36,12 @@ test_that("object paths and query strings get encoded", {
 
 test_that("presigned R2 URLs use the account endpoint and validate arguments", {
   withr::local_envvar(R2_ACCOUNT_ID="abc",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret")
-  url <- r2_presigned_url("bucket","/dir/file.parquet",expires=60)
+  url <- presigned_url("r2://bucket/dir/file.parquet",expires=60)
   expect_match(url,"^https://abc\\.r2\\.cloudflarestorage\\.com/bucket/dir/file\\.parquet\\?X-Amz-Algorithm=")
   expect_match(url,"X-Amz-Credential=key%2F[0-9]{8}%2Fauto%2Fs3%2Faws4_request")
   expect_match(url,"X-Amz-Expires=60&")
-  expect_error(r2_presigned_url("bucket","file.parquet",expires=604801),"between 1 and 604800")
-  expect_error(r2_presigned_url("bucket","dir/"),"path of a file")
-  expect_error(r2_presigned_url("bucket","file.parquet",method="DELETE"))
+  expect_error(presigned_url("r2://bucket/file.parquet",expires=604801),"between 1 and 604800")
+  expect_error(presigned_url("r2://bucket/dir/"),"path of a file")
+  expect_error(presigned_url("bucket/file.parquet"),"r2://bucket/path")
+  expect_error(presigned_url("r2://bucket/file.parquet",method="DELETE"))
 })

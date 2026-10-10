@@ -14,6 +14,7 @@ test_that("directory paths get globbed without contacting R2", {
 test_that("r2 paths get split into bucket and path", {
   expect_equal(r2parquet:::r2_split_path("r2://bucket/data/file.parquet"),list(bucket="bucket",path="data/file.parquet"))
   expect_equal(r2parquet:::r2_split_path("r2://bucket"),list(bucket="bucket",path=""))
+  expect_equal(r2parquet:::r2_split_path("r2://bucket//data/"),list(bucket="bucket",path="data/"))
   expect_error(r2parquet:::r2_split_path("r2:///data"),"r2://bucket/path")
 })
 

@@ -27,7 +27,7 @@ Public access can also be enabled on existing buckets, but this function never t
 Expects the R2 account id and the value of an R2 API token with admin read and write permissions
 to be available as `R2_ACCOUNT_ID` and `R2_API_TOKEN` environment variables. For connecting a custom
 domain the token also needs Zone Read permission for the domain's zone, which has to be an active zone
-in the same Cloudflare account. With Zone Cache Purge permission as well, `parquet_to_r2` and
-`remove_parquet_from_r2` purge changed files from the cache. Each custom domain can only serve one bucket, use subdomains like
+in the same Cloudflare account. With Zone Cache Purge permission as well, `upload_parquet` and
+`remove_parquet` purge changed files from the cache. Each custom domain can only serve one bucket, use subdomains like
 `data.example.com` to serve several buckets from one zone.
 }
