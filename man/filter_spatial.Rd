@@ -7,7 +7,7 @@
 filter_spatial(tbl, y, geometry_column = NULL, exact = TRUE)
 }
 \arguments{
-\item{tbl}{lazy DuckDB table, e.g. from `r2_parquet_tbl`}
+\item{tbl}{lazy DuckDB table, e.g. from `parquet_tbl`}
 
 \item{y}{sf, sfc or bbox object to filter by}
 
@@ -22,7 +22,7 @@ a lazy `dplyr` table
 \description{
 Keeps the rows whose geometry intersects `y`. Remote GeoParquet files only get read where needed:
 DuckDB skips row groups whose bounding box does not intersect the bounding box of `y`, using the
-statistics of the native GEOMETRY type and of the `bbox` column if there is one. This only happens
+statistics of the native GEOMETRY type. This only happens
 for the bounding box comparison, a plain `ST_Intersects` filter downloads the geometry of all rows,
 so the filter first compares bounding boxes and then, if `exact` is `TRUE`, checks for actual intersection
 on the remaining rows. How much gets skipped depends on the file being sorted spatially, like the files

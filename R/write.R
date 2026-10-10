@@ -3,17 +3,6 @@
 # with the native parquet GEOMETRY type, sorted along a Hilbert curve so that the per row group bounding
 # box statistics are selective.
 
-# DuckDB type of the bbox column written for GeoParquet, filter_spatial and collect_sf only treat a column
-# of this type as bounding box column
-bbox_column_type <- "STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)"
-
-# TRUE if the lazy DuckDB table has a bbox column as written by data_to_parquet
-duckdb_has_bbox_column <- function(tbl){
-  con <- dbplyr::remote_con(tbl)
-  columns <- DBI::dbGetQuery(con,paste0("DESCRIBE ",dbplyr::sql_render(tbl)))
-  any(columns$column_name=="bbox" & columns$column_type==bbox_column_type)
-}
-
 #' write data to parquet
 #'
 #' @description
@@ -28,12 +17,8 @@ duckdb_has_bbox_column <- function(tbl){
 #' box, see `filter_spatial`. Invalid geometries get fixed via `sf::st_make_valid`, keeping multi geometries multi,
 #' and the geometry column is always named `geometry`, following the GeoParquet convention, independent of its
 #' name in `data`. Both emit a message when they change the data.
-#' Readers without support for the native GEOMETRY type, like arrow or polars, can't use its bounding box
-#' statistics, so unless all geometries are points a `bbox` struct column with the bounding box of each geometry
-#' gets added, whose statistics they can filter on. `filter_spatial` uses it too, `collect_sf` drops it.
-#' For points the column would roughly double the file size while only repeating the coordinates.
 #'
-#' Lazy DuckDB tables, e.g. from `parquet_tbl` or `r2_parquet_tbl` after filtering, get written by DuckDB directly
+#' Lazy DuckDB tables, e.g. from `parquet_tbl` after filtering, get written by DuckDB directly
 #' without collecting the data into R. Tables with GEOMETRY columns get written as GeoParquet in the same way,
 #' sorted by their first GEOMETRY column (or the one named `geometry`) and without repairing invalid geometries.
 #'
@@ -62,10 +47,8 @@ data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_s
     con <- dbplyr::remote_con(data)
     geometry_columns <- names(duckdb_geometry_columns(data))
     geometry_column <- if ("geometry" %in% geometry_columns) "geometry" else geometry_columns[1]
-    # an existing bbox column gets recomputed in case the geometries changed
-    has_bbox <- length(geometry_columns)>0 && duckdb_has_bbox_column(data)
-    source <- paste0("(SELECT * ",if (has_bbox) "EXCLUDE (bbox) ","FROM (",dbplyr::sql_render(data),"))")
-    columns <- setdiff(colnames(data),if (has_bbox) "bbox")
+    source <- paste0("(",dbplyr::sql_render(data),")")
+    columns <- colnames(data)
   } else if (inherits(data,"sf")) {
     if ("geometry" %in% setdiff(names(data),attr(data,"sf_column"))) stop("Data has a non-geometry column named geometry.")
     con <- DBI::dbConnect(duckdb::duckdb())
@@ -77,8 +60,6 @@ data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_s
       message("Renaming geometry column ",attr(data,"sf_column")," to the GeoParquet standard name geometry.")
     }
     df <- sf::st_drop_geometry(data)
-    # bbox column of data read via collect_sf with its bbox column selected, gets recomputed
-    if (is.data.frame(df[["bbox"]]) && identical(names(df[["bbox"]]),c("xmin","ymin","xmax","ymax"))) df$bbox <- NULL
     df[[geometry_column]] <- unclass(sf::st_as_binary(make_valid_geometries(sf::st_geometry(data))))
     duckdb::duckdb_register(con,"sf_data",df)
     geometry <- DBI::dbQuoteIdentifier(con,geometry_column)
@@ -106,26 +87,16 @@ data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_s
   missing_columns <- setdiff(c(sort_by,partition_by),columns)
   if (length(missing_columns)>0) stop(paste0("Columns ",paste0(missing_columns,collapse=", ")," not found in data."))
 
-  select <- "*"
   order <- if (length(sort_by)>0) DBI::dbQuoteIdentifier(con,sort_by)
   options <- c("FORMAT parquet","COMPRESSION zstd",paste0("ROW_GROUP_SIZE ",as.integer(row_group_size)))
   if (!is.null(geometry_column)) {
     DBI::dbExecute(con,"INSTALL spatial")
     DBI::dbExecute(con,"LOAD spatial")
     geometry <- DBI::dbQuoteIdentifier(con,geometry_column)
-    # one pass over the data for the extent of the Hilbert curve and the geometry types
+    # extent of the Hilbert curve
     stats <- DBI::dbGetQuery(con,paste0("SELECT ST_XMin(extent) AS xmin, ST_YMin(extent) AS ymin, ",
-                                        "ST_XMax(extent) AS xmax, ST_YMax(extent) AS ymax, all_points FROM (",
-                                        "SELECT ST_Extent_Agg(",geometry,") AS extent, ",
-                                        "bool_and(ST_GeometryType(",geometry,") = 'POINT') AS all_points FROM ",source,")"))
-    if (!isTRUE(stats$all_points)) {
-      if ("bbox" %in% columns) {
-        message("Data already has a bbox column, no bounding box column gets added.")
-      } else {
-        select <- paste0("*, struct_pack(xmin := ST_XMin(",geometry,"), ymin := ST_YMin(",geometry,
-                         "), xmax := ST_XMax(",geometry,"), ymax := ST_YMax(",geometry,")) AS bbox")
-      }
-    }
+                                        "ST_XMax(extent) AS xmax, ST_YMax(extent) AS ymax FROM (",
+                                        "SELECT ST_Extent_Agg(",geometry,") AS extent FROM ",source,")"))
     if (!is.na(stats$xmin)) {
       order <- c(order,paste0("ST_Hilbert(",geometry,", {min_x: ",sprintf("%.17g",stats$xmin),", min_y: ",sprintf("%.17g",stats$ymin),
                               ", max_x: ",sprintf("%.17g",stats$xmax),", max_y: ",sprintf("%.17g",stats$ymax),"}::BOX_2D)"))
@@ -145,7 +116,7 @@ data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_s
     DBI::dbExecute(con,"SET threads = 1")
     on.exit(if (DBI::dbIsValid(con)) DBI::dbExecute(con,paste0("SET threads = ",threads)),add=TRUE,after=FALSE)
   }
-  DBI::dbExecute(con,paste0("COPY (SELECT ",select," FROM ",source,
+  DBI::dbExecute(con,paste0("COPY (SELECT * FROM ",source,
                             if (length(order)>0) paste0(" ORDER BY ",paste0(order,collapse=", ")),
                             ") TO ",DBI::dbQuoteString(con,path)," (",paste0(options,collapse=", "),")"))
   invisible(path)

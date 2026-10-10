@@ -60,36 +60,14 @@ test_that("GeoParquet round trip keeps attributes, geometry and crs", {
   expect_equal(sf::st_area(result),sf::st_area(data))
 })
 
-test_that("geometry column gets renamed, polygons get a bbox column that collect_sf drops", {
+test_that("geometry column gets renamed", {
   skip_if_no_duckdb_extensions()
   data <- sf::st_set_geometry(nc_data(),"geom")
   path <- withr::local_tempfile(fileext=".parquet")
   expect_message(data_to_parquet(data,path),"Renaming geometry column geom")
   tbl <- parquet_tbl(path)
-  expect_true(all(c("geometry","bbox") %in% colnames(tbl)))
+  expect_true("geometry" %in% colnames(tbl))
   expect_false("geom" %in% colnames(tbl))
-  expect_false("bbox" %in% names(collect_sf(tbl)))
-})
-
-test_that("points get no bbox column", {
-  skip_if_no_duckdb_extensions()
-  data <- sf::st_centroid(sf::st_set_agr(nc_data(),"constant"))
-  path <- withr::local_tempfile(fileext=".parquet")
-  data_to_parquet(data,path)
-  expect_false("bbox" %in% colnames(parquet_tbl(path)))
-})
-
-test_that("an existing bbox column of the data is kept", {
-  skip_if_no_duckdb_extensions()
-  data <- nc_data()
-  data$bbox <- "user data"
-  path <- withr::local_tempfile(fileext=".parquet")
-  expect_message(data_to_parquet(data,path),"already has a bbox column")
-  result <- collect_sf(parquet_tbl(path))
-  expect_equal(unique(result$bbox),"user data")
-  # filter_spatial does not mistake it for a bounding box column
-  wake <- data[data$NAME=="Wake",]
-  expect_true("Wake" %in% collect_sf(filter_spatial(parquet_tbl(path),wake))$NAME)
 })
 
 test_that("lazy DuckDB tables get written without collecting, keeping geometry and crs", {
@@ -101,8 +79,6 @@ test_that("lazy DuckDB tables get written without collecting, keeping geometry a
   dplyr::filter(parquet_tbl(path),BIR74>10000) |>
     data_to_parquet(subset_path,sort_by="NAME")
   tbl <- parquet_tbl(subset_path)
-  # the bbox column gets recomputed rather than duplicated
-  expect_equal(sum(colnames(tbl)=="bbox"),1)
   result <- collect_sf(tbl)
   expect_equal(result$NAME,sort(data$NAME[data$BIR74>10000]))
   expect_true(sf::st_crs(result)==sf::st_crs(data))
@@ -127,4 +103,22 @@ test_that("partitioned GeoParquet keeps the Hilbert order within partitions", {
                                     "FROM read_parquet('",files,"')"))$h
     expect_false(is.unsorted(h))
   }
+})
+
+test_that("all engines read local partitioned directories", {
+  df <- data.frame(group=rep(c("a","b"),each=50),value=1:100)
+  dir <- withr::local_tempdir()
+  data_to_parquet(df,file.path(dir,"data"),partition_by="group")
+  expect_equal(nrow(dplyr::collect(parquet_tbl(file.path(dir,"data")))),100)
+  if (requireNamespace("arrow",quietly=TRUE)) {
+    result <- dplyr::collect(parquet_tbl(file.path(dir,"data"),engine="arrow"))
+    expect_equal(sort(result$value),1:100)
+    expect_setequal(result$group,c("a","b"))
+  }
+  if (requireNamespace("polars",quietly=TRUE)) {
+    result <- as.data.frame(parquet_tbl(file.path(dir,"data"),engine="polars")$collect())
+    expect_equal(sort(result$value),1:100)
+    expect_setequal(result$group,c("a","b"))
+  }
+  expect_error(parquet_tbl("https://example.com/data.parquet",engine="arrow"),"can't read URLs")
 })

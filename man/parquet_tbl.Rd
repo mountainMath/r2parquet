@@ -2,33 +2,50 @@
 % Please edit documentation in R/parquet.R
 \name{parquet_tbl}
 \alias{parquet_tbl}
-\title{lazy table to query parquet files at URLs or local paths}
+\title{lazy table to query parquet files at URLs, on R2 or at local paths}
 \usage{
-parquet_tbl(path, hive_partitioning = TRUE, con = parquet_duckdb_connection())
+parquet_tbl(
+  path,
+  engine = c("duckdb", "arrow", "polars"),
+  hive_partitioning = TRUE
+)
 }
 \arguments{
-\item{path}{URL or local path of the parquet file or local directory with (partitioned) parquet files,
-or a vector of these}
+\item{path}{URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)
+parquet files, or a vector of these. The arrow and polars engines can't mix paths on R2 with other paths.}
+
+\item{engine}{`"duckdb"` (the default), `"arrow"` or `"polars"`, see description}
 
 \item{hive_partitioning}{if `TRUE`, the default, partition columns get derived from `key=value` components of the file paths}
-
-\item{con}{DuckDB connection, defaults to a connection that is cached for the session so that tables from
-several calls can be joined. Pass `r2_duckdb_connection()` to join with tables from `r2_parquet_tbl`.}
 }
 \value{
-a lazy `dplyr` table
+a lazy `dplyr` table (DuckDB), an arrow `Dataset` or a polars `LazyFrame`, depending on `engine`
 }
 \description{
-Lazy `dplyr` table backed by DuckDB, for parquet files at public URLs, like files in public R2 buckets,
-or at local paths. No credentials are needed, see `r2_parquet_tbl` for private files on R2.
-No data is downloaded until the query is executed, e.g. via `dplyr::collect()`, and DuckDB only requests
-the parts of the files it needs to answer the query.
+Lazy table for parquet files at public URLs, like files in public R2 buckets or presigned URLs, in private
+R2 buckets, given as `r2://bucket/path`, or at local paths. No data is downloaded until the query is
+executed, e.g. via `dplyr::collect()`, and only the parts of the files needed to answer the query get read.
+Filters on partition columns restrict which files are read, other filters and the selection of columns
+restrict which parts of the files are downloaded. When filtering on integer columns use integer values like
+`2021L`, comparing to a plain number like `2021` is a floating point comparison that downloads considerably
+more data.
 
-The `httpfs` DuckDB extension gets installed and loaded for URLs. If the table has GEOMETRY columns, like
-GeoParquet files written by `data_to_parquet`, the `spatial` extension gets installed and loaded too, so that
-spatial functions like `ST_Area` can be used in queries. Use `filter_spatial` to filter by location and
-`collect_sf` to collect the result as an sf object.
-
+Public URLs and local paths need no credentials. Paths on R2 expect the R2 account id and the access key id
+and secret access key of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and
+`R2_SECRET_ACCESS_KEY` environment variables. Directories on R2 are often named like a parquet file,
+e.g. `r2://bucket/data.parquet`, these get resolved to all parquet files within them.
 Local directories get read as all parquet files within them, URLs have to point to files since directories
 can't be listed over https.
+
+The `engine` determines what gets returned:
+* `"duckdb"`, the default, returns a lazy `dplyr` table on a DuckDB connection that is cached for the session,
+  so that tables from several calls can be joined. `dplyr` verbs get translated to SQL. If the table has
+  GEOMETRY columns, like GeoParquet files written by `data_to_parquet`, the `spatial` extension gets loaded
+  so that spatial functions like `ST_Area` can be used in queries. Use `filter_spatial` to filter by location
+  and `collect_sf` to collect the result as an sf object, both only work with this engine.
+* `"arrow"` returns an arrow `Dataset` that can be queried with `dplyr` verbs. Needs the arrow package, and
+  can't read URLs, only paths on R2 and local paths.
+* `"polars"` returns a polars `LazyFrame`, executed via `$collect()`, or with the `tidypolars` package loaded
+  queried with `dplyr` verbs ending in `dplyr::collect()`. Needs the polars package. As of polars 1.16
+  GeoParquet files written by `data_to_parquet` can't be read, polars rejects the native GEOMETRY type.
 }

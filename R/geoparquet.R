@@ -1,5 +1,5 @@
 # GeoParquet helpers
-# Reading works on lazy DuckDB tables, like the ones returned by r2_parquet_tbl. GeoParquet files get
+# Reading works on lazy DuckDB tables, like the ones returned by parquet_tbl. GeoParquet files get
 # written by data_to_parquet in write.R.
 
 # crs specification DuckDB understands, NULL if the crs is missing
@@ -53,14 +53,14 @@ make_valid_geometries <- function(geometry){
 #' @description
 #' Keeps the rows whose geometry intersects `y`. Remote GeoParquet files only get read where needed:
 #' DuckDB skips row groups whose bounding box does not intersect the bounding box of `y`, using the
-#' statistics of the native GEOMETRY type and of the `bbox` column if there is one. This only happens
+#' statistics of the native GEOMETRY type. This only happens
 #' for the bounding box comparison, a plain `ST_Intersects` filter downloads the geometry of all rows,
 #' so the filter first compares bounding boxes and then, if `exact` is `TRUE`, checks for actual intersection
 #' on the remaining rows. How much gets skipped depends on the file being sorted spatially, like the files
 #' written by `data_to_parquet`.
 #' `y` gets transformed to the crs of the geometry column if both have a crs.
 #'
-#' @param tbl lazy DuckDB table, e.g. from `r2_parquet_tbl`
+#' @param tbl lazy DuckDB table, e.g. from `parquet_tbl`
 #' @param y sf, sfc or bbox object to filter by
 #' @param geometry_column name of the geometry column, defaults to the first GEOMETRY column of `tbl`
 #' @param exact if `TRUE`, the default, keep rows whose geometry intersects `y`, otherwise keep rows whose
@@ -84,10 +84,6 @@ filter_spatial <- function(tbl,y,geometry_column=NULL,exact=TRUE) {
   geometry <- DBI::dbQuoteIdentifier(con,geometry_column$name)
   envelope <- with_crs(paste0("ST_MakeEnvelope(",paste0(sprintf("%.17g",bbox[c("xmin","ymin","xmax","ymax")]),collapse=", "),")"))
   conditions <- paste0(geometry," && ",envelope)
-  if (duckdb_has_bbox_column(tbl)) {
-    conditions <- c(conditions,sprintf("bbox.xmax >= %.17g AND bbox.xmin <= %.17g AND bbox.ymax >= %.17g AND bbox.ymin <= %.17g",
-                                       bbox[["xmin"]],bbox[["xmax"]],bbox[["ymin"]],bbox[["ymax"]]))
-  }
   if (exact) {
     conditions <- c(conditions,paste0("ST_Intersects(",geometry,", ",
                                       with_crs(paste0("ST_GeomFromHEXWKB('",sf::st_as_binary(y,hex=TRUE)[[1]],"')")),")"))
@@ -99,17 +95,14 @@ filter_spatial <- function(tbl,y,geometry_column=NULL,exact=TRUE) {
 #'
 #' @description
 #' Executes the query and converts the GEOMETRY columns to sf geometry columns, keeping their crs.
-#' The `bbox` column that `data_to_parquet` adds for GeoParquet files gets dropped, it is only needed for
-#' filtering, see `filter_spatial`.
 #'
-#' @param tbl lazy DuckDB table, e.g. from `r2_parquet_tbl` or `filter_spatial`
+#' @param tbl lazy DuckDB table, e.g. from `parquet_tbl` or `filter_spatial`
 #' @param geometry_column name of the active geometry column, defaults to the first GEOMETRY column of `tbl`
 #' @return an sf object
 #' @export
 collect_sf <- function(tbl,geometry_column=NULL) {
   geometry_columns <- duckdb_geometry_columns(tbl)
   geometry_column <- duckdb_geometry_column(tbl,geometry_column)$name
-  if (duckdb_has_bbox_column(tbl)) tbl <- dplyr::select(tbl,-"bbox")
   data <- dplyr::collect(tbl)
   for (column in names(geometry_columns)) {
     data[[column]] <- sf::st_as_sfc(structure(data[[column]],class="WKB"),crs=geometry_columns[[column]])

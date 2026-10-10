@@ -68,8 +68,8 @@ for (v in wanted) {
     after = end), paste0(v, ".Rmd"))
 }
 
-# the session-cached connections of parquet_tbl() and r2_parquet_tbl()
-for (cache in list(parquet_cache, r2_cache)) {
+# the session-cached connection of parquet_tbl()
+for (cache in list(parquet_cache)) {
   con <- cache$duckdb_connection
   if (!is.null(con) && DBI::dbIsValid(con)) DBI::dbDisconnect(con, shutdown = TRUE)
 }

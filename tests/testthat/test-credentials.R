@@ -10,3 +10,14 @@ test_that("directory paths get globbed without contacting R2", {
   expect_equal(r2parquet:::r2_parquet_glob("bucket","/data"),"data/**/*.parquet")
   expect_equal(r2parquet:::r2_parquet_glob("bucket",""),"**/*.parquet")
 })
+
+test_that("r2 paths get split into bucket and path", {
+  expect_equal(r2parquet:::r2_split_path("r2://bucket/data/file.parquet"),list(bucket="bucket",path="data/file.parquet"))
+  expect_equal(r2parquet:::r2_split_path("r2://bucket"),list(bucket="bucket",path=""))
+  expect_error(r2parquet:::r2_split_path("r2:///data"),"r2://bucket/path")
+})
+
+test_that("arrow and polars engines can't mix R2 with other paths", {
+  expect_error(parquet_tbl(c("r2://bucket/a.parquet","b.parquet"),engine="arrow"),"can't mix")
+  expect_error(parquet_tbl(c("r2://bucket/a.parquet","b.parquet"),engine="polars"),"can't mix")
+})

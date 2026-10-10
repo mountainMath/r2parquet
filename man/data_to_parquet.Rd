@@ -39,12 +39,8 @@ so that each row group covers a compact area and spatial filters can skip row gr
 box, see `filter_spatial`. Invalid geometries get fixed via `sf::st_make_valid`, keeping multi geometries multi,
 and the geometry column is always named `geometry`, following the GeoParquet convention, independent of its
 name in `data`. Both emit a message when they change the data.
-Readers without support for the native GEOMETRY type, like arrow or polars, can't use its bounding box
-statistics, so unless all geometries are points a `bbox` struct column with the bounding box of each geometry
-gets added, whose statistics they can filter on. `filter_spatial` uses it too, `collect_sf` drops it.
-For points the column would roughly double the file size while only repeating the coordinates.
 
-Lazy DuckDB tables, e.g. from `parquet_tbl` or `r2_parquet_tbl` after filtering, get written by DuckDB directly
+Lazy DuckDB tables, e.g. from `parquet_tbl` after filtering, get written by DuckDB directly
 without collecting the data into R. Tables with GEOMETRY columns get written as GeoParquet in the same way,
 sorted by their first GEOMETRY column (or the one named `geometry`) and without repairing invalid geometries.
 

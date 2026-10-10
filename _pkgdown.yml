@@ -6,7 +6,7 @@ template:
 
 reference:
 - title: Reading publicly hosted data
-  desc: No credentials needed, works with public URLs, presigned URLs and local files.
+  desc: No credentials needed for public URLs, presigned URLs and local files. `parquet_tbl()` also reads private buckets as `r2://bucket/path`.
   contents:
   - parquet_tbl
   - filter_spatial
@@ -22,12 +22,6 @@ reference:
   - data_to_r2_parquet
   - parquet_to_r2
   - remove_parquet_from_r2
-- subtitle: Reading private buckets
-  contents:
-  - r2_parquet_tbl
-  - r2_parquet_arrow
-  - r2_parquet_polars
-  - r2_duckdb_connection
 - subtitle: Sharing private files
   contents:
   - r2_presigned_url

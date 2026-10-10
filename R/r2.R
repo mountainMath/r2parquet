@@ -3,9 +3,6 @@
 # data to R2 into (partitioned) parquet files for
 # private or public access
 
-# session cache for the duckdb connection
-r2_cache <- new.env(parent=emptyenv())
-
 # read R2 credentials from environment variables
 r2_credentials <- function(env_vars){
   credentials <- Sys.getenv(env_vars,names=TRUE)
@@ -441,6 +438,13 @@ r2_presigned_url <- function(r2_bucket,r2_path,expires=3600,method=c("GET","HEAD
                       secret=credentials[["R2_SECRET_ACCESS_KEY"]],region="auto")
 }
 
+# split r2://bucket/path into bucket and path
+r2_split_path <- function(path){
+  parts <- regmatches(path,regexec("^r2://([^/]+)/?(.*)$",path))[[1]]
+  if (length(parts)!=3) stop("R2 paths have to be of the form r2://bucket/path, got ",path,".")
+  list(bucket=parts[2],path=parts[3])
+}
+
 # path or glob pattern matching the parquet file or all parquet files in the directory
 # directories of parquet files are commonly named like a parquet file, so paths ending in .parquet get checked
 r2_parquet_glob <- function(r2_bucket,r2_path){
@@ -450,130 +454,4 @@ r2_parquet_glob <- function(r2_bucket,r2_path){
     r2_path <- paste0(r2_path,if (r2_path!="") "/","**/*.parquet")
   }
   r2_path
-}
-
-# lazy table for parquet files readable by duckdb, filters and column selections get pushed down to the parquet scan
-duckdb_parquet_tbl <- function(con,urls,hive_partitioning=TRUE){
-  urls <- paste0(DBI::dbQuoteString(con,urls),collapse=", ")
-  if (grepl(", ",urls,fixed=TRUE)) urls <- paste0("[",urls,"]")
-  dplyr::tbl(con,dplyr::sql(paste0("SELECT * FROM read_parquet(",urls,
-                                   ", hive_partitioning = ",if (hive_partitioning) "true" else "false",")")))
-}
-
-#' DuckDB connection to query parquet files on Cloudflare R2
-#'
-#' @description
-#' In-memory DuckDB connection with the `httpfs` extension loaded and the R2 credentials registered,
-#' so that files on R2 can be accessed as `r2://bucket/path`. The connection is cached and reused for the
-#' duration of the session so that tables from several calls to `r2_parquet_tbl` can be joined.
-#' Expects the R2 account id and the access key id and secret access key
-#' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-#' environment variables.
-#'
-#' @param refresh if `TRUE`, close the cached connection and open a new one, default is `FALSE`
-#' @return a DuckDB connection
-#' @export
-r2_duckdb_connection <- function(refresh=FALSE) {
-  con <- r2_cache$duckdb_connection
-  if (!is.null(con) && (refresh || !DBI::dbIsValid(con))) {
-    if (DBI::dbIsValid(con)) DBI::dbDisconnect(con,shutdown=TRUE)
-    con <- NULL
-  }
-  if (is.null(con)) {
-    credentials <- r2_credentials(c("R2_ACCOUNT_ID","R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
-    con <- DBI::dbConnect(duckdb::duckdb())
-    DBI::dbExecute(con,"INSTALL httpfs")
-    DBI::dbExecute(con,"LOAD httpfs")
-    DBI::dbExecute(con,paste0("CREATE OR REPLACE SECRET r2 (TYPE r2",
-                              ", KEY_ID ",DBI::dbQuoteString(con,credentials[["R2_ACCESS_KEY_ID"]]),
-                              ", SECRET ",DBI::dbQuoteString(con,credentials[["R2_SECRET_ACCESS_KEY"]]),
-                              ", ACCOUNT_ID ",DBI::dbQuoteString(con,credentials[["R2_ACCOUNT_ID"]]),
-                              # without this the region gets picked up from AWS_DEFAULT_REGION if set, which R2 rejects
-                              ", REGION 'auto')"))
-    # avoids downloading the parquet file footers again for every query
-    DBI::dbExecute(con,"SET parquet_metadata_cache = true")
-    r2_cache$duckdb_connection <- con
-  }
-  con
-}
-
-#' lazy table to query parquet files on Cloudflare R2
-#'
-#' @description
-#' Lazy `dplyr` table backed by DuckDB reading directly from R2, no data is downloaded until the query is executed,
-#' e.g. via `dplyr::collect()`. `dplyr` verbs get translated to SQL and DuckDB only requests the data it needs
-#' to answer the query. Filters on partition columns restrict which files are read, other filters and
-#' the selection of columns restrict which parts of the files are downloaded. When filtering on integer columns
-#' use integer values like `2021L`, comparing to a plain number like `2021` is a floating point comparison
-#' and DuckDB then downloads considerably more data.
-#'
-#' @param r2_bucket R2 bucket name
-#' @param r2_path path in bucket of the parquet file, or of the directory with (partitioned) parquet files
-#' @param hive_partitioning if `TRUE`, the default, partition columns get derived from `key=value` components of the file paths
-#' @param con DuckDB connection with access to R2, as returned by `r2_duckdb_connection`
-#' @return a lazy `dplyr` table
-#' @export
-r2_parquet_tbl <- function(r2_bucket,r2_path,hive_partitioning=TRUE,con=r2_duckdb_connection()) {
-  duckdb_parquet_tbl(con,paste0("r2://",r2_bucket,"/",r2_parquet_glob(r2_bucket,r2_path)),hive_partitioning=hive_partitioning)
-}
-
-#' lazy arrow dataset to query parquet files on Cloudflare R2
-#'
-#' @description
-#' Arrow `Dataset` reading directly from R2, no data is downloaded until the query is executed,
-#' e.g. via `dplyr::collect()`. The dataset can be queried with `dplyr` verbs. Filters on partition columns
-#' restrict which files are read, other filters and the selection of columns restrict which parts of the files
-#' are downloaded. Opening the dataset lists the files and reads the schema from the first file.
-#' See `r2_parquet_tbl` for a version using DuckDB and `r2_parquet_polars` for a version using polars.
-#' Expects the R2 account id and the access key id and secret access key
-#' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-#' environment variables.
-#'
-#' @param r2_bucket R2 bucket name
-#' @param r2_path path in bucket of the parquet file, or of the directory with (partitioned) parquet files
-#' @param hive_partitioning if `TRUE`, the default, partition columns get derived from `key=value` components of the file paths
-#' @return an arrow `Dataset`
-#' @export
-r2_parquet_arrow <- function(r2_bucket,r2_path,hive_partitioning=TRUE) {
-  if (!requireNamespace("arrow",quietly=TRUE)) {
-    stop("The arrow package is required to query R2 with arrow.")
-  }
-  r2_path <- sub("/+$","",sub("^/+","",r2_path))
-  arrow::open_dataset(paste0(r2_bucket,if (r2_path!="") "/",r2_path),
-                      filesystem=r2_filesystem(),
-                      format="parquet",
-                      partitioning=if (hive_partitioning) arrow::hive_partition() else NULL)
-}
-
-#' lazy polars frame to query parquet files on Cloudflare R2
-#'
-#' @description
-#' Polars `LazyFrame` reading directly from R2, no data is downloaded until the query is executed
-#' via `$collect()`. Polars only requests the data it needs to answer the query. Filters on partition columns
-#' restrict which files are read, other filters and the selection of columns restrict which parts of the files
-#' are downloaded. With the `tidypolars` package loaded the `LazyFrame` can be queried with `dplyr` verbs,
-#' ending in `dplyr::collect()`. When filtering on integer columns use integer values like `2021L`, comparing to
-#' a plain number like `2021` casts the column to a floating point number and polars then downloads all rows of
-#' the selected columns before filtering. See `r2_parquet_tbl` for a version using DuckDB
-#' and `r2_parquet_arrow` for a version using arrow.
-#' Expects the R2 account id and the access key id and secret access key
-#' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-#' environment variables.
-#'
-#' @param r2_bucket R2 bucket name
-#' @param r2_path path in bucket of the parquet file, or of the directory with (partitioned) parquet files
-#' @param hive_partitioning if `TRUE`, the default, partition columns get derived from `key=value` components of the file paths
-#' @return a polars `LazyFrame`
-#' @export
-r2_parquet_polars <- function(r2_bucket,r2_path,hive_partitioning=TRUE) {
-  if (!requireNamespace("polars",quietly=TRUE)) {
-    stop("The polars package is required to query R2 with polars.")
-  }
-  credentials <- r2_credentials(c("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
-  polars::pl$scan_parquet(paste0("s3://",r2_bucket,"/",r2_parquet_glob(r2_bucket,r2_path)),
-                          hive_partitioning=hive_partitioning,
-                          storage_options=c(aws_access_key_id=credentials[["R2_ACCESS_KEY_ID"]],
-                                            aws_secret_access_key=credentials[["R2_SECRET_ACCESS_KEY"]],
-                                            aws_endpoint_url=r2_endpoint(),
-                                            aws_region="auto"))
 }

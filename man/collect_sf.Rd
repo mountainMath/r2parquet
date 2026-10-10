@@ -7,7 +7,7 @@
 collect_sf(tbl, geometry_column = NULL)
 }
 \arguments{
-\item{tbl}{lazy DuckDB table, e.g. from `r2_parquet_tbl` or `filter_spatial`}
+\item{tbl}{lazy DuckDB table, e.g. from `parquet_tbl` or `filter_spatial`}
 
 \item{geometry_column}{name of the active geometry column, defaults to the first GEOMETRY column of `tbl`}
 }
@@ -16,6 +16,4 @@ an sf object
 }
 \description{
 Executes the query and converts the GEOMETRY columns to sf geometry columns, keeping their crs.
-The `bbox` column that `data_to_parquet` adds for GeoParquet files gets dropped, it is only needed for
-filtering, see `filter_spatial`.
 }
