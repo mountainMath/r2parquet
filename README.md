@@ -44,6 +44,10 @@ Set these environment variables, e.g. in `~/.Renviron`:
 
 ## Example
 
+### Publishing data
+
+Needs the R2 credentials.
+
 ```r
 library(r2parquet)
 
@@ -55,15 +59,27 @@ sf_to_r2_geoparquet(nc, "census-data", "nc/counties.parquet")
 # private access with credentials
 counties <- r2_parquet_tbl("census-data", "nc/counties.parquet")
 
+# one day download link to share a file in a private bucket
+r2_presigned_url("census-data", "nc/counties.parquet", expires = 24 * 3600)
+```
+
+### Accessing published data
+
+No credentials needed, only the public URL of the file or a presigned URL shared by the publisher.
+
+```r
+library(r2parquet)
+
 # public access via the custom domain
 counties <- parquet_tbl("https://data.example.com/nc/counties.parquet")
 
-# one day download link for a file in a private bucket
-r2_presigned_url("census-data", "nc/counties.parquet", expires = 24 * 3600)
+# or via a presigned URL
+counties <- parquet_tbl("https://<account id>.r2.cloudflarestorage.com/census-data/nc/counties.parquet?X-Amz-...")
 
+nc <- sf::read_sf(system.file("shape/nc.shp", package = "sf"))
 wake <- nc[nc$NAME == "Wake", ]
 counties |>
   filter_spatial(wake) |>
-  dplyr::select(NAME, BIR74) |>
+  dplyr::select(NAME, BIR74, geometry) |>
   collect_sf()
 ```
