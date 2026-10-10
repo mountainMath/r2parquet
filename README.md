@@ -42,6 +42,8 @@ Set these environment variables, e.g. in `~/.Renviron`:
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | reading, uploading and removing files (S3 API credentials of an R2 API token) |
 | `R2_API_TOKEN` | `create_r2_bucket()` (Admin Read & Write); Zone Read for custom domains; Zone Cache Purge for cache purging on upload/removal |
 
+See [Setting up R2](https://mountainmath.github.io/r2parquet/articles/setting_up_r2.html) for the token permissions, caching and rate limiting of public buckets on a custom domain.
+
 ## Documentation
 
 Function reference and articles are on the package website: <https://mountainmath.github.io/r2parquet/>.

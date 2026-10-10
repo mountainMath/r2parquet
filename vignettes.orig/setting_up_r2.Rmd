@@ -1,0 +1,163 @@
+---
+title: "Setting up R2"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Setting up R2}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+# Nothing in here runs: the chunks need credentials and change a Cloudflare account.
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+Reading public data needs no setup at all, `parquet_tbl()` only needs the URL. This article is for the publishing side: what a Cloudflare account needs so that `r2parquet` can create buckets, upload and remove files, and keep the Cloudflare cache in sync, and how to serve a public bucket in production.
+
+## Credentials
+
+R2 is reached through two different APIs, with two kinds of credentials.
+
+* **The S3-compatible API** for objects: uploading (`upload_parquet()`, `data_to_parquet()` to `r2://` paths), removing (`remove_parquet()`), reading private buckets (`parquet_tbl("r2://...")`) and signing `presigned_url()`s. It authenticates with an access key id and a secret access key.
+* **The Cloudflare REST API** for everything the S3 API can't do: creating buckets with public access and custom domains (`create_r2_bucket()`) and purging the cache. It authenticates with an API token as a bearer token.
+
+The package reads them from environment variables at call time, conveniently set in `~/.Renviron`:
+
+```sh
+R2_ACCOUNT_ID=...          # the account id, in the R2 overview of the dashboard
+R2_ACCESS_KEY_ID=...       # S3 API credentials
+R2_SECRET_ACCESS_KEY=...
+R2_API_TOKEN=...           # Cloudflare API token
+```
+
+Restart R after editing `~/.Renviron`. Only what is used has to be set: someone who only uploads to an existing bucket without custom domain needs just the first three.
+
+## Creating the API token
+
+Under *R2 Object Storage* → *Manage API tokens* the dashboard creates R2 API tokens with one of four permission levels:
+
+| Permission | Allows | Needed for |
+| --- | --- | --- |
+| Admin Read & Write | create buckets and change their settings, read and write objects | `create_r2_bucket()` |
+| Admin Read only | list buckets and settings, read objects | |
+| Object Read & Write | read, write and list objects, optionally only in some buckets | `upload_parquet()`, `remove_parquet()`, `data_to_parquet()` to R2, `parquet_tbl()` on `r2://`, `presigned_url()` |
+| Object Read only | read and list objects, optionally only in some buckets | `parquet_tbl()` on `r2://`, `presigned_url()` for `GET`/`HEAD` |
+
+Creating a token shows three values, once: the token value (`R2_API_TOKEN`), the access key id (`R2_ACCESS_KEY_ID`) and the secret access key (`R2_SECRET_ACCESS_KEY`). They are two views of the same token, the access key id is the token's id and the secret is the SHA-256 hash of the token value. Presigned URLs stop working when the token they were signed with is revoked, so it pays to sign them with a token that is kept around.
+
+The R2 permissions don't reach beyond R2. Two more things the package does need zone permissions on the zone of a custom domain:
+
+| Zone permission | Needed for |
+| --- | --- |
+| Zone → Zone → Read | `create_r2_bucket(custom_domain = ...)`, to find the zone the domain belongs to |
+| Zone → Cache Purge → Purge | purging changed files from the cache in `upload_parquet()`, `remove_parquet()` and `data_to_parquet()` to R2 |
+
+These can't be added in the R2 token dialog. Instead create a custom token under *Manage account* → *Account API tokens* (or under *My Profile* → *API Tokens* for a token tied to your user) with
+
+* Account → Workers R2 Storage → Edit (the equivalent of Admin Read & Write),
+* Zone → Zone → Read,
+* Zone → Cache Purge → Purge,
+
+with the zone resources limited to the zones that serve buckets. Its token value goes into `R2_API_TOKEN`. To use the same token for the S3 API as well, take its id as `R2_ACCESS_KEY_ID` and the SHA-256 hash of its value as `R2_SECRET_ACCESS_KEY`:
+
+```{r}
+digest::digest(Sys.getenv("R2_API_TOKEN"), algo = "sha256", serialize = FALSE)
+```
+
+Alternatively keep two tokens, an R2 token with Object Read & Write for the S3 credentials and a custom token for `R2_API_TOKEN`. That way a machine that only uploads gets the narrower token.
+
+Without `R2_API_TOKEN` uploads and removals still work, they just don't purge the cache. If the token is set but lacks Cache Purge, the files are changed and the purge fails with a warning: until the cached copies expire, readers may get the old versions, or worse, a mix of old cached and new uncached partitions.
+
+## Creating a bucket
+
+```{r}
+library(r2parquet)
+
+create_r2_bucket("census-data")                                     # private
+create_r2_bucket("census-scratch", public = TRUE)                   # public via r2.dev
+create_r2_bucket("census-data", custom_domain = "data.example.com") # public via own domain
+```
+
+`create_r2_bucket()` can be run again on an existing bucket to make it public, but never makes a public bucket private again, that has to be done in the dashboard.
+
+## Public access
+
+There are two ways to serve a bucket publicly.
+
+**The `r2.dev` URL** (`public = TRUE`) needs nothing besides the bucket. It is rate limited by Cloudflare and meant for development: no caching, no access rules, no control over what happens when a lot of requests come in. Querying parquet files remotely makes many small range requests, one query can take dozens, so the limit is reached sooner than the number of users suggests.
+
+**A custom domain** is what to use in production. The domain has to be a zone in the same Cloudflare account as the bucket, and the zone has to be active, i.e. the domain uses Cloudflare's nameservers (or a partial CNAME setup on Business plans and above). Each hostname serves one bucket, so use subdomains like `data.example.com` to serve several buckets from one zone. `create_r2_bucket(custom_domain = ...)` connects the domain; it takes a few minutes until the certificate is issued and the domain is active. The custom domain is what makes caching, rate limiting and other WAF rules possible.
+
+If a bucket had the `r2.dev` URL enabled before getting a custom domain, disable it in the bucket's *Settings* → *Public Development URL*. Otherwise the bucket stays reachable there, bypassing the cache and any rules on the custom domain. `create_r2_bucket()` never enables `r2.dev` when `custom_domain` is given, but it doesn't turn it off either.
+
+## Caching
+
+R2 itself has no cache settings, caching happens in Cloudflare's CDN in front of a custom domain and is configured on the zone. Reading from R2 is free of egress fees either way, but cached requests are faster, don't count as R2 read operations, and don't depend on the bucket's location.
+
+**Parquet is not cached by default.** Cloudflare only caches a fixed list of file extensions, and `.parquet` is not on it. Add a cache rule under the zone's *Caching* → *Cache Rules*:
+
+* *When incoming requests match*: Hostname equals `data.example.com`
+* *Cache eligibility*: Eligible for cache
+* *Edge TTL*: Ignore cache-control header and use this TTL, e.g. 1 month
+
+A long edge TTL is safe because `upload_parquet()` and `remove_parquet()` purge exactly the files they change (`purge_cache = TRUE` is the default). Files uploaded with other tools, or by the package without `R2_API_TOKEN`, are only refreshed when the TTL runs out, or after purging them by hand under *Caching* → *Configuration* → *Purge Cache*. Without an explicit edge TTL, objects without a `Cache-Control` header, which is how the package uploads them, are kept for two hours.
+
+Keep the *Browser TTL* short (or respect the origin, which sends none), as a purge can't reach into browser caches. That matters less for R, where DuckDB, arrow and polars don't keep an HTTP cache between sessions, than for web maps reading the same files with DuckDB-WASM.
+
+Two further settings:
+
+* **Tiered Cache** (*Caching* → *Tiered Cache*), Smart Tiered Cache Topology, is recommended by Cloudflare for R2: cache misses in any data centre are served from one upper tier data centre close to the bucket, rather than each going to R2.
+* **File size.** Cloudflare caches files up to 512 MB (5 GB on Enterprise), larger files are always fetched from R2. Another reason, besides faster queries, to write large datasets with `partition_by` or to split them into several files.
+
+## Rate limiting
+
+On a custom domain a rate limiting rule caps the number of requests per client, under *Security* → *WAF* → *Rate limiting rules*:
+
+* *When incoming requests match*: Hostname equals `data.example.com`
+* *With the same characteristics*: IP
+* *When rate exceeds*: e.g. 500 requests per 10 seconds
+* *Then take action*: Block, for the duration of 10 seconds
+
+The free plan allows one rule with a 10 second period and a 10 second timeout, paid plans allow longer periods and timeouts and more rules. Rate limiting counts requests, not bytes, including those served from the cache. Choose the threshold generously: DuckDB reads the footer of each file and then the row groups a query needs in parallel range requests, and a partitioned dataset adds requests per partition file. Try it with a typical query against the dataset, with a low threshold and the action set to *Log* first, then look at the counts in *Security* → *Analytics*.
+
+Leave *Bot Fight Mode* and challenge actions off for the data hostname: DuckDB, arrow and polars are HTTP clients that can't solve a challenge, so a challenged request simply fails. Block, rather than challenge, in rate limiting rules for the same reason.
+
+## CORS
+
+R doesn't need it, but browsers do: to read the files from a web page, e.g. with DuckDB-WASM, add a CORS policy in the bucket's *Settings* → *CORS Policy* that allows `GET` and `HEAD` from the page's origin, and exposes the `Content-Range`, `Content-Length` and `ETag` headers the range requests rely on:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://example.com"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["Range"],
+    "ExposeHeaders": ["Content-Range", "Content-Length", "ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+## Checking the setup
+
+```{r}
+library(r2parquet)
+
+create_r2_bucket("census-data", custom_domain = "data.example.com")
+
+nc <- sf::read_sf(system.file("shape/nc.shp", package = "sf"))
+data_to_parquet(nc, "r2://census-data/nc/counties.parquet")  # no purge warning: cache purge works
+
+parquet_tbl("https://data.example.com/nc/counties.parquet")   # public access via the custom domain
+```
+
+```sh
+# twice: the second response should say cf-cache-status: HIT
+curl -sI https://data.example.com/nc/counties.parquet | grep -i cf-cache-status
+```
+
+`DYNAMIC` means the cache rule doesn't match the request. Note that `curl -I` checks the whole file, DuckDB's range requests are served from the same cached copy.
