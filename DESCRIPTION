@@ -1,0 +1,36 @@
+Package: r2parquet
+Type: Package
+Title: Parquet and GeoParquet Files on Cloudflare R2
+Version: 0.1.0
+Authors@R: person("Jens", "von Bergmann", email = "jens@mountainmath.ca", role = c("aut", "cre"))
+Description: Publish parquet and GeoParquet files on Cloudflare R2 and query them lazily.
+    Creates R2 buckets with private or public access, including custom domains, uploads and
+    removes (partitioned) parquet files and purges changed files from the Cloudflare cache.
+    Writes GeoParquet 2.0 files sorted along a Hilbert curve for selective remote spatial queries,
+    and provides lazy DuckDB, arrow and polars readers for private R2 buckets as well as
+    DuckDB readers for public URLs and local files, with spatial filtering and conversion to sf.
+License: MIT + file LICENSE
+URL: https://github.com/mountainMath/r2parquet
+BugReports: https://github.com/mountainMath/r2parquet/issues
+Encoding: UTF-8
+Depends:
+    R (>= 4.1.0)
+Imports:
+    aws.signature,
+    DBI,
+    dbplyr,
+    digest,
+    dplyr,
+    duckdb,
+    httr,
+    sf,
+    stats,
+    utils
+Suggests:
+    arrow,
+    polars,
+    testthat (>= 3.0.0),
+    withr
+Additional_repositories: https://community.r-multiverse.org
+Config/testthat/edition: 3
+Config/roxygen2/version: 8.1.0
