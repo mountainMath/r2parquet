@@ -1,0 +1,80 @@
+---
+title: "Accessing public buckets"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Accessing public buckets}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = curl::has_internet()
+)
+```
+
+```{r setup}
+library(r2parquet)
+library(dplyr)
+library(ggplot2)
+```
+
+As an example we consider accessing dissemination block (DB) level geographic data from the 2021 Canadian census. For this we have prepared a parquet file in a public bucket, it can be reached by url.
+
+```{r}
+census_db_url <- "https://data.mountainmath.xyz/census/2021/ldb_000b21f_e.parquet"
+```
+
+The data can be downloaded in full, but often we are interested in a specific part of Canada only, maybe a particular metro area (CMA) or census subdivision (CSD). The first step is to get a lazy connection to the parquet file.
+
+```{r}
+db_table <- parquet_tbl(census_db_url)
+
+db_table |> colnames()
+```
+
+This only reads the metadata, the file carries several geographic identifiers as well as the geography. A simple query would be to fetch the data for just the City of Vancouver.
+
+```{r}
+data_csd <- db_table |>
+  filter(CSDUID=="5915022") |>
+  collect_sf()
+
+ggplot(data_csd) +
+  geom_sf()
+```
+
+Similarly, we can fetch the data for Metro Vancouver. Both these queries run in less than a second because under the hood only the ranges for the data that's actually required are identified and read, with only limited unneeded data making the trip from R2 to the R session.
+
+```{r}
+data_cma <- db_table |>
+  filter(CMAUID=="933") |>
+  collect_sf()
+
+ggplot(data_cma) +
+  geom_sf()
+```
+
+We can also use efficient spatial filtering when getting the data, for example querying data within a 10 km radius around the centroid of the City of Vancouver.
+
+```{r}
+library(sf)
+
+mask <- st_point(c(-123.108, 49.249)) |> 
+  st_sfc(crs = 4326) |>
+  st_buffer(10000) 
+
+data_mask <- db_table |>
+  filter_spatial(mask) |>
+  collect_sf()
+
+data_mask |>
+  st_set_agr("constant") |>
+  st_intersection(mask |> st_transform(st_crs(data_mask))) |>
+  ggplot() +
+  geom_sf()
+```
+
+The `filter_spatial` function returns every feather that intersects the mask, clipping the returned data with `st_intersection` makes for a prettier plot.
