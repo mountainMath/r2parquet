@@ -6,13 +6,18 @@
 
 Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloudflare.com/r2/) and query them lazily from R.
 
+## Reading public Parquet and GeoParquet data from R2
+
+- **Reading public URLs and local files**: `parquet_tbl()`, no credentials needed.
+- **Spatial queries**: `filter_spatial()` and `collect_sf()` on any lazy DuckDB table.
+
+## Uploading and managing data on R2
+
 - **Buckets**: `create_r2_bucket()` creates private or public buckets, public via the `r2.dev` URL or a custom domain.
 - **Files**: `parquet_to_r2()` uploads single parquet files or directories of (partitioned) parquet files, `remove_parquet_from_r2()` removes them. Both purge the changed files from the Cloudflare cache of the bucket's custom domains.
 - **GeoParquet**: `sf_to_geoparquet()` writes GeoParquet 2.0 files sorted along a Hilbert curve so remote spatial queries only download the row groups they need, `sf_to_r2_geoparquet()` writes and uploads in one go.
 - **Reading private buckets**: `r2_parquet_tbl()` (DuckDB / `dbplyr`), `r2_parquet_arrow()` (arrow `Dataset`) and `r2_parquet_polars()` (polars `LazyFrame`).
 - **Sharing private files**: `r2_presigned_url()` creates time limited download (or upload) URLs for single files.
-- **Reading public URLs and local files**: `parquet_tbl()`, no credentials needed.
-- **Spatial queries**: `filter_spatial()` and `collect_sf()` on any lazy DuckDB table.
 
 ## Installation
 
