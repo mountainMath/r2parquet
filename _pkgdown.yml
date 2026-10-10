@@ -3,3 +3,31 @@ url: https://mountainmath.github.io/r2parquet/
 template:
   bootstrap: 5
   light-switch: true
+
+reference:
+- title: Reading publicly hosted data
+  desc: No credentials needed, works with public URLs, presigned URLs and local files.
+  contents:
+  - parquet_tbl
+  - filter_spatial
+  - collect_sf
+- title: Uploading and managing data on R2
+  desc: Need the R2 credentials (see the README), except `data_to_parquet()`, which writes local files.
+- subtitle: Buckets
+  contents:
+  - create_r2_bucket
+- subtitle: Writing and uploading
+  contents:
+  - data_to_parquet
+  - data_to_r2_parquet
+  - parquet_to_r2
+  - remove_parquet_from_r2
+- subtitle: Reading private buckets
+  contents:
+  - r2_parquet_tbl
+  - r2_parquet_arrow
+  - r2_parquet_polars
+  - r2_duckdb_connection
+- subtitle: Sharing private files
+  contents:
+  - r2_presigned_url
