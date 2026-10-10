@@ -12,6 +12,9 @@
 #   Rscript vignettes.orig/precompute.R                            # all of them
 #   Rscript vignettes.orig/precompute.R accessing_public_buckets   # just this one
 #
+# Vignettes get the default values of the `params` in their YAML header, as
+# with rmarkdown::render(). A chunk that fails stops the knitting.
+#
 # Commit the resulting `vignettes/*.Rmd` together with any figures it wrote.
 # Mind what ends up in the output: presigned URLs carry the account id and
 # access key id and stay valid until they expire, so don't print them.
@@ -55,7 +58,15 @@ for (v in wanted) {
   message("knitting ", v)
   # figures of an earlier run that the vignette no longer produces would ship otherwise
   unlink(list.files(".", pattern = paste0("^", v, "-.*\\.png$")))
-  knitr::knit(file.path(src_dir, paste0(v, ".Rmd")), paste0(v, ".Rmd"))
+  src <- file.path(src_dir, paste0(v, ".Rmd"))
+  # knitr::knit(), unlike rmarkdown::render(), doesn't define the `params` of
+  # the YAML header, so set them up the same way, with their default values.
+  env <- new.env(parent = globalenv())
+  env$params <- lapply(knitr::knit_params(readLines(src, warn = FALSE)),
+                       function(p) p$value)
+  # a failing chunk would otherwise end up as an error message in the vignette
+  knitr::opts_chunk$set(error = FALSE)
+  knitr::knit(src, paste0(v, ".Rmd"), envir = env)
 
   # Say so in the file itself, so an edit to the wrong copy is obvious.
   lines <- readLines(paste0(v, ".Rmd"), warn = FALSE)

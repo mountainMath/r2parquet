@@ -87,6 +87,17 @@ test_that("lazy DuckDB tables get written without collecting, keeping geometry a
   expect_true(sf::st_crs(result)==sf::st_crs(data))
 })
 
+test_that("lazy DuckDB tables without geometry get written as plain parquet", {
+  con <- DBI::dbConnect(duckdb::duckdb())
+  withr::defer(DBI::dbDisconnect(con,shutdown=TRUE))
+  df <- data.frame(id=c("003","001","002"),value=c(3,1,2))
+  duckdb::duckdb_register(con,"df",df)
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(dplyr::tbl(con,"df"),path,sort_by="id")
+  result <- DBI::dbGetQuery(con,paste0("SELECT * FROM read_parquet('",path,"')"))
+  expect_equal(result,df[order(df$id),],ignore_attr=TRUE)
+})
+
 test_that("partitioned GeoParquet keeps the Hilbert order within partitions", {
   skip_if_no_duckdb_extensions()
   set.seed(1)

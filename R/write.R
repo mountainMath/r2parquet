@@ -61,7 +61,7 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
     if (!inherits(data,"tbl_duckdb_connection")) stop("Lazy tables have to be DuckDB tables.")
     con <- dbplyr::remote_con(data)
     geometry_columns <- names(duckdb_geometry_columns(data))
-    geometry_column <- if ("geometry" %in% geometry_columns) "geometry" else geometry_columns[1]
+    geometry_column <- if ("geometry" %in% geometry_columns) "geometry" else if (length(geometry_columns)>0) geometry_columns[1]
     source <- paste0("(",dbplyr::sql_render(data),")")
     columns <- colnames(data)
   } else if (inherits(data,"sf")) {

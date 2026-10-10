@@ -1,0 +1,156 @@
+---
+title: "Uploading data"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Uploading data}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+params:
+  download_path: "~/Downloads"
+---
+<!-- Generated from vignettes.orig/uploading_data.Rmd -- do not edit. -->
+<!-- Rebuild with: Rscript vignettes.orig/precompute.R -->
+
+
+
+
+``` r
+library(r2parquet)
+library(dplyr)
+library(ggplot2)
+```
+
+We showcase how to upload tabular and spatial data to R2.
+
+## Tabular data
+
+As an example consider the geographic attributes file for the 2021 census. StatCan has disabled programmatic download, so the file has to be downloaded manually and the `download_path` parameter point to where the downloaded file lives.
+
+
+``` r
+path <- file.path(params$download_path, "2021_92-151_X.csv")
+```
+
+The file has close to half a million rows, one per dissemination block, and takes 300 MB as CSV. Rather than reading it into R, we let DuckDB read it lazily, `data_to_parquet()` then writes lazy DuckDB tables with a single DuckDB `COPY` straight from the CSV to parquet, and uploads the parquet file in chunks, without the data ever passing through R.
+
+Trial and error determined that the CSV is Windows-1252 encoded, which DuckDB reads via its `encodings` extension. We read all columns as text, otherwise DuckDB would turn codes like `SACCODE` `"001"` into numbers, and convert the numeric columns explicitly instead. The column names are bilingual, like `DBUID_IDIDU`, we keep the English part.
+
+
+``` r
+csv_con <- DBI::dbConnect(duckdb::duckdb())
+DBI::dbExecute(csv_con, "INSTALL encodings") |> invisible()
+
+geo_attributes <- tbl(csv_con, sql(paste0(
+  "FROM read_csv(", DBI::dbQuoteString(csv_con, path), 
+  ", encoding = 'cp1252', all_varchar = true)"))) |>
+  rename_with(\(name) sub("_.*", "", name)) |>
+  mutate(across(c(DBPOP2021, DBTDWELL2021, DBURDWELL2021), as.integer),
+         across(c(DARPLAMX, DARPLAMY, DARPLAT, DARPLONG, DBAREA2021), as.numeric))
+
+geo_attributes
+#> # A query:  ?? x 63
+#> # Database: DuckDB 1.5.6 [jens@Darwin 27.0.0:R 4.6.0/:memory:]
+#>    PRUID PRDGUID     PRNAME PRENAME PRFNAME PREABBR PRFABBR CDUID CDDGUID CDNAME
+#>    <chr> <chr>       <chr>  <chr>   <chr>   <chr>   <chr>   <chr> <chr>   <chr> 
+#>  1 10    2021A000210 Newfo… Newfou… Terre-… N.L.    T.-N.-… 1001  2021A0… Divis…
+#>  2 10    2021A000210 Newfo… Newfou… Terre-… N.L.    T.-N.-… 1001  2021A0… Divis…
+#>  3 10    2021A000210 Newfo… Newfou… Terre-… N.L.    T.-N.-… 1001  2021A0… Divis…
+#>  4 10    2021A000210 Newfo… Newfou… Terre-… N.L.    T.-N.-… 1001  2021A0… Divis…
+#>  5 10    2021A000210 Newfo… Newfou… Terre-… N.L.    T.-N.-… 1001  2021A0… Divis…
+#>  6 10    2021A000210 Newfo… Newfou… Terre-… N.L.    T.-N.-… 1001  2021A0… Divis…
+#>  7 10    2021A000210 Newfo… Newfou… Terre-… N.L.    T.-N.-… 1001  2021A0… Divis…
+#>  8 10    2021A000210 Newfo… Newfou… Terre-… N.L.    T.-N.-… 1001  2021A0… Divis…
+#>  9 10    2021A000210 Newfo… Newfou… Terre-… N.L.    T.-N.-… 1001  2021A0… Divis…
+#> 10 10    2021A000210 Newfo… Newfou… Terre-… N.L.    T.-N.-… 1001  2021A0… Divis…
+#> # ℹ more rows
+#> # ℹ 53 more variables: CDTYPE <chr>, FEDUID <chr>, FEDDGUID <chr>,
+#> #   FEDNAME <chr>, CSDUID <chr>, CSDDGUID <chr>, CSDNAME <chr>, CSDTYPE <chr>,
+#> #   DPLUID <chr>, DPLDGUID <chr>, DPLNAME <chr>, DPLTYPE <chr>, ERUID <chr>,
+#> #   ERDGUID <chr>, ERNAME <chr>, CCSUID <chr>, CCSDGUID <chr>, CCSNAME <chr>,
+#> #   SACTYPE <chr>, SACCODE <chr>, CMAPUID <chr>, CMAPDGUID <chr>, CMAUID <chr>,
+#> #   CMADGUID <chr>, CMANAME <chr>, CMATYPE <chr>, CTUID <chr>, CTDGUID <chr>, …
+```
+
+Sorting by the dissemination block id keeps the blocks of each province, census division and subdivision together in the same row groups, so queries filtering on these only download the row groups they need.
+
+
+``` r
+data_to_parquet(geo_attributes, "r2://test/census/2021/2021_92-151_X.parquet", 
+                sort_by = "DBUID")
+#> Uploading 10.2 MB in 1 parquet file to r2://test/census/2021/2021_92-151_X.parquet.
+
+DBI::dbDisconnect(csv_con, shutdown = TRUE)
+```
+
+Reading it back, e.g. the population and dwellings by census subdivision in the Montréal CMA:
+
+
+``` r
+parquet_tbl("r2://test/census/2021/2021_92-151_X.parquet") |>
+  filter(CMAUID == "462") |>
+  summarise(Population = sum(DBPOP2021, na.rm = TRUE), 
+            Dwellings = sum(DBTDWELL2021, na.rm = TRUE),
+            .by = CSDNAME) |>
+  arrange(desc(Population)) |>
+  collect()
+#> # A tibble: 93 × 3
+#>    CSDNAME                  Population Dwellings
+#>    <chr>                         <dbl>     <dbl>
+#>  1 Montréal                    1762949    878542
+#>  2 Laval                        438366    176115
+#>  3 Longueuil                    254483    117006
+#>  4 Terrebonne                   119944     46056
+#>  5 Saint-Jean-sur-Richelieu      97873     44255
+#>  6 Brossard                      91525     37275
+#>  7 Repentigny                    86100     34710
+#>  8 Saint-Jérôme                  80213     38776
+#>  9 Mirabel                       61108     25514
+#> 10 Blainville                    59819     22859
+#> # ℹ 83 more rows
+```
+
+## Spatial data
+
+For this we consider hosting the StatCan metro area (CMA) level geographies from the 2021 census. StatCan has disabled programmatic download, so the geodatabase has to be downloaded manually and the `download_path` parameter set to the (unzipped) folder with the geodatabase.
+
+We then read the data and cast it to MULTIPOLYGON. Some StatCan geography files contain MULTISURFACE geometries, which have to be converted before writing parquet files, for this file the cast does not change anything.
+
+
+``` r
+d <- sf::st_read(file.path(params$download_path, "lcma000b21f_e/lcma000b21f_e.gdb"), quiet = TRUE) |>
+  sf::st_cast("MULTIPOLYGON")
+```
+
+We then write this to a parquet file on R2, with the first path component being the bucket, which has to exist already (see `create_r2_bucket()` and the [Setting up R2](setting_up_r2.html) article for the credentials needed). Under the hood `data_to_parquet()` renames the geometry column to `geometry`, repairs invalid geometries, orders the rows by the `sort_by` columns, if any, and further along a Hilbert curve, and uploads the resulting GeoParquet file.
+
+
+``` r
+data_to_parquet(d, "r2://test/census/2021/lcma000b21f_e.parquet", sort_by = "CMAUID")
+#> Renaming geometry column SHAPE to the GeoParquet standard name geometry.
+#> Repairing 2 invalid geometries via sf::st_make_valid.
+#> Uploading 12.9 MB in 1 parquet file to r2://test/census/2021/lcma000b21f_e.parquet.
+```
+
+The uploaded file can be queried lazily right away, here we read the Montréal CMA.
+
+
+``` r
+con <- parquet_tbl("r2://test/census/2021/lcma000b21f_e.parquet")
+
+data <- con |>
+  filter(CMAUID == "462") |>
+  collect_sf()
+
+ggplot(data) +
+  geom_sf()
+```
+
+<div class="figure">
+<img src="uploading_data-montreal-1.png" alt="plot of chunk montreal" width="100%" />
+<p class="caption">plot of chunk montreal</p>
+</div>
+
+
+
+
+
