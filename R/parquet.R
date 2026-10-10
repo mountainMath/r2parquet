@@ -25,7 +25,7 @@ parquet_duckdb_connection <- function(){
 #' the parts of the files it needs to answer the query.
 #'
 #' The `httpfs` DuckDB extension gets installed and loaded for URLs. If the table has GEOMETRY columns, like
-#' GeoParquet files written by `sf_to_geoparquet`, the `spatial` extension gets installed and loaded too, so that
+#' GeoParquet files written by `data_to_parquet`, the `spatial` extension gets installed and loaded too, so that
 #' spatial functions like `ST_Area` can be used in queries. Use `filter_spatial` to filter by location and
 #' `collect_sf` to collect the result as an sf object.
 #'

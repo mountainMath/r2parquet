@@ -1,7 +1,6 @@
 # GeoParquet helpers
-# Writing uses DuckDB to produce GeoParquet 2.0 files with the native parquet GEOMETRY type,
-# sorted along a Hilbert curve so that the per row group bounding box statistics are selective.
-# Reading works on lazy DuckDB tables, like the ones returned by r2_parquet_tbl.
+# Reading works on lazy DuckDB tables, like the ones returned by r2_parquet_tbl. GeoParquet files get
+# written by data_to_parquet in write.R.
 
 # crs specification DuckDB understands, NULL if the crs is missing
 duckdb_crs <- function(crs){
@@ -49,96 +48,6 @@ make_valid_geometries <- function(geometry){
   geometry
 }
 
-#' write sf object to GeoParquet
-#'
-#' @description
-#' Writes a GeoParquet 2.0 file using the native parquet GEOMETRY type, which stores the crs with the column
-#' and a bounding box per row group. Rows get sorted along a Hilbert curve, so that each row group covers a
-#' compact area and spatial filters can skip row groups based on their bounding box when reading remotely,
-#' see `filter_spatial`. Use `sort_by` to sort by attribute columns first, so that filters on these columns
-#' can skip row groups as well. Within each value of the `sort_by` columns the rows are still sorted spatially.
-#' Smaller row groups allow for finer grained skipping, at the expense of larger metadata. DuckDB writes row groups
-#' in multiples of 2048 rows, smaller values of `row_group_size` result in row groups of 2048 rows, so data with fewer
-#' rows ends up in a single row group and filters can't skip any part of the geometry.
-#'
-#' Invalid geometries get fixed via `sf::st_make_valid`, keeping multi geometries multi, and the geometry column is always named `geometry`,
-#' following the GeoParquet convention, independent of its name in `data`. Both emit a message when they change the data.
-#'
-#' Readers without support for the native GEOMETRY type, like arrow or polars, can't use the bounding box
-#' statistics. For these `bbox_column=TRUE` adds a `bbox` struct column with the bounding box of each geometry,
-#' whose statistics they can filter on. `filter_spatial` uses this column if present.
-#'
-#' @param data sf object
-#' @param path path of the parquet file to write
-#' @param sort_by optional vector of column names to sort by before sorting spatially
-#' @param row_group_size number of rows per row group, rounded up to a multiple of 2048 by DuckDB, default is 10000
-#' @param bbox_column if `TRUE`, add a `bbox` struct column with the bounding box of each geometry, default is `FALSE`
-#' @return (invisibly) the path of the parquet file
-#' @export
-sf_to_geoparquet <- function(data,path,sort_by=NULL,row_group_size=10000L,bbox_column=FALSE) {
-  if ("geometry" %in% setdiff(names(data),attr(data,"sf_column"))) stop("Data has a non-geometry column named geometry.")
-  missing_columns <- setdiff(sort_by,names(data))
-  if (length(missing_columns)>0) stop(paste0("Columns ",paste0(missing_columns,collapse=", ")," not found in data."))
-  if (bbox_column && "bbox" %in% names(data)) stop("Data already has a bbox column.")
-  if (row_group_size<2048) warning("DuckDB writes row groups of at least 2048 rows, row_group_size has no effect below that.",call.=FALSE)
-  con <- DBI::dbConnect(duckdb::duckdb())
-  on.exit(DBI::dbDisconnect(con,shutdown=TRUE))
-  DBI::dbExecute(con,"INSTALL spatial")
-  DBI::dbExecute(con,"LOAD spatial")
-  geometry_column <- "geometry"
-  if (attr(data,"sf_column")!=geometry_column) {
-    message("Renaming geometry column ",attr(data,"sf_column")," to the GeoParquet standard name geometry.")
-  }
-  df <- sf::st_drop_geometry(data)
-  df[[geometry_column]] <- unclass(sf::st_as_binary(make_valid_geometries(sf::st_geometry(data))))
-  duckdb::duckdb_register(con,"sf_data",df)
-  geometry <- DBI::dbQuoteIdentifier(con,geometry_column)
-  crs <- duckdb_crs(sf::st_crs(data))
-  geometry_sql <- paste0("ST_GeomFromWKB(",geometry,")")
-  if (!is.null(crs)) geometry_sql <- paste0("ST_SetCRS(",geometry_sql,", ",DBI::dbQuoteString(con,crs),")")
-  DBI::dbExecute(con,paste0("CREATE TABLE geo_data AS SELECT * EXCLUDE (",geometry,"), ",
-                            geometry_sql," AS ",geometry," FROM sf_data"))
-  columns <- "*"
-  if (bbox_column) {
-    columns <- paste0("*, struct_pack(xmin := ST_XMin(",geometry,"), ymin := ST_YMin(",geometry,
-                      "), xmax := ST_XMax(",geometry,"), ymax := ST_YMax(",geometry,")) AS bbox")
-  }
-  order <- c(if (length(sort_by)>0) DBI::dbQuoteIdentifier(con,sort_by),
-             paste0("ST_Hilbert(",geometry,", (SELECT ST_Extent(ST_Extent_Agg(",geometry,")) FROM geo_data))"))
-  DBI::dbExecute(con,paste0("COPY (SELECT ",columns," FROM geo_data ORDER BY ",paste0(order,collapse=", "),") TO ",
-                            DBI::dbQuoteString(con,path),
-                            " (FORMAT parquet, GEOPARQUET_VERSION 'V2', COMPRESSION zstd, ROW_GROUP_SIZE ",
-                            as.integer(row_group_size),")"))
-  invisible(path)
-}
-
-#' write sf object to GeoParquet on Cloudflare R2
-#'
-#' @description
-#' Writes the sf object to a GeoParquet file via `sf_to_geoparquet` and uploads it to R2 via `parquet_to_r2`.
-#' The bucket has to exist, use `create_r2_bucket` to create it.
-#' Expects the R2 account id and the access key id and secret access key
-#' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-#' environment variables.
-#'
-#' @param data sf object
-#' @param r2_bucket R2 bucket name
-#' @param r2_path path of the parquet file in the bucket, has to end in `.parquet`
-#' @param ... further arguments passed on to `sf_to_geoparquet`, like `sort_by`, `row_group_size` or `bbox_column`
-#' @return (invisibly) the path in the bucket of the uploaded file
-#' @export
-sf_to_r2_geoparquet <- function(data,r2_bucket,r2_path,...) {
-  r2_path <- sub("^/+","",r2_path)
-  if (!grepl("\\.parquet$",r2_path)) stop("The r2_path has to be the path of a parquet file ending in .parquet.")
-  tmp_dir <- tempfile()
-  dir.create(tmp_dir)
-  on.exit(unlink(tmp_dir,recursive=TRUE))
-  path <- sf_to_geoparquet(data,file.path(tmp_dir,basename(r2_path)),...)
-  message("Uploading ",format(structure(file.size(path),class="object_size"),units="auto",standard="SI"),
-          " parquet file to ",r2_bucket,"/",r2_path,".")
-  parquet_to_r2(path,r2_bucket,r2_path)
-}
-
 #' spatially filter a lazy DuckDB table of GeoParquet data
 #'
 #' @description
@@ -148,7 +57,7 @@ sf_to_r2_geoparquet <- function(data,r2_bucket,r2_path,...) {
 #' for the bounding box comparison, a plain `ST_Intersects` filter downloads the geometry of all rows,
 #' so the filter first compares bounding boxes and then, if `exact` is `TRUE`, checks for actual intersection
 #' on the remaining rows. How much gets skipped depends on the file being sorted spatially, like the files
-#' written by `sf_to_geoparquet`.
+#' written by `data_to_parquet`.
 #' `y` gets transformed to the crs of the geometry column if both have a crs.
 #'
 #' @param tbl lazy DuckDB table, e.g. from `r2_parquet_tbl`
@@ -175,7 +84,7 @@ filter_spatial <- function(tbl,y,geometry_column=NULL,exact=TRUE) {
   geometry <- DBI::dbQuoteIdentifier(con,geometry_column$name)
   envelope <- with_crs(paste0("ST_MakeEnvelope(",paste0(sprintf("%.17g",bbox[c("xmin","ymin","xmax","ymax")]),collapse=", "),")"))
   conditions <- paste0(geometry," && ",envelope)
-  if ("bbox" %in% colnames(tbl)) {
+  if (duckdb_has_bbox_column(tbl)) {
     conditions <- c(conditions,sprintf("bbox.xmax >= %.17g AND bbox.xmin <= %.17g AND bbox.ymax >= %.17g AND bbox.ymin <= %.17g",
                                        bbox[["xmin"]],bbox[["xmax"]],bbox[["ymin"]],bbox[["ymax"]]))
   }
@@ -190,6 +99,8 @@ filter_spatial <- function(tbl,y,geometry_column=NULL,exact=TRUE) {
 #'
 #' @description
 #' Executes the query and converts the GEOMETRY columns to sf geometry columns, keeping their crs.
+#' The `bbox` column that `data_to_parquet` adds for GeoParquet files gets dropped, it is only needed for
+#' filtering, see `filter_spatial`.
 #'
 #' @param tbl lazy DuckDB table, e.g. from `r2_parquet_tbl` or `filter_spatial`
 #' @param geometry_column name of the active geometry column, defaults to the first GEOMETRY column of `tbl`
@@ -198,6 +109,7 @@ filter_spatial <- function(tbl,y,geometry_column=NULL,exact=TRUE) {
 collect_sf <- function(tbl,geometry_column=NULL) {
   geometry_columns <- duckdb_geometry_columns(tbl)
   geometry_column <- duckdb_geometry_column(tbl,geometry_column)$name
+  if (duckdb_has_bbox_column(tbl)) tbl <- dplyr::select(tbl,-"bbox")
   data <- dplyr::collect(tbl)
   for (column in names(geometry_columns)) {
     data[[column]] <- sf::st_as_sfc(structure(data[[column]],class="WKB"),crs=geometry_columns[[column]])

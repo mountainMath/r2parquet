@@ -9,26 +9,24 @@ test_that("parquet files can be uploaded, queried and removed", {
 
   # single GeoParquet file
   r2_path <- paste0(prefix,"/nc.parquet")
-  expect_message(sf_to_r2_geoparquet(data,bucket,r2_path),"Uploading")
+  expect_message(data_to_r2_parquet(data,bucket,r2_path),"Uploading")
   y <- sf::st_buffer(sf::st_centroid(sf::st_geometry(data[data$NAME=="Wake",])),20000)
   result <- collect_sf(filter_spatial(r2_parquet_tbl(bucket,r2_path),y))
   expect_equal(sort(result$NAME),sort(data$NAME[lengths(sf::st_intersects(data,y))>0]))
   expect_true(sf::st_crs(result)==sf::st_crs(data))
 
   # directory of partitioned files, named like a parquet file
-  dir <- withr::local_tempdir()
   df <- sf::st_drop_geometry(data)[,c("NAME","SID74","BIR74")]
-  for (sid in c(0,1)) {
-    dir.create(file.path(dir,paste0("high_sid=",sid)))
-    duckdb_con <- DBI::dbConnect(duckdb::duckdb())
-    duckdb::duckdb_register(duckdb_con,"df",df[(df$SID74>5)==sid,])
-    DBI::dbExecute(duckdb_con,paste0("COPY df TO '",file.path(dir,paste0("high_sid=",sid),"data.parquet"),"' (FORMAT parquet)"))
-    DBI::dbDisconnect(duckdb_con,shutdown=TRUE)
-  }
+  df$high_sid <- as.integer(df$SID74>5)
+  df$group <- as.integer(df$BIR74>5000)
   dir_path <- paste0(prefix,"/partitioned.parquet")
-  uploaded <- parquet_to_r2(dir,bucket,dir_path)
+  # stale partitions get removed when uploading again
+  stale <- data_to_r2_parquet(df,bucket,dir_path,partition_by="group")
+  expect_length(stale,2)
+  uploaded <- data_to_r2_parquet(df,bucket,dir_path,partition_by="high_sid")
   expect_length(uploaded,2)
   tbl <- r2_parquet_tbl(bucket,dir_path)
+  # stale group= partitions would be read too and double the row count
   expect_equal(dplyr::pull(dplyr::count(tbl)),nrow(df))
   expect_equal(dplyr::pull(dplyr::count(dplyr::filter(tbl,high_sid==1L))),sum(df$SID74>5))
 

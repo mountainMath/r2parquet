@@ -12,6 +12,7 @@ Publish parquet and GeoParquet files on Cloudflare R2 and query them lazily. Cre
 Useful links:
 \itemize{
   \item \url{https://github.com/mountainMath/r2parquet}
+  \item \url{https://mountainmath.github.io/r2parquet/}
   \item Report bugs at \url{https://github.com/mountainMath/r2parquet/issues}
 }
 

@@ -16,4 +16,6 @@ an sf object
 }
 \description{
 Executes the query and converts the GEOMETRY columns to sf geometry columns, keeping their crs.
+The `bbox` column that `data_to_parquet` adds for GeoParquet files gets dropped, it is only needed for
+filtering, see `filter_spatial`.
 }

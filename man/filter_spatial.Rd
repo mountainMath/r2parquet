@@ -26,6 +26,6 @@ statistics of the native GEOMETRY type and of the `bbox` column if there is one.
 for the bounding box comparison, a plain `ST_Intersects` filter downloads the geometry of all rows,
 so the filter first compares bounding boxes and then, if `exact` is `TRUE`, checks for actual intersection
 on the remaining rows. How much gets skipped depends on the file being sorted spatially, like the files
-written by `sf_to_geoparquet`.
+written by `data_to_parquet`.
 `y` gets transformed to the crs of the geometry column if both have a crs.
 }
