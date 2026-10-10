@@ -1,0 +1,5 @@
+url: https://mountainmath.github.io/r2parquet/
+
+template:
+  bootstrap: 5
+  light-switch: true

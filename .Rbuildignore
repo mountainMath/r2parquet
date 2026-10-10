@@ -2,4 +2,8 @@
 ^\.Rproj\.user$
 ^LICENSE\.md$
 ^\.github$
-^CLAUDE\.md$
+^\.claude$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$
+^vignettes\.orig$

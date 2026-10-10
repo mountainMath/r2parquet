@@ -4,3 +4,10 @@
 .Ruserdata
 .DS_Store
 inst/doc
+docs/
+
+# Claude Code: keep the project instructions, ignore local session state.
+# CLAUDE.md lives here rather than at the top level so pkgdown does not pick
+# it up as a page alongside README.md.
+.claude/*
+!.claude/CLAUDE.md

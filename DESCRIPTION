@@ -10,7 +10,7 @@ Description: Publish parquet and GeoParquet files on Cloudflare R2 and query the
     and provides lazy DuckDB, arrow and polars readers for private R2 buckets as well as
     DuckDB readers for public URLs and local files, with spatial filtering and conversion to sf.
 License: MIT + file LICENSE
-URL: https://github.com/mountainMath/r2parquet
+URL: https://github.com/mountainMath/r2parquet, https://mountainmath.github.io/r2parquet/
 BugReports: https://github.com/mountainMath/r2parquet/issues
 Encoding: UTF-8
 Depends:
@@ -28,7 +28,6 @@ Imports:
     utils
 Suggests:
     arrow,
-    curl,
     ggplot2,
     knitr,
     polars,

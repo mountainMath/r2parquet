@@ -15,6 +15,7 @@ Rscript -e 'rcmdcheck::rcmdcheck(args = c("--no-manual", "--as-cran"), error_on 
 ```
 
 - `NAMESPACE` and `man/` are roxygen-generated, never edit them by hand.
+- Vignettes are precomputed: edit the sources in `vignettes.orig/` (`.Rbuildignore`'d), then `Rscript vignettes.orig/precompute.R [name ...]` knits them with live data (and R2 credentials where needed) into `vignettes/`, figures included. Never edit `vignettes/*.Rmd` directly. The pkgdown action (`.github/workflows/pkgdown.yaml`) only renders the precomputed files and deploys to GitHub Pages, it has no credentials.
 - `test-signing.R` and `test-delete.R` run offline (the latter mocks `r2_request()`). Tests in `test-geoparquet.R` download the DuckDB `spatial`/`httpfs` extensions and are skipped on CRAN and offline. `test-r2.R` is an integration test against a real bucket, skipped unless `R2_TEST_BUCKET` and the R2 credentials below are set; it writes under a random `r2parquet-tests/` prefix and removes it again.
 
 ## Configuration
