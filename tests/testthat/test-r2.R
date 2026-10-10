@@ -39,7 +39,16 @@ test_that("parquet files can be uploaded, queried and removed", {
     expect_equal(nrow(r2_parquet_polars(bucket,dir_path)$collect()),nrow(df))
   }
 
-  expect_message(removed <- remove_parquet_from_r2(bucket,prefix,purge_cache=FALSE),"Removed 3 files")
-  expect_setequal(removed,c(r2_path,uploaded))
+  # presigned urls work without credentials
+  response <- httr::GET(r2_presigned_url(bucket,r2_path,expires=60))
+  expect_equal(httr::status_code(response),200)
+  expect_equal(rawToChar(httr::content(response,"raw")[1:4]),"PAR1")
+  put_path <- paste0(prefix,"/presigned put.parquet")
+  response <- httr::PUT(r2_presigned_url(bucket,put_path,method="PUT"),body=httr::content(response,"raw"))
+  expect_equal(httr::status_code(response),200)
+  expect_equal(dplyr::pull(dplyr::count(r2_parquet_tbl(bucket,put_path))),nrow(data))
+
+  expect_message(removed <- remove_parquet_from_r2(bucket,prefix,purge_cache=FALSE),"Removed 4 files")
+  expect_setequal(removed,c(r2_path,put_path,uploaded))
   expect_error(remove_parquet_from_r2(bucket,prefix,purge_cache=FALSE),"does not exist")
 })

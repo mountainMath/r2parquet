@@ -30,42 +30,139 @@ r2_filesystem <- function(){
                              region="auto")
 }
 
-# signed request for an object via the S3 compatible API, for requests without body
-r2_object_request <- function(verb,r2_bucket,r2_path,datetime=format(Sys.time(),"%Y%m%dT%H%M%SZ",tz="UTC")){
-  credentials <- r2_credentials(c("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
-  endpoint <- r2_endpoint()
-  path <- paste0("/",r2_bucket,"/",
-                 paste0(vapply(strsplit(r2_path,"/")[[1]],utils::URLencode,"",reserved=TRUE,repeated=TRUE),collapse="/"))
-  headers <- list(host=sub("^https?://","",endpoint),
-                  "x-amz-content-sha256"=digest::digest("",algo="sha256",serialize=FALSE),
-                  "x-amz-date"=datetime)
-  signature <- aws.signature::signature_v4_auth(datetime=datetime,region="auto",service="s3",
-                                                verb=verb,action=path,
-                                                canonical_headers=headers,request_body="",
-                                                key=credentials[["R2_ACCESS_KEY_ID"]],
-                                                secret=credentials[["R2_SECRET_ACCESS_KEY"]],
-                                                force_credentials=TRUE)
-  httr::VERB(verb,paste0(endpoint,path),
-             httr::add_headers("x-amz-content-sha256"=headers[["x-amz-content-sha256"]],
-                               "x-amz-date"=datetime,
-                               Authorization=paste0("AWS4-HMAC-SHA256 Credential=",signature$Credential,
-                                                    ", SignedHeaders=",signature$SignedHeaders,
-                                                    ", Signature=",signature$Signature)))
+# current time in the format used by AWS signature version 4
+sigv4_datetime <- function(){
+  format(Sys.time(),"%Y%m%dT%H%M%SZ",tz="UTC")
 }
 
-# delete object via the S3 compatible API
+# hex encoded sha256 hash of a string or raw vector
+sha256_hex <- function(x){
+  digest::digest(x,algo="sha256",serialize=FALSE)
+}
+
+# percent encode everything except unreserved characters, as required for AWS signature version 4
+uri_encode <- function(x){
+  vapply(x,utils::URLencode,"",reserved=TRUE,repeated=TRUE,USE.NAMES=FALSE)
+}
+
+# canonical path of an object in a bucket for path style access, slashes in the object path are kept
+r2_canonical_path <- function(r2_bucket,r2_path=""){
+  segments <- c(r2_bucket,if (r2_path!="") strsplit(r2_path,"/",fixed=TRUE)[[1]])
+  paste0("/",paste0(uri_encode(segments),collapse="/"))
+}
+
+# canonical query string, sorted by encoded name
+sigv4_query_string <- function(query){
+  if (length(query)==0) return("")
+  pairs <- paste0(uri_encode(names(query)),"=",uri_encode(as.character(unlist(query))))
+  paste0(pairs[order(uri_encode(names(query)))],collapse="&")
+}
+
+# AWS signature version 4, see https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-authenticating-requests.html
+# R2 expects the region auto
+sigv4_signature <- function(canonical_request,secret,datetime,region,service="s3"){
+  date <- substr(datetime,1,8)
+  scope <- paste(date,region,service,"aws4_request",sep="/")
+  string_to_sign <- paste("AWS4-HMAC-SHA256",datetime,scope,sha256_hex(canonical_request),sep="\n")
+  key <- charToRaw(paste0("AWS4",secret))
+  for (part in c(date,region,service,"aws4_request")) key <- digest::hmac(key,part,"sha256",raw=TRUE)
+  list(scope=scope,signature=digest::hmac(key,string_to_sign,"sha256"))
+}
+
+# headers, including the Authorization header, for a request signed with AWS signature version 4
+sigv4_headers <- function(verb,host,path,query=list(),headers=list(),body=raw(),
+                          access_key,secret,region,datetime=sigv4_datetime()){
+  payload_hash <- sha256_hex(body)
+  headers <- c(headers,list(host=host,"x-amz-content-sha256"=payload_hash,"x-amz-date"=datetime))
+  names(headers) <- tolower(names(headers))
+  headers <- headers[order(names(headers))]
+  signed_headers <- paste0(names(headers),collapse=";")
+  canonical_request <- paste(verb,path,sigv4_query_string(query),
+                             paste0(names(headers),":",trimws(unlist(headers)),"\n",collapse=""),
+                             signed_headers,payload_hash,sep="\n")
+  signature <- sigv4_signature(canonical_request,secret,datetime,region)
+  headers$authorization <- paste0("AWS4-HMAC-SHA256 Credential=",access_key,"/",signature$scope,
+                                  ",SignedHeaders=",signed_headers,",Signature=",signature$signature)
+  headers[names(headers)!="host"]
+}
+
+# url with the signature in the query string, valid for expires seconds
+sigv4_presigned_url <- function(verb,base_url,path,expires,access_key,secret,region,datetime=sigv4_datetime()){
+  host <- sub("^https?://","",base_url)
+  query <- list("X-Amz-Algorithm"="AWS4-HMAC-SHA256",
+                "X-Amz-Credential"=paste(access_key,substr(datetime,1,8),region,"s3","aws4_request",sep="/"),
+                "X-Amz-Date"=datetime,
+                "X-Amz-Expires"=as.character(as.integer(expires)),
+                "X-Amz-SignedHeaders"="host")
+  query_string <- sigv4_query_string(query)
+  canonical_request <- paste(verb,path,query_string,paste0("host:",host,"\n"),"host","UNSIGNED-PAYLOAD",sep="\n")
+  signature <- sigv4_signature(canonical_request,secret,datetime,region)
+  paste0(base_url,path,"?",query_string,"&X-Amz-Signature=",signature$signature)
+}
+
+# signed request via the S3 compatible API
+r2_request <- function(verb,r2_bucket,r2_path="",query=list(),headers=list(),body=raw()){
+  credentials <- r2_credentials(c("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
+  endpoint <- r2_endpoint()
+  path <- r2_canonical_path(r2_bucket,r2_path)
+  if (is.character(body)) body <- charToRaw(enc2utf8(body))
+  headers <- sigv4_headers(verb,sub("^https?://","",endpoint),path,query=query,headers=headers,body=body,
+                           access_key=credentials[["R2_ACCESS_KEY_ID"]],
+                           secret=credentials[["R2_SECRET_ACCESS_KEY"]],region="auto")
+  query_string <- sigv4_query_string(query)
+  httr::VERB(verb,paste0(endpoint,path,if (query_string!="") "?",query_string),
+             do.call(httr::add_headers,headers),
+             body=if (length(body)>0) body)
+}
+
+# escape text for use in xml
+xml_escape <- function(x){
+  for (i in seq_along(xml_entities)) x <- gsub(names(xml_entities)[i],xml_entities[[i]],x,fixed=TRUE)
+  x
+}
+xml_entities <- c("&"="&amp;","<"="&lt;",">"="&gt;","\""="&quot;","'"="&apos;")
+
+# undo xml escaping
+xml_unescape <- function(x){
+  for (i in rev(seq_along(xml_entities))) x <- gsub(xml_entities[[i]],names(xml_entities)[i],x,fixed=TRUE)
+  x
+}
+
+# delete objects via the S3 compatible API, in batches of up to 1000 objects per request
 # the arrow filesystem is not used for this as it leaves empty directory marker objects behind when deleting files
-r2_delete_object <- function(r2_bucket,r2_path){
-  response <- r2_object_request("DELETE",r2_bucket,r2_path)
-  if (httr::status_code(response)>=400) {
-    stop(paste0("Removing ",r2_path," from R2 bucket ",r2_bucket," failed with status ",httr::status_code(response),". ",
-                httr::content(response,"text",encoding="UTF-8")))
+r2_delete_objects <- function(r2_bucket,r2_paths){
+  for (batch in split(r2_paths,ceiling(seq_along(r2_paths)/1000))) {
+    body <- paste0('<?xml version="1.0" encoding="UTF-8"?><Delete><Quiet>true</Quiet>',
+                   paste0("<Object><Key>",xml_escape(batch),"</Key></Object>",collapse=""),
+                   "</Delete>")
+    body <- charToRaw(enc2utf8(body))
+    response <- r2_request("POST",r2_bucket,query=list(delete=""),body=body,
+                           headers=list("content-md5"=base64_md5(body),"content-type"="application/xml"))
+    content <- httr::content(response,"text",encoding="UTF-8")
+    if (httr::status_code(response)>=400) {
+      stop(paste0("Removing files from R2 bucket ",r2_bucket," failed with status ",httr::status_code(response),". ",content))
+    }
+    # with quiet mode the response only lists the objects that could not be deleted
+    errors <- regmatches(content,gregexpr("(?s)<Error>.*?</Error>",content,perl=TRUE))[[1]]
+    if (length(errors)>0) {
+      error_messages <- vapply(errors,function(e){
+        field <- function(name)xml_unescape(sub(paste0("(?s).*<",name,">(.*?)</",name,">.*"),"\\1",e,perl=TRUE))
+        paste0(field("Key"),": ",field("Message")," (",field("Code"),")")
+      },"",USE.NAMES=FALSE)
+      stop(paste0("Removing ",length(errors)," file",if (length(errors)>1) "s"," from R2 bucket ",r2_bucket," failed. ",
+                  paste0(error_messages,collapse=", ")))
+    }
   }
+}
+
+# base64 encoded md5 hash, the S3 API requires it for batch deletes
+base64_md5 <- function(body){
+  jsonlite::base64_enc(digest::digest(body,algo="md5",serialize=FALSE,raw=TRUE))
 }
 
 # check if there is an object, as opposed to a directory, at the path
 r2_object_exists <- function(r2_bucket,r2_path){
-  status <- httr::status_code(r2_object_request("HEAD",r2_bucket,r2_path))
+  status <- httr::status_code(r2_request("HEAD",r2_bucket,r2_path))
   if (status>=400 && status!=404) {
     stop(paste0("Checking ",r2_path," in R2 bucket ",r2_bucket," failed with status ",status,"."))
   }
@@ -306,12 +403,42 @@ remove_parquet_from_r2 <- function(r2_bucket,r2_path,purge_cache=TRUE) {
   } else {
     stop(paste0("File or directory ",r2_path," does not exist in R2 bucket ",r2_bucket,"."))
   }
-  for (p in r2_paths) {
-    r2_delete_object(r2_bucket,p)
-  }
+  r2_delete_objects(r2_bucket,r2_paths)
   if (purge_cache) r2_purge_cache_after_change(r2_bucket,r2_paths)
   message(paste0("Removed ",length(r2_paths)," file",if (length(r2_paths)>1) "s" else ""," from R2 bucket ",r2_bucket,"."))
   invisible(r2_paths)
+}
+
+#' presigned URL for a file on Cloudflare R2
+#'
+#' @description
+#' URL that grants time limited access to a single file in a private bucket, without credentials.
+#' Anyone with the URL can download the file (`method="GET"`) or, for `method="PUT"`, upload a file
+#' to that path until the URL expires, so treat the URL like a password. The URL is signed locally,
+#' creating it does not check that the file exists.
+#' Expects the R2 account id and the access key id and secret access key
+#' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
+#' environment variables. The URL stops working when the API token is revoked.
+#'
+#' @param r2_bucket R2 bucket name
+#' @param r2_path path of the file in the bucket
+#' @param expires number of seconds the URL is valid for, between 1 second and 7 days (604800 seconds),
+#' default is one hour
+#' @param method HTTP method the URL is valid for, `"GET"` (the default) to download, `"HEAD"` to
+#' get the file's metadata, or `"PUT"` to upload
+#' @return the presigned URL
+#' @export
+r2_presigned_url <- function(r2_bucket,r2_path,expires=3600,method=c("GET","HEAD","PUT")) {
+  method <- match.arg(method)
+  if (!is.numeric(expires) || length(expires)!=1 || expires<1 || expires>604800) {
+    stop("expires has to be between 1 and 604800 seconds (7 days).")
+  }
+  r2_path <- sub("^/+","",r2_path)
+  if (r2_path=="" || endsWith(r2_path,"/")) stop("The r2_path has to be the path of a file.")
+  credentials <- r2_credentials(c("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
+  sigv4_presigned_url(method,r2_endpoint(),r2_canonical_path(r2_bucket,r2_path),expires,
+                      access_key=credentials[["R2_ACCESS_KEY_ID"]],
+                      secret=credentials[["R2_SECRET_ACCESS_KEY"]],region="auto")
 }
 
 # path or glob pattern matching the parquet file or all parquet files in the directory

@@ -1,7 +1,7 @@
 Package: r2parquet
 Type: Package
 Title: Parquet and GeoParquet Files on Cloudflare R2
-Version: 0.1.0
+Version: 0.1.1
 Authors@R: person("Jens", "von Bergmann", email = "jens@mountainmath.ca", role = c("aut", "cre"))
 Description: Publish parquet and GeoParquet files on Cloudflare R2 and query them lazily.
     Creates R2 buckets with private or public access, including custom domains, uploads and
@@ -16,13 +16,13 @@ Encoding: UTF-8
 Depends:
     R (>= 4.1.0)
 Imports:
-    aws.signature,
     DBI,
     dbplyr,
     digest,
     dplyr,
     duckdb,
     httr,
+    jsonlite,
     sf,
     stats,
     utils

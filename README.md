@@ -10,6 +10,7 @@ Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloud
 - **Files**: `parquet_to_r2()` uploads single parquet files or directories of (partitioned) parquet files, `remove_parquet_from_r2()` removes them. Both purge the changed files from the Cloudflare cache of the bucket's custom domains.
 - **GeoParquet**: `sf_to_geoparquet()` writes GeoParquet 2.0 files sorted along a Hilbert curve so remote spatial queries only download the row groups they need, `sf_to_r2_geoparquet()` writes and uploads in one go.
 - **Reading private buckets**: `r2_parquet_tbl()` (DuckDB / `dbplyr`), `r2_parquet_arrow()` (arrow `Dataset`) and `r2_parquet_polars()` (polars `LazyFrame`).
+- **Sharing private files**: `r2_presigned_url()` creates time limited download (or upload) URLs for single files.
 - **Reading public URLs and local files**: `parquet_tbl()`, no credentials needed.
 - **Spatial queries**: `filter_spatial()` and `collect_sf()` on any lazy DuckDB table.
 
@@ -51,6 +52,9 @@ counties <- r2_parquet_tbl("census-data", "nc/counties.parquet")
 
 # public access via the custom domain
 counties <- parquet_tbl("https://data.example.com/nc/counties.parquet")
+
+# one day download link for a file in a private bucket
+r2_presigned_url("census-data", "nc/counties.parquet", expires = 24 * 3600)
 
 wake <- nc[nc$NAME == "Wake", ]
 counties |>
