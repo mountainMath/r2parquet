@@ -71,7 +71,7 @@ library(sf)
 
 mask <- st_point(c(-123.108, 49.249)) |> 
   st_sfc(crs = 4326) |>
-  st_buffer(10000) 
+  st_buffer(10000, max_cells = 10000) 
 
 data_mask <- db_table |>
   filter_spatial(mask) |>

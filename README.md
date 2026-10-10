@@ -42,6 +42,11 @@ Set these environment variables, e.g. in `~/.Renviron`:
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | reading, uploading and removing files (S3 API credentials of an R2 API token) |
 | `R2_API_TOKEN` | `create_r2_bucket()` (Admin Read & Write); Zone Read for custom domains; Zone Cache Purge for cache purging on upload/removal |
 
+## Documentation
+
+Function reference and articles are on the package website: <https://mountainmath.github.io/r2parquet/>.
+See [Accessing public buckets](https://mountainmath.github.io/r2parquet/articles/accessing_public_buckets.html) for an example of querying a large public GeoParquet file.
+
 ## Example
 
 ### Publishing data
