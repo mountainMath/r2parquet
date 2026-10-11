@@ -79,9 +79,9 @@ test_that("the cache directory comes from the environment or the user cache dire
   expect_equal(local,file.path(cache,"r2","acct","bucket","census","data"))
   expect_message(single <- cache_parquet("r2://bucket/census/single.parquet"),"Downloading")
   expect_equal(dplyr::pull(dplyr::count(parquet_tbl("r2://bucket/census/single.parquet",cache=TRUE))),3)
-  # without the environment variable the user cache directory is used
+  # without the environment variable the user cache directory is used, with forward slashes also on Windows
   withr::local_envvar(R2PARQUET_CACHE_PATH="")
-  expect_equal(r2parquet:::cache_directory(),tools::R_user_dir("r2parquet","cache"))
+  expect_equal(r2parquet:::cache_directory(),gsub("\\\\","/",tools::R_user_dir("r2parquet","cache")))
   withr::local_envvar(R2PARQUET_CACHE_PATH=cache)
   # the remote can't be reached: cached copies get used with a warning, anything else fails
   local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix="")stop("Could not resolve host"))
