@@ -18,6 +18,11 @@ skip_if_no_r2 <- function(){
   }
 }
 
+# a temporary cache directory with forward slashes, as cache_directory() returns them, so paths compare on Windows
+local_cache_dir <- function(envir=parent.frame()){
+  gsub("\\\\","/",withr::local_tempdir(.local_envir=envir))
+}
+
 # response objects as returned by httr, with xml text or a list that gets encoded as json
 fake_response <- function(status,content="",url="https://example.com"){
   type <- if (is.character(content)) "application/xml" else "application/json"

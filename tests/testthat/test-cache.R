@@ -23,7 +23,7 @@ test_that("cache_parquet mirrors R2 paths and only downloads what changed", {
                           file.copy(file.path(fixture$dir,sub("^census/","",r2_path)),file,overwrite=TRUE)
                         })
   withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret")
-  cache <- withr::local_tempdir()
+  cache <- local_cache_dir()
 
   expect_message(local <- cache_parquet("r2://bucket/census/data",cache),"Downloading 2 files")
   expect_equal(local,file.path(cache,"r2","acct","bucket","census","data"))
@@ -73,7 +73,7 @@ test_that("cache=TRUE uses the cache path from the environment and the cache sur
                         r2_get_object=function(r2_bucket,r2_path,file){
                           file.copy(file.path(fixture$dir,sub("^census/","",r2_path)),file,overwrite=TRUE)
                         })
-  cache <- withr::local_tempdir()
+  cache <- local_cache_dir()
   withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret",R2PARQUET_CACHE_PATH=cache)
   expect_message(local <- cache_parquet("r2://bucket/census/data"),"Downloading")
   expect_equal(local,file.path(cache,"r2","acct","bucket","census","data"))
@@ -97,7 +97,7 @@ test_that("downloads that do not match their etag are rejected", {
   local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix="")objects[startsWith(objects$key,prefix),],
                         r2_get_object=function(r2_bucket,r2_path,file)writeBin(as.raw(1:10),file))
   withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret")
-  cache <- withr::local_tempdir()
+  cache <- local_cache_dir()
   expect_error(suppressMessages(cache_parquet("r2://bucket/census/single.parquet",cache)),"does not match its etag")
   local <- file.path(cache,"r2","acct","bucket","census")
   expect_false(file.exists(file.path(local,"single.parquet")))
@@ -136,7 +136,7 @@ test_that("URLs get cached by host, files via their headers and directories via 
     requests[[length(requests)+1]] <<- list(verb="DOWNLOAD",url=url)
     file.copy(file.path(fixture$dir,sub("^https://data.example.com/census/","",sub("\\?.*$","",url))),file,overwrite=TRUE)
   })
-  cache <- withr::local_tempdir()
+  cache <- local_cache_dir()
   withr::local_envvar(R2PARQUET_CACHE_PATH=cache)
   # files and directories at URLs get listed via their headers and manifest
   files <- list_parquet("https://data.example.com/census/data")
@@ -197,9 +197,9 @@ test_that("list_cache and remove_from_cache work on the cache directory and keep
                         r2_get_object=function(r2_bucket,r2_path,file){
                           file.copy(file.path(fixture$dir,sub("^census/","",r2_path)),file,overwrite=TRUE)
                         })
-  cache <- withr::local_tempdir()
+  cache <- local_cache_dir()
   withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret",R2PARQUET_CACHE_PATH=cache)
-  expect_named(list_cache(),c("path","local","size","modified","etag"))
+  expect_named(list_cache(),c("file","size","sizeRaw","modified","etag","local","path"))
   expect_equal(nrow(list_cache()),0)
   expect_equal(list_parquet("r2://bucket/census/data")$cache,rep("not cached",2))
   suppressMessages({
@@ -212,7 +212,8 @@ test_that("list_cache and remove_from_cache work on the cache directory and keep
   expect_equal(cached$path,paste0("r2://bucket/census/",c("data/year=2021/data_0.parquet","data/year=2022/data_0.parquet","single.parquet")))
   expect_equal(cached$local,c(file.path(local,c("year=2021","year=2022"),"data_0.parquet"),single))
   expect_equal(cached$etag,objects$etag[match(sub("^r2://bucket/","",cached$path),objects$key)])
-  expect_equal(cached$size,objects$size[match(sub("^r2://bucket/","",cached$path),objects$key)])
+  expect_equal(cached$sizeRaw,objects$size[match(sub("^r2://bucket/","",cached$path),objects$key)])
+  expect_equal(cached$file,c("data_0.parquet","data_0.parquet","single.parquet"))
   expect_equal(cached$modified,rep(objects$modified[1],3))
   expect_equal(list_cache("r2://bucket/census/data/")$path,cached$path[1:2])
   expect_equal(list_cache(c("r2://bucket/census/single.parquet","r2://bucket/census/data/year=2022"))$path,cached$path[c(2,3)])

@@ -14,7 +14,8 @@ cache_directory <- function(cache){
   } else if (!is.character(cache) || length(cache)!=1 || is.na(cache) || cache=="") {
     stop("cache has to be TRUE or the path of the cache directory.")
   }
-  sub("(.)/+$","\\1",path.expand(cache))
+  # forward slashes throughout, dirname() and dir() return them on Windows too, so paths compare
+  sub("(.)/+$","\\1",gsub("\\\\","/",path.expand(cache)))
 }
 
 # the local path of a remote path in the cache, local paths are not cached and have no place there
@@ -349,20 +350,22 @@ prune_manifests <- function(local,cache_dir){
 #' @param path `r2://bucket/path` or URL of a parquet file or directory, or a vector of these, to list only
 #' the copies of these. `r2://` paths need the `R2_ACCOUNT_ID` environment variable, since the cache is kept
 #' per account. By default everything in the cache gets listed, which needs no credentials.
-#' @return a tibble with one row per cached parquet file and the columns `path`, the `r2://bucket/path` or
-#' URL it is a copy of, `local`, the path of the copy, `size` in bytes, `modified`, the modification time of
-#' the remote file in UTC, and `etag`, the etag of the remote file when it was downloaded
+#' @return a tibble with one row per cached parquet file and the columns of `list_parquet`: `file`, the file
+#' name, `size`, formatted for reading, `sizeRaw`, the size in bytes, `modified`, the modification time of the
+#' remote file in UTC, and `etag`, the etag of the remote file when it was downloaded, followed by `local`,
+#' the path of the copy, and `path`, the `r2://bucket/path` or URL it is a copy of
 #' @export
 list_cache <- function(path=NULL) {
   cache_dir <- cache_directory(TRUE)
-  files <- dplyr::as_tibble(cache_contents(cache_dir))
+  files <- cache_contents(cache_dir)
   if (!is.null(path)) {
     if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
     local <- vapply(path,function(p)remote_cache_location(p,cache_dir)$local,"",USE.NAMES=FALSE)
     keep <- Reduce(`|`,lapply(local,function(l)files$local==l | startsWith(files$local,paste0(l,"/"))),logical(nrow(files)))
     files <- files[keep,]
   }
-  files
+  dplyr::tibble(file=basename(files$local),size=format_size(files$size),sizeRaw=files$size,modified=files$modified,
+                etag=files$etag,local=files$local,path=files$path)
 }
 
 #' remove files from the local cache

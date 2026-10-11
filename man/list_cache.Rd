@@ -12,9 +12,10 @@ the copies of these. `r2://` paths need the `R2_ACCOUNT_ID` environment variable
 per account. By default everything in the cache gets listed, which needs no credentials.}
 }
 \value{
-a tibble with one row per cached parquet file and the columns `path`, the `r2://bucket/path` or
-URL it is a copy of, `local`, the path of the copy, `size` in bytes, `modified`, the modification time of
-the remote file in UTC, and `etag`, the etag of the remote file when it was downloaded
+a tibble with one row per cached parquet file and the columns of `list_parquet`: `file`, the file
+name, `size`, formatted for reading, `sizeRaw`, the size in bytes, `modified`, the modification time of the
+remote file in UTC, and `etag`, the etag of the remote file when it was downloaded, followed by `local`,
+the path of the copy, and `path`, the `r2://bucket/path` or URL it is a copy of
 }
 \description{
 Lists the parquet files that `cache_parquet` and `parquet_tbl(cache = TRUE)` downloaded into the cache
