@@ -112,7 +112,7 @@ Two further settings:
 
 ## Rate limiting
 
-On a custom domain a rate limiting rule caps the number of requests per client, under *Security* → *WAF* → *Rate limiting rules*:
+On a custom domain a rate limiting rule caps the number of requests per client. It is configured on the zone, not under the account settings (the account-level WAF is an Enterprise feature): open the domain in the Cloudflare dashboard, then *Security* → *Security rules* → *Create rule* → *Rate limiting rules* (in the older dashboard layout *Security* → *WAF* → *Rate limiting rules*):
 
 * *When incoming requests match*: Hostname equals `data.example.com`
 * *With the same characteristics*: IP
