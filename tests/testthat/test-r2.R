@@ -20,11 +20,15 @@ test_that("parquet files can be uploaded, queried and removed", {
   df$high_sid <- as.integer(df$SID74>5)
   df$group <- as.integer(df$BIR74>5000)
   dir_path <- paste0(prefix,"/partitioned.parquet")
-  # stale partitions get removed when uploading again
+  # stale partitions get removed when uploading again, other files in the directory stay
   stale <- data_to_parquet(df,dir_path,partition_by="group")
   expect_length(stale,2)
-  uploaded <- data_to_parquet(df,dir_path,partition_by="high_sid")
+  other_path <- paste0(dir_path,"/other.parquet")
+  data_to_parquet(df[1:5,],other_path)
+  expect_message(uploaded <- data_to_parquet(df,dir_path,partition_by="high_sid"),"Removing 2 stale parquet files")
   expect_length(uploaded,2)
+  expect_equal(dplyr::pull(dplyr::count(parquet_tbl(other_path))),5)
+  remove_parquet(other_path,purge_cache=FALSE)
   tbl <- parquet_tbl(dir_path)
   # stale group= partitions would be read too and double the row count
   expect_equal(dplyr::pull(dplyr::count(tbl)),nrow(df))

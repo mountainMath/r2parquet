@@ -52,7 +52,8 @@ r2_canonical_path <- function(r2_bucket,r2_path=""){
 sigv4_query_string <- function(query){
   if (length(query)==0) return("")
   pairs <- paste0(uri_encode(names(query)),"=",uri_encode(as.character(unlist(query))))
-  paste0(pairs[order(uri_encode(names(query)))],collapse="&")
+  # byte order as the signature requires, order() would otherwise follow the locale
+  paste0(pairs[order(uri_encode(names(query)),method="radix")],collapse="&")
 }
 
 # AWS signature version 4, see https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-authenticating-requests.html
@@ -72,7 +73,7 @@ sigv4_headers <- function(verb,host,path,query=list(),headers=list(),body=raw(),
   payload_hash <- sha256_hex(body)
   headers <- c(headers,list(host=host,"x-amz-content-sha256"=payload_hash,"x-amz-date"=datetime))
   names(headers) <- tolower(names(headers))
-  headers <- headers[order(names(headers))]
+  headers <- headers[order(names(headers),method="radix")]
   signed_headers <- paste0(names(headers),collapse=";")
   canonical_request <- paste(verb,path,sigv4_query_string(query),
                              paste0(names(headers),":",trimws(unlist(headers)),"\n",collapse=""),
@@ -269,6 +270,13 @@ file_to_filesystem <- function(path,filesystem,destination,chunk_size=8*1024^2){
   output$close()
 }
 
+# parquet files below a directory on R2, as paths within the bucket
+r2_list_parquet <- function(filesystem,r2_bucket,r2_path){
+  file_infos <- filesystem$GetFileInfo(arrow::FileSelector$create(paste0(r2_bucket,"/",r2_path),recursive=TRUE))
+  paths <- unlist(lapply(file_infos,function(i)if (i$type==arrow::FileType$File) i$path))
+  substring(paths[grepl("\\.parquet$",paths)],nchar(r2_bucket)+2)
+}
+
 #' create Cloudflare R2 bucket with private or public access
 #'
 #' @description
@@ -395,9 +403,7 @@ remove_parquet <- function(path,purge_cache=TRUE) {
   if (file_type==arrow::FileType$File) {
     r2_paths <- r2_path
   } else if (file_type==arrow::FileType$Directory) {
-    file_infos <- filesystem$GetFileInfo(arrow::FileSelector$create(bucket_path,recursive=TRUE))
-    r2_paths <- unlist(lapply(file_infos,function(i)if (i$type==arrow::FileType$File) i$path))
-    r2_paths <- substring(r2_paths[grepl("\\.parquet$",r2_paths)],nchar(r2_bucket)+2)
+    r2_paths <- r2_list_parquet(filesystem,r2_bucket,r2_path)
     if (length(r2_paths)==0) stop(paste0("No parquet files found in ",r2_path," in R2 bucket ",r2_bucket,"."))
   } else {
     stop(paste0("File or directory ",r2_path," does not exist in R2 bucket ",r2_bucket,"."))

@@ -17,3 +17,16 @@ skip_if_no_r2 <- function(){
     skip("R2_TEST_BUCKET and R2 credentials not set")
   }
 }
+
+# response objects as returned by httr, with xml text or a list that gets encoded as json
+fake_response <- function(status,content="",url="https://example.com"){
+  type <- if (is.character(content)) "application/xml" else "application/json"
+  if (!is.character(content)) content <- jsonlite::toJSON(content,auto_unbox=TRUE)
+  structure(list(url=url,status_code=status,content=charToRaw(content),headers=list("Content-Type"=type)),
+            class="response")
+}
+
+# Cloudflare API response with a result, or with errors for a failed request
+cloudflare_response <- function(result=NULL,errors=NULL,status=if (is.null(errors)) 200L else 400L){
+  fake_response(status,list(success=is.null(errors),errors=if (is.null(errors)) list() else errors,result=result))
+}

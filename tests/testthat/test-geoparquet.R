@@ -38,3 +38,14 @@ test_that("local directories of partitioned parquet files get read", {
   expect_equal(nrow(result),nrow(data))
   expect_equal(sort(result$high_sid),sort(data$high_sid))
 })
+
+test_that("collecting no rows gives an empty sf object with the crs", {
+  skip_if_no_duckdb_extensions()
+  data <- nc_data()
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(data,path)
+  result <- collect_sf(dplyr::filter(parquet_tbl(path),NAME=="nowhere"))
+  expect_s3_class(result,"sf")
+  expect_equal(nrow(result),0)
+  expect_true(sf::st_crs(result)==sf::st_crs(data))
+})

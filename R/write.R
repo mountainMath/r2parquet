@@ -21,6 +21,8 @@
 #' Lazy DuckDB tables, e.g. from `parquet_tbl` after filtering, get written by DuckDB directly
 #' without collecting the data into R. Tables with GEOMETRY columns get written as GeoParquet in the same way,
 #' sorted by their first GEOMETRY column (or the one named `geometry`) and without repairing invalid geometries.
+#' The extent of the Hilbert curve gets computed in a separate query first, so the source gets scanned twice,
+#' and a remote source downloads its geometry twice. Empty geometries sort last.
 #'
 #' Row groups are what readers can skip, so their size balances selectivity of filters against the size of the
 #' file metadata. DuckDB writes row groups in multiples of 2048 rows, smaller values of `row_group_size` result in
@@ -36,7 +38,9 @@
 #' exist, use `create_r2_bucket` to create it. This expects the R2 account id and the access key id and secret
 #' access key of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
 #' environment variables, and needs the arrow package. A directory of partitioned files may be named like a
-#' parquet file, `parquet_tbl` tells files and directories apart.
+#' parquet file, `parquet_tbl` tells files and directories apart. Stale files get removed before the new ones
+#' are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
+#' get purged from the Cloudflare cache like in `upload_parquet`.
 #'
 #' @param data data frame, sf object or lazy DuckDB table
 #' @param path local path or `r2://bucket/path` of the parquet file to write, or of the directory if `partition_by`
@@ -44,12 +48,14 @@
 #' @param sort_by optional vector of column names to sort by, for spatial data before sorting spatially
 #' @param partition_by optional vector of column names to partition by
 #' @param row_group_size number of rows per row group, rounded up to a multiple of 2048 by DuckDB, default is 10000
-#' @param overwrite if `TRUE`, the default, parquet files in an existing directory at `path` get removed first,
-#' so that no partitions from earlier writes remain. With `FALSE` written files replace files with the same path
-#' and other files are kept, e.g. to add partitions.
+#' @param overwrite if `TRUE`, the default, parquet files in hive partition directories (`key=value`) below an
+#' existing directory at `path` get removed first, so that no partitions from earlier writes remain, also if the
+#' partition columns changed. Other files below `path` are kept. With `FALSE` written files replace files with the
+#' same path and other files are kept, e.g. to add partitions.
 #' @return (invisibly) `path` for local paths, the uploaded files as `r2://bucket/path` for R2
 #' @export
 data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE) {
+  if (!is.character(path) || length(path)!=1) stop("Expected a single path, got ",length(path),".")
   write <- if (startsWith(path,"r2://")) r2_data_to_parquet else local_data_to_parquet
   write(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,overwrite=overwrite)
 }
@@ -66,8 +72,7 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
     columns <- colnames(data)
   } else if (inherits(data,"sf")) {
     if ("geometry" %in% setdiff(names(data),attr(data,"sf_column"))) stop("Data has a non-geometry column named geometry.")
-    con <- DBI::dbConnect(duckdb::duckdb())
-    on.exit(DBI::dbDisconnect(con,shutdown=TRUE))
+    con <- parquet_duckdb_connection()
     DBI::dbExecute(con,"INSTALL spatial")
     DBI::dbExecute(con,"LOAD spatial")
     geometry_column <- "geometry"
@@ -76,24 +81,27 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
     }
     df <- sf::st_drop_geometry(data)
     df[[geometry_column]] <- unclass(sf::st_as_binary(make_valid_geometries(sf::st_geometry(data))))
-    duckdb::duckdb_register(con,"sf_data",df)
+    duckdb::duckdb_register(con,"r2parquet_sf_data",df)
+    on.exit(duckdb::duckdb_unregister(con,"r2parquet_sf_data"))
     geometry <- DBI::dbQuoteIdentifier(con,geometry_column)
     crs <- duckdb_crs(sf::st_crs(data))
     geometry_sql <- paste0("ST_GeomFromWKB(",geometry,")")
     if (!is.null(crs)) geometry_sql <- paste0("ST_SetCRS(",geometry_sql,", ",DBI::dbQuoteString(con,crs),")")
-    DBI::dbExecute(con,paste0("CREATE TABLE geo_data AS SELECT * EXCLUDE (",geometry,"), ",
-                              geometry_sql," AS ",geometry," FROM sf_data"))
-    source <- "geo_data"
+    # a table rather than a view, so the geometries get parsed once for the extent query and once for the copy
+    DBI::dbExecute(con,paste0("CREATE OR REPLACE TABLE r2parquet_geo_data AS SELECT * EXCLUDE (",geometry,"), ",
+                              geometry_sql," AS ",geometry," FROM r2parquet_sf_data"))
+    on.exit(DBI::dbExecute(con,"DROP TABLE IF EXISTS r2parquet_geo_data"),add=TRUE)
+    source <- "r2parquet_geo_data"
     columns <- names(df)
   } else if (is.data.frame(data)) {
     sfc_columns <- names(data)[vapply(data,inherits,logical(1),"sfc")]
     if (length(sfc_columns)>0) {
       stop(paste0("Column ",paste0(sfc_columns,collapse=", ")," holds geometries, convert data to sf via sf::st_as_sf first."))
     }
-    con <- DBI::dbConnect(duckdb::duckdb())
-    on.exit(DBI::dbDisconnect(con,shutdown=TRUE))
-    duckdb::duckdb_register(con,"df_data",data)
-    source <- "df_data"
+    con <- parquet_duckdb_connection()
+    duckdb::duckdb_register(con,"r2parquet_df_data",data)
+    on.exit(duckdb::duckdb_unregister(con,"r2parquet_df_data"))
+    source <- "r2parquet_df_data"
     columns <- names(data)
     geometry_column <- NULL
   } else {
@@ -113,15 +121,19 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
                                         "ST_XMax(extent) AS xmax, ST_YMax(extent) AS ymax FROM (",
                                         "SELECT ST_Extent_Agg(",geometry,") AS extent FROM ",source,")"))
     if (!is.na(stats$xmin)) {
-      order <- c(order,paste0("ST_Hilbert(",geometry,", {min_x: ",sprintf("%.17g",stats$xmin),", min_y: ",sprintf("%.17g",stats$ymin),
-                              ", max_x: ",sprintf("%.17g",stats$xmax),", max_y: ",sprintf("%.17g",stats$ymax),"}::BOX_2D)"))
+      # ST_Hilbert errors on empty geometries, these sort last
+      order <- c(order,paste0("CASE WHEN ST_IsEmpty(",geometry,") THEN NULL ELSE ST_Hilbert(",geometry,
+                              ", {min_x: ",sprintf("%.17g",stats$xmin),", min_y: ",sprintf("%.17g",stats$ymin),
+                              ", max_x: ",sprintf("%.17g",stats$xmax),", max_y: ",sprintf("%.17g",stats$ymax),
+                              "}::BOX_2D) END NULLS LAST"))
     }
     options <- c(options,"GEOPARQUET_VERSION 'V2'")
   }
   if (length(partition_by)>0) {
     # DuckDB's OVERWRITE keeps partitions that are not in the new data
     if (overwrite && dir.exists(path)) {
-      unlink(dir(path,"\\.parquet$",recursive=TRUE,full.names=TRUE))
+      files <- dir(path,"\\.parquet$",recursive=TRUE)
+      unlink(file.path(path,files[is_partition_file(files)]))
       directories <- rev(list.dirs(path,recursive=TRUE)[-1])
       for (directory in directories) if (length(dir(directory,all.files=TRUE,no..=TRUE))==0) unlink(directory,recursive=TRUE)
     }
@@ -153,15 +165,32 @@ r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_grou
   on.exit(unlink(tmp_dir,recursive=TRUE))
   local_path <- local_data_to_parquet(data,file.path(tmp_dir,basename(r2_path)),sort_by=sort_by,
                                       partition_by=partition_by,row_group_size=row_group_size)
+  stale <- character()
   if (overwrite) {
-    # a file at r2_path gets replaced by the upload anyway, unless the upload is a directory
-    file_type <- r2_filesystem()$GetFileInfo(paste0(r2_bucket,"/",r2_path))[[1]]$type
-    if (file_type==arrow::FileType$Directory || (partitioned && file_type==arrow::FileType$File)) {
-      remove_parquet(r2_url)
+    filesystem <- r2_filesystem()
+    file_type <- filesystem$GetFileInfo(paste0(r2_bucket,"/",r2_path))[[1]]$type
+    if (file_type==arrow::FileType$Directory) {
+      # partitions of earlier writes, other files in the directory are kept
+      files <- r2_list_parquet(filesystem,r2_bucket,r2_path)
+      stale <- files[is_partition_file(substring(files,nchar(r2_path)+2))]
+    } else if (partitioned && file_type==arrow::FileType$File) {
+      # a file at r2_path would shadow the directory of partitions, a file is replaced by the upload anyway
+      stale <- r2_path
+    }
+    if (length(stale)>0) {
+      message("Removing ",length(stale)," stale parquet file",if (length(stale)>1) "s"," from ",r2_url,".")
+      r2_delete_objects(r2_bucket,stale)
     }
   }
   files <- if (partitioned) dir(local_path,"\\.parquet$",recursive=TRUE,full.names=TRUE) else local_path
   message("Uploading ",format(structure(sum(file.size(files)),class="object_size"),units="auto",standard="SI"),
           " in ",length(files)," parquet file",if (length(files)>1) "s"," to ",r2_url,".")
-  upload_parquet(local_path,r2_url)
+  uploaded <- upload_parquet(local_path,r2_url,purge_cache=FALSE)
+  r2_purge_cache_after_change(r2_bucket,union(stale,substring(uploaded,nchar(r2_bucket)+7)))
+  invisible(uploaded)
+}
+
+# whether paths relative to a dataset directory are in hive partition directories (key=value), as partitioned writes produce them
+is_partition_file <- function(files){
+  grepl("(^|/)[^/]+=[^/]*/",files)
 }

@@ -1,10 +1,3 @@
-# response objects as returned by httr
-fake_response <- function(status,content=""){
-  structure(list(url="https://abc.r2.cloudflarestorage.com/bucket?delete=",status_code=status,
-                 content=charToRaw(content),headers=list("Content-Type"="application/xml")),
-            class="response")
-}
-
 test_that("deletes get batched by 1000 with escaped keys", {
   requests <- list()
   local_mocked_bindings(r2_request=function(verb,r2_bucket,r2_path="",query=list(),headers=list(),body=raw()){

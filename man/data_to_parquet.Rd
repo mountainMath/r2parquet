@@ -25,9 +25,10 @@ is given. A parquet file on R2 has to end in `.parquet`. Existing files at that 
 
 \item{row_group_size}{number of rows per row group, rounded up to a multiple of 2048 by DuckDB, default is 10000}
 
-\item{overwrite}{if `TRUE`, the default, parquet files in an existing directory at `path` get removed first,
-so that no partitions from earlier writes remain. With `FALSE` written files replace files with the same path
-and other files are kept, e.g. to add partitions.}
+\item{overwrite}{if `TRUE`, the default, parquet files in hive partition directories (`key=value`) below an
+existing directory at `path` get removed first, so that no partitions from earlier writes remain, also if the
+partition columns changed. Other files below `path` are kept. With `FALSE` written files replace files with the
+same path and other files are kept, e.g. to add partitions.}
 }
 \value{
 (invisibly) `path` for local paths, the uploaded files as `r2://bucket/path` for R2
@@ -48,6 +49,8 @@ name in `data`. Both emit a message when they change the data.
 Lazy DuckDB tables, e.g. from `parquet_tbl` after filtering, get written by DuckDB directly
 without collecting the data into R. Tables with GEOMETRY columns get written as GeoParquet in the same way,
 sorted by their first GEOMETRY column (or the one named `geometry`) and without repairing invalid geometries.
+The extent of the Hilbert curve gets computed in a separate query first, so the source gets scanned twice,
+and a remote source downloads its geometry twice. Empty geometries sort last.
 
 Row groups are what readers can skip, so their size balances selectivity of filters against the size of the
 file metadata. DuckDB writes row groups in multiples of 2048 rows, smaller values of `row_group_size` result in
@@ -63,5 +66,7 @@ Destinations on R2 get written to a temporary directory and uploaded via `upload
 exist, use `create_r2_bucket` to create it. This expects the R2 account id and the access key id and secret
 access key of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
 environment variables, and needs the arrow package. A directory of partitioned files may be named like a
-parquet file, `parquet_tbl` tells files and directories apart.
+parquet file, `parquet_tbl` tells files and directories apart. Stale files get removed before the new ones
+are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
+get purged from the Cloudflare cache like in `upload_parquet`.
 }

@@ -136,3 +136,47 @@ test_that("all engines read local partitioned directories", {
   }
   expect_error(parquet_tbl("https://example.com/data.parquet",engine="arrow"),"can't read URLs")
 })
+
+test_that("paths have to be single strings", {
+  expect_error(data_to_parquet(data.frame(a=1),c("a.parquet","b.parquet")),"single path")
+  expect_error(data_to_parquet(data.frame(a=1),1),"single path")
+})
+
+test_that("overwrite only removes parquet files in hive partition directories", {
+  expect_equal(r2parquet:::is_partition_file(c("a.parquet","year=2021/data_0.parquet","other/x.parquet",
+                                               "k=v/sub/y.parquet","year=/z.parquet")),
+               c(FALSE,TRUE,FALSE,TRUE,TRUE))
+  df <- data.frame(group=c("a","b"),value=1:2)
+  dir <- withr::local_tempdir()
+  data_to_parquet(df,file.path(dir,"data"),partition_by="group")
+  data_to_parquet(df,file.path(dir,"data","other.parquet"))
+  dir.create(file.path(dir,"data","nested"))
+  data_to_parquet(df,file.path(dir,"data","nested","n.parquet"))
+  # partitions of the earlier write go, also with different partition columns, other files stay
+  data_to_parquet(df[1,],file.path(dir,"data"),partition_by="value")
+  expect_setequal(dir(file.path(dir,"data"),recursive=TRUE),c("other.parquet","nested/n.parquet","value=1/data_0.parquet"))
+})
+
+test_that("empty geometries get written and sort last", {
+  skip_if_no_duckdb_extensions()
+  data <- nc_data()[1:3,]
+  data$geometry[2] <- sf::st_sfc(sf::st_multipolygon())
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(data,path)
+  result <- collect_sf(parquet_tbl(path))
+  expect_equal(nrow(result),3)
+  expect_equal(sf::st_is_empty(result),c(FALSE,FALSE,TRUE))
+  expect_equal(result$NAME[3],data$NAME[2])
+})
+
+test_that("the arrow engine reads GeoParquet geometry as binary", {
+  skip_if_no_duckdb_extensions()
+  skip_if_not_installed("arrow")
+  data <- nc_data()
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(data,path)
+  dataset <- parquet_tbl(path,engine="arrow")
+  # the docs of parquet_tbl say so, update them when arrow learns the GEOMETRY type
+  expect_equal(dataset$schema$geometry$type$ToString(),"binary")
+  expect_equal(nrow(dplyr::collect(dataset)),nrow(data))
+})

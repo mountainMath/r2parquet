@@ -21,8 +21,7 @@ duckdb_geometry_columns <- function(tbl){
 }
 
 # pick the geometry column of a lazy DuckDB table, the first one if not specified
-duckdb_geometry_column <- function(tbl,geometry_column=NULL){
-  geometry_columns <- duckdb_geometry_columns(tbl)
+duckdb_geometry_column <- function(tbl,geometry_column=NULL,geometry_columns=duckdb_geometry_columns(tbl)){
   if (length(geometry_columns)==0) stop("The table has no GEOMETRY column.")
   if (is.null(geometry_column)) geometry_column <- names(geometry_columns)[1]
   if (!(geometry_column %in% names(geometry_columns))) {
@@ -102,7 +101,7 @@ filter_spatial <- function(tbl,y,geometry_column=NULL,exact=TRUE) {
 #' @export
 collect_sf <- function(tbl,geometry_column=NULL) {
   geometry_columns <- duckdb_geometry_columns(tbl)
-  geometry_column <- duckdb_geometry_column(tbl,geometry_column)$name
+  geometry_column <- duckdb_geometry_column(tbl,geometry_column,geometry_columns)$name
   data <- dplyr::collect(tbl)
   for (column in names(geometry_columns)) {
     data[[column]] <- sf::st_as_sfc(structure(data[[column]],class="WKB"),crs=geometry_columns[[column]])

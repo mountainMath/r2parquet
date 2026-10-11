@@ -75,7 +75,8 @@ r2_parquet_url <- function(path){
 #'   so that spatial functions like `ST_Area` can be used in queries. Use `filter_spatial` to filter by location
 #'   and `collect_sf` to collect the result as an sf object, both only work with this engine.
 #' * `"arrow"` returns an arrow `Dataset` that can be queried with `dplyr` verbs. Needs the arrow package, and
-#'   can't read URLs, only paths on R2 and local paths.
+#'   can't read URLs, only paths on R2 and local paths. As of arrow 25 the GEOMETRY columns of GeoParquet files
+#'   written by `data_to_parquet` come back as plain binary (WKB) columns without their crs.
 #' * `"polars"` returns a polars `LazyFrame`, executed via `$collect()`, or with the `tidypolars` package loaded
 #'   queried with `dplyr` verbs ending in `dplyr::collect()`. Needs the polars package. As of polars 1.16
 #'   GeoParquet files written by `data_to_parquet` can't be read, polars rejects the native GEOMETRY type.
@@ -83,7 +84,9 @@ r2_parquet_url <- function(path){
 #' @param path URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)
 #' parquet files, or a vector of these. The arrow and polars engines can't mix paths on R2 with other paths.
 #' @param engine `"duckdb"` (the default), `"arrow"` or `"polars"`, see description
-#' @param hive_partitioning if `TRUE`, the default, partition columns get derived from `key=value` components of the file paths
+#' @param hive_partitioning if `TRUE`, the default, partition columns get derived from `key=value` components of the
+#' file paths. This includes the directories above a single file, reading one file out of a partitioned
+#' directory, like `data/year=2021/data_0.parquet`, adds a `year` column.
 #' @return a lazy `dplyr` table (DuckDB), an arrow `Dataset` or a polars `LazyFrame`, depending on `engine`
 #' @export
 parquet_tbl <- function(path,engine=c("duckdb","arrow","polars"),hive_partitioning=TRUE) {
