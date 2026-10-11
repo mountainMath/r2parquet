@@ -34,7 +34,7 @@ R2_SECRET_ACCESS_KEY=...
 R2_API_TOKEN=...           # Cloudflare API token
 ```
 
-`usethis::edit_r_environ()` opens the file for editing; restart R afterwards, the new values are only read on startup. Only what is used has to be set: someone who only uploads to an existing bucket without custom domain needs just the first three.
+`usethis::edit_r_environ()` opens the file for editing. Restart R afterwards, the new values are only read on startup. Someone who only uploads to an existing bucket without custom domain needs just the first three and can skip the `R2_API_TOKEN` variable.
 
 ## Creating the API token
 
@@ -64,7 +64,7 @@ These can't be added in the R2 token dialog. Instead create a custom token under
 
 with the zone resources limited to the zones that serve buckets. Its token value goes into `R2_API_TOKEN`. To use the same token for the S3 API as well, take its id as `R2_ACCESS_KEY_ID` and the SHA-256 hash of its value as `R2_SECRET_ACCESS_KEY`:
 
-```{r}
+```{r results='hide'}
 digest::digest(Sys.getenv("R2_API_TOKEN"), algo = "sha256", serialize = FALSE)
 ```
 
