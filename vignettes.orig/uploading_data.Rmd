@@ -109,6 +109,12 @@ ggplot(data) +
 ```
 
 
+## Cleanup
 
+To leave things as we found them initially we remove the files we uploaded here from the test bucket.
 
+```{r cleanup}
+remove_parquet("r2://test/census/2021/2021_92-151_X.parquet")
+remove_parquet("r2://test/census/2021/lcma000b21f_e.parquet")
+```
 

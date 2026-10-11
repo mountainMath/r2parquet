@@ -151,6 +151,15 @@ ggplot(data) +
 </div>
 
 
+## Cleanup
+
+To leave things as we found them initially we remove the files we uploaded here from the test bucket.
 
 
+``` r
+remove_parquet("r2://test/census/2021/2021_92-151_X.parquet")
+#> Removed 1 file from R2 bucket test.
+remove_parquet("r2://test/census/2021/lcma000b21f_e.parquet")
+#> Removed 1 file from R2 bucket test.
+```
 
