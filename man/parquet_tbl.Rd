@@ -4,30 +4,23 @@
 \alias{parquet_tbl}
 \title{lazy table to query parquet files at URLs, on R2 or at local paths}
 \usage{
-parquet_tbl(
-  path,
-  engine = c("duckdb", "arrow", "polars"),
-  hive_partitioning = TRUE,
-  con = NULL
-)
+parquet_tbl(path, hive_partitioning = TRUE, con = NULL)
 }
 \arguments{
 \item{path}{URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)
-parquet files, or a vector of these. The arrow and polars engines can't mix paths on R2 with other paths.}
-
-\item{engine}{`"duckdb"` (the default), `"arrow"` or `"polars"`, see description}
+parquet files, or a vector of these}
 
 \item{hive_partitioning}{if `TRUE`, the default, partition columns get derived from `key=value` components of the
 file paths. This includes the directories above a single file, reading one file out of a partitioned
 directory, like `data/year=2021/data_0.parquet`, adds a `year` column.}
 
-\item{con}{DuckDB connection to create the table on, only for the duckdb engine. Defaults to
-`parquet_connection`, the connection shared by all calls. Tables can only be joined when they are on the
-same connection, so pass your own connection to join with data that lives there. The `httpfs` and `spatial`
-extensions get installed and loaded on it as needed, and the R2 credentials get registered as a secret.}
+\item{con}{DuckDB connection to create the table on. Defaults to `parquet_connection`, the connection shared
+by all calls. Tables can only be joined when they are on the same connection, so pass your own connection to
+join with data that lives there. The `httpfs` and `spatial` extensions get installed and loaded on it as
+needed, and the R2 credentials get registered as a secret.}
 }
 \value{
-a lazy `dplyr` table (DuckDB), an arrow `Dataset` or a polars `LazyFrame`, depending on `engine`
+a lazy `dplyr` table on DuckDB
 }
 \description{
 Lazy table for parquet files at public URLs, like files in public R2 buckets or presigned URLs, in private
@@ -45,18 +38,11 @@ e.g. `r2://bucket/data.parquet`, these get resolved to all parquet files within 
 Local directories get read as all parquet files within them, URLs have to point to files since directories
 can't be listed over https.
 
-The `engine` determines what gets returned:
-* `"duckdb"`, the default, returns a lazy `dplyr` table on a DuckDB connection that is cached for the session
-  (`parquet_connection`), so that tables from several calls can be joined, or on the connection given as `con`.
-  `dplyr` verbs get translated to SQL. If the table has
-  GEOMETRY columns, like GeoParquet files written by `data_to_parquet`, the `spatial` extension gets loaded
-  so that spatial functions like `ST_Area` can be used in queries. Use `filter_spatial` to filter by location
-  and `collect_parquet` to collect the result with its metadata attached, as an sf object if it has geometry,
-  both only work with this engine. `parquet_metadata` reads the metadata of the table's files.
-* `"arrow"` returns an arrow `Dataset` that can be queried with `dplyr` verbs. Needs the arrow package, and
-  can't read URLs, only paths on R2 and local paths. As of arrow 25 the GEOMETRY columns of GeoParquet files
-  written by `data_to_parquet` come back as plain binary (WKB) columns without their crs.
-* `"polars"` returns a polars `LazyFrame`, executed via `$collect()`, or with the `tidypolars` package loaded
-  queried with `dplyr` verbs ending in `dplyr::collect()`. Needs the polars package. As of polars 1.16
-  GeoParquet files written by `data_to_parquet` can't be read, polars rejects the native GEOMETRY type.
+The table is a lazy `dplyr` table on a DuckDB connection that is cached for the session (`parquet_connection`),
+so that tables from several calls can be joined, or on the connection given as `con`. `dplyr` verbs get
+translated to SQL. If the table has GEOMETRY columns, like GeoParquet files written by `data_to_parquet`,
+the `spatial` extension gets loaded so that spatial functions like `ST_Area` can be used in queries. Use
+`filter_spatial` to filter by location and `collect_parquet` to collect the result with its metadata
+attached, as an sf object if it has geometry. `parquet_metadata` reads the metadata of the table's files
+and `list_parquet` lists the files.
 }

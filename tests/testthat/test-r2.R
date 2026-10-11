@@ -43,13 +43,6 @@ test_that("parquet files can be uploaded, queried and removed", {
   expect_equal(dplyr::pull(dplyr::count(tbl)),nrow(df))
   expect_equal(dplyr::pull(dplyr::count(dplyr::filter(tbl,high_sid==1L))),sum(df$SID74>5))
 
-  if (requireNamespace("arrow",quietly=TRUE)) {
-    expect_equal(nrow(dplyr::collect(parquet_tbl(dir_path,engine="arrow"))),nrow(df))
-  }
-  if (requireNamespace("polars",quietly=TRUE)) {
-    expect_equal(nrow(parquet_tbl(dir_path,engine="polars")$collect()),nrow(df))
-  }
-
   # presigned urls work without credentials
   response <- httr::GET(presigned_url(r2_path,expires=60))
   expect_equal(httr::status_code(response),200)

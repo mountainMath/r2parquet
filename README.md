@@ -8,7 +8,7 @@ Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloud
 
 ## Reading public Parquet and GeoParquet data from R2
 
-- **Reading public URLs and local files**: `parquet_tbl()`, no credentials needed. Returns a lazy DuckDB table by default, or an arrow `Dataset` or polars `LazyFrame` with `engine = "arrow"` or `"polars"`.
+- **Reading public URLs and local files**: `parquet_tbl()`, no credentials needed. Returns a lazy DuckDB table, only the parts of the files a query needs get downloaded.
 - **Spatial queries**: `filter_spatial()` on any lazy DuckDB table, `collect_parquet()` collects as sf if the table has geometry.
 - **Metadata**: `parquet_metadata()` reads source, license, notes and column labels from the parquet footer, `collect_parquet()` attaches them to the collected data, where `parquet_metadata()` reads them back too.
 - **Joining with other data**: all tables share one DuckDB connection, `parquet_connection()`, so they can be joined with each other and with data frames copied there via `dplyr::copy_to()`. `parquet_tbl(con = )` puts a table on a connection of your own instead.
@@ -18,7 +18,7 @@ Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloud
 - **Buckets**: `create_r2_bucket()` creates private or public buckets, public via the `r2.dev` URL or a custom domain.
 - **Files**: `upload_parquet()` uploads single parquet files or directories of (partitioned) parquet files, `remove_parquet()` removes them and `list_parquet()` lists them with size and modification time. Uploads and removals purge the changed files from the Cloudflare cache of the bucket's custom domains.
 - **Writing**: `data_to_parquet()` writes data frames, sf objects and lazy DuckDB tables to parquet, optionally sorted (`sort_by`) and partitioned (`partition_by`), so remote queries only download the row groups they need. sf objects become GeoParquet 2.0 files sorted along a Hilbert curve. Given an `r2://bucket/path` destination it writes and uploads in one go, replacing earlier uploads including stale partitions. `metadata` like the source URL, license and column labels goes into the parquet footer.
-- **Reading private buckets**: `parquet_tbl("r2://bucket/path")` with any of the engines.
+- **Reading private buckets**: `parquet_tbl("r2://bucket/path")`.
 - **Sharing private files**: `presigned_url()` creates time limited download (or upload) URLs for files in private buckets.
 
 ## Installation
@@ -27,12 +27,7 @@ Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloud
 remotes::install_github("mountainMath/r2parquet")
 ```
 
-`arrow` and `polars` are optional and only needed for `upload_parquet()`, `remove_parquet()`, `data_to_parquet()` to R2 and the arrow and polars engines of `parquet_tbl()`. `polars` is not on CRAN:
-
-```r
-install.packages("arrow")
-install.packages("polars", repos = "https://community.r-multiverse.org")
-```
+All of R2 is reached through DuckDB and signed https requests, there are no optional dependencies.
 
 ## Credentials
 

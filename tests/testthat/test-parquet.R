@@ -1,4 +1,4 @@
-# the duckdb engine of parquet_tbl and the connection it works on, plain parquet so no extensions are needed
+# parquet_tbl and the connection it works on, plain parquet so no extensions are needed
 
 test_that("parquet_tbl uses the shared connection or one of its own", {
   df <- data.frame(id=1:3,value=c(3,1,2))
@@ -15,7 +15,6 @@ test_that("parquet_tbl uses the shared connection or one of its own", {
   joined <- collect_parquet(dplyr::inner_join(tbl,names,by="id"))
   expect_equal(nrow(joined),2)
   expect_equal(sort(joined$name),c("a","b"))
-  expect_error(parquet_tbl(path,engine="arrow",con=con),"duckdb engine")
   expect_error(parquet_tbl(path,con="con"),"DuckDB connection")
   expect_error(parquet_tbl(character()),"character vector")
 })

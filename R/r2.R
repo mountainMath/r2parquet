@@ -1,7 +1,6 @@
-# Cloudflare R2 storage for parquet files
-# This file contains convenience scripts to upload
-# data to R2 into (partitioned) parquet files for
-# private or public access
+# Cloudflare R2 storage for parquet files: uploading, listing and removing (partitioned) parquet files and
+# presigning URLs via the S3 compatible API with the package's own signature version 4 implementation, and
+# bucket settings via the Cloudflare API.
 
 # read R2 credentials from environment variables
 r2_credentials <- function(env_vars){
@@ -16,15 +15,6 @@ r2_credentials <- function(env_vars){
 # endpoint of the S3 compatible API
 r2_endpoint <- function(){
   paste0("https://",r2_credentials("R2_ACCOUNT_ID")[["R2_ACCOUNT_ID"]],".r2.cloudflarestorage.com")
-}
-
-# R2 filesystem via the S3 compatible API
-r2_filesystem <- function(){
-  credentials <- r2_credentials(c("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
-  arrow::S3FileSystem$create(access_key=credentials[["R2_ACCESS_KEY_ID"]],
-                             secret_key=credentials[["R2_SECRET_ACCESS_KEY"]],
-                             endpoint_override=r2_endpoint(),
-                             region="auto")
 }
 
 # current time in the format used by AWS signature version 4
@@ -98,7 +88,7 @@ sigv4_presigned_url <- function(verb,base_url,path,expires,access_key,secret,reg
   paste0(base_url,path,"?",query_string,"&X-Amz-Signature=",signature$signature)
 }
 
-# signed request via the S3 compatible API
+# signed request via the S3 compatible API, the body is a raw vector or a string
 r2_request <- function(verb,r2_bucket,r2_path="",query=list(),headers=list(),body=raw()){
   credentials <- r2_credentials(c("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
   endpoint <- r2_endpoint()
@@ -126,8 +116,19 @@ xml_unescape <- function(x){
   x
 }
 
+# text of the first <name> element in each xml snippet, NA where there is none
+# the S3 API responses are flat enough that a proper xml parser is not needed
+xml_field <- function(x,name){
+  matches <- regmatches(x,regexec(paste0("(?s)<",name,">(.*?)</",name,">"),x,perl=TRUE))
+  xml_unescape(vapply(matches,function(m)if (length(m)==2) m[2] else NA_character_,""))
+}
+
+# all <name> elements in an xml document, with their content
+xml_elements <- function(x,name){
+  regmatches(x,gregexpr(paste0("(?s)<",name,">.*?</",name,">"),x,perl=TRUE))[[1]]
+}
+
 # delete objects via the S3 compatible API, in batches of up to 1000 objects per request
-# the arrow filesystem is not used for this as it leaves empty directory marker objects behind when deleting files
 r2_delete_objects <- function(r2_bucket,r2_paths){
   for (batch in split(r2_paths,ceiling(seq_along(r2_paths)/1000))) {
     body <- paste0('<?xml version="1.0" encoding="UTF-8"?><Delete><Quiet>true</Quiet>',
@@ -141,12 +142,9 @@ r2_delete_objects <- function(r2_bucket,r2_paths){
       stop(paste0("Removing files from R2 bucket ",r2_bucket," failed with status ",httr::status_code(response),". ",content))
     }
     # with quiet mode the response only lists the objects that could not be deleted
-    errors <- regmatches(content,gregexpr("(?s)<Error>.*?</Error>",content,perl=TRUE))[[1]]
+    errors <- xml_elements(content,"Error")
     if (length(errors)>0) {
-      error_messages <- vapply(errors,function(e){
-        field <- function(name)xml_unescape(sub(paste0("(?s).*<",name,">(.*?)</",name,">.*"),"\\1",e,perl=TRUE))
-        paste0(field("Key"),": ",field("Message")," (",field("Code"),")")
-      },"",USE.NAMES=FALSE)
+      error_messages <- paste0(xml_field(errors,"Key"),": ",xml_field(errors,"Message")," (",xml_field(errors,"Code"),")")
       stop(paste0("Removing ",length(errors)," file",if (length(errors)>1) "s"," from R2 bucket ",r2_bucket," failed. ",
                   paste0(error_messages,collapse=", ")))
     }
@@ -259,44 +257,56 @@ r2_purge_cache_after_change <- function(r2_bucket,r2_paths){
                                            conditionMessage(e)),call.=FALSE))
 }
 
-# stream local file to arrow filesystem in chunks, large files get uploaded as multipart uploads
-file_to_filesystem <- function(path,filesystem,destination,chunk_size=8*1024^2){
-  input <- file(path,"rb")
-  on.exit(close(input))
-  output <- filesystem$OpenOutputStream(destination)
-  while (length(chunk <- readBin(input,raw(),chunk_size))>0) {
-    output$write(chunk)
+# upload a local file as an object in a single PUT request with a signed payload, so the file gets read into
+# memory (the S3 API allows up to 5GB per PUT, httr's streaming upload_file leaks file connections)
+r2_put_object <- function(r2_bucket,r2_path,file){
+  response <- r2_request("PUT",r2_bucket,r2_path,body=readBin(file,raw(),file.size(file)),
+                         headers=list("content-type"="application/octet-stream"))
+  if (httr::status_code(response)>=400) {
+    stop(paste0("Uploading ",file," to r2://",r2_bucket,"/",r2_path," failed with status ",httr::status_code(response),". ",
+                httr::content(response,"text",encoding="UTF-8")))
   }
-  output$close()
+  invisible(response)
 }
 
-# parquet files below a directory on R2, as paths within the bucket
-r2_list_parquet <- function(filesystem,r2_bucket,r2_path){
-  file_infos <- filesystem$GetFileInfo(arrow::FileSelector$create(paste0(r2_bucket,"/",r2_path),recursive=TRUE))
-  paths <- unlist(lapply(file_infos,function(i)if (i$type==arrow::FileType$File) i$path))
-  substring(paths[grepl("\\.parquet$",paths)],nchar(r2_bucket)+2)
+# objects in the bucket whose key starts with prefix, with size in bytes and modification time, via the
+# ListObjectsV2 API that returns up to 1000 objects per page
+r2_list_objects <- function(r2_bucket,prefix=""){
+  pages <- list()
+  token <- NULL
+  repeat {
+    query <- c(list("list-type"="2"),if (prefix!="") list(prefix=prefix),if (!is.null(token)) list("continuation-token"=token))
+    response <- r2_request("GET",r2_bucket,query=query)
+    content <- httr::content(response,"text",encoding="UTF-8")
+    if (httr::status_code(response)>=400) {
+      stop(paste0("Listing R2 bucket ",r2_bucket," failed with status ",httr::status_code(response),". ",content))
+    }
+    objects <- xml_elements(content,"Contents")
+    pages[[length(pages)+1]] <- data.frame(key=xml_field(objects,"Key"),
+                                           size=as.numeric(xml_field(objects,"Size")),
+                                           modified=as.POSIXct(xml_field(objects,"LastModified"),format="%Y-%m-%dT%H:%M:%OS",tz="UTC"))
+    if (!identical(xml_field(content,"IsTruncated"),"true")) break
+    token <- xml_field(content,"NextContinuationToken")
+  }
+  do.call(rbind,pages)
+}
+
+# the object at an R2 path together with the objects below it as a directory (path/...), the whole bucket
+# for an empty path. Objects whose keys merely start with the path, like path.bak, are not included.
+r2_objects <- function(r2_bucket,r2_path){
+  objects <- r2_list_objects(r2_bucket,prefix=r2_path)
+  if (r2_path=="") return(objects)
+  objects[objects$key==r2_path | startsWith(objects$key,paste0(r2_path,"/")),]
 }
 
 # the parquet file at an R2 path, or the parquet files below the directory at the path, with size and
 # modification time, nothing for a path that does not exist
 r2_parquet_files <- function(path){
-  if (!requireNamespace("arrow",quietly=TRUE)) stop("The arrow package is required to list files on R2.")
   path <- r2_split_path(path)
   r2_path <- sub("/+$","",path$path)
-  bucket_path <- paste0(path$bucket,if (r2_path!="") "/",r2_path)
-  filesystem <- r2_filesystem()
-  info <- filesystem$GetFileInfo(bucket_path)[[1]]
-  if (info$type==arrow::FileType$File) {
-    infos <- list(info)
-  } else if (info$type==arrow::FileType$Directory) {
-    infos <- filesystem$GetFileInfo(arrow::FileSelector$create(bucket_path,recursive=TRUE))
-    infos <- Filter(function(i)i$type==arrow::FileType$File && grepl("\\.parquet$",i$path),infos)
-  } else {
-    infos <- list()
-  }
-  parquet_files(paste0("r2://",vapply(infos,function(i)i$path,"")),
-                vapply(infos,function(i)as.numeric(i$size),numeric(1)),
-                vapply(infos,function(i)if (is.null(i$mtime)) NA_real_ else as.numeric(i$mtime),numeric(1)))
+  objects <- r2_objects(path$bucket,r2_path)
+  objects <- if (r2_path %in% objects$key) objects[objects$key==r2_path,] else objects[grepl("\\.parquet$",objects$key),]
+  parquet_files(paste0("r2://",path$bucket,"/",objects$key),objects$size,objects$modified)
 }
 
 #' create Cloudflare R2 bucket with private or public access
@@ -369,9 +379,6 @@ create_r2_bucket <- function(r2_bucket,public=FALSE,custom_domain=NULL) {
 #' @return (invisibly) the uploaded files as `r2://bucket/path`
 #' @export
 upload_parquet <- function(path,destination,purge_cache=TRUE) {
-  if (!requireNamespace("arrow",quietly=TRUE)) {
-    stop("The arrow package is required to upload to R2.")
-  }
   destination <- r2_split_path(destination)
   r2_bucket <- destination$bucket
   r2_path <- destination$path
@@ -390,9 +397,8 @@ upload_parquet <- function(path,destination,purge_cache=TRUE) {
   } else {
     stop(paste0("File or directory ",path," does not exist."))
   }
-  filesystem <- r2_filesystem()
   for (i in seq_along(files)) {
-    file_to_filesystem(files[i],filesystem,paste0(r2_bucket,"/",r2_paths[i]))
+    r2_put_object(r2_bucket,r2_paths[i],files[i])
   }
   if (purge_cache) r2_purge_cache_after_change(r2_bucket,r2_paths)
   invisible(paste0("r2://",r2_bucket,"/",r2_paths))
@@ -417,21 +423,17 @@ upload_parquet <- function(path,destination,purge_cache=TRUE) {
 #' @return (invisibly) the removed files as `r2://bucket/path`
 #' @export
 remove_parquet <- function(path,purge_cache=TRUE) {
-  if (!requireNamespace("arrow",quietly=TRUE)) {
-    stop("The arrow package is required to access R2.")
-  }
   if (!is.character(path) || length(path)==0) stop("path has to be one or more R2 paths of the form r2://bucket/path.")
-  filesystem <- r2_filesystem()
   resolved <- lapply(path,function(p){
     p <- r2_split_path(p)
     r2_bucket <- p$bucket
     r2_path <- sub("/+$","",p$path)
     if (r2_path=="") stop("Please specify the path of the parquet file or directory to remove in R2 bucket ",r2_bucket,".")
-    file_type <- filesystem$GetFileInfo(paste0(r2_bucket,"/",r2_path))[[1]]$type
-    if (file_type==arrow::FileType$File) {
+    objects <- r2_objects(r2_bucket,r2_path)
+    if (r2_path %in% objects$key) {
       r2_paths <- r2_path
-    } else if (file_type==arrow::FileType$Directory) {
-      r2_paths <- r2_list_parquet(filesystem,r2_bucket,r2_path)
+    } else if (nrow(objects)>0) {
+      r2_paths <- objects$key[grepl("\\.parquet$",objects$key)]
       if (length(r2_paths)==0) stop(paste0("No parquet files found in ",r2_path," in R2 bucket ",r2_bucket,"."))
     } else {
       stop(paste0("File or directory ",r2_path," does not exist in R2 bucket ",r2_bucket,"."))

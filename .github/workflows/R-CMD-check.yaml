@@ -20,12 +20,9 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - {os: macos-latest,   r: 'release', dependencies: '"all"', extra-packages: 'any::rcmdcheck'}
-          - {os: windows-latest, r: 'release', dependencies: '"all"', extra-packages: 'any::rcmdcheck'}
-          # polars has no Linux binaries on r-multiverse and building it needs Rust, so Linux checks
-          # without polars: hard dependencies plus the other Suggests
-          - {os: ubuntu-latest,  r: 'release', dependencies: '"hard"',
-             extra-packages: 'any::rcmdcheck, any::arrow, any::ggplot2, any::knitr, any::rmarkdown, any::testthat, any::withr'}
+          - {os: macos-latest,   r: 'release'}
+          - {os: windows-latest, r: 'release'}
+          - {os: ubuntu-latest,  r: 'release'}
 
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
@@ -44,13 +41,10 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           r-version: ${{ matrix.config.r }}
-          # polars is not on CRAN
-          extra-repositories: https://community.r-multiverse.org
 
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          dependencies: ${{ matrix.config.dependencies }}
-          extra-packages: ${{ matrix.config.extra-packages }}
+          extra-packages: any::rcmdcheck
           needs: check
 
       - uses: r-lib/actions/check-r-package@v2

@@ -124,22 +124,15 @@ test_that("partitioned GeoParquet keeps the Hilbert order within partitions", {
   }
 })
 
-test_that("all engines read local partitioned directories", {
-  df <- data.frame(group=rep(c("a","b"),each=50),value=1:100)
+test_that("local partitioned directories get read with their partition columns as strings", {
+  df <- data.frame(group=rep(c("001","002"),each=50),value=1:100)
   dir <- withr::local_tempdir()
   data_to_parquet(df,file.path(dir,"data"),partition_by="group")
-  expect_equal(nrow(dplyr::collect(parquet_tbl(file.path(dir,"data")))),100)
-  if (requireNamespace("arrow",quietly=TRUE)) {
-    result <- dplyr::collect(parquet_tbl(file.path(dir,"data"),engine="arrow"))
-    expect_equal(sort(result$value),1:100)
-    expect_setequal(result$group,c("a","b"))
-  }
-  if (requireNamespace("polars",quietly=TRUE)) {
-    result <- as.data.frame(parquet_tbl(file.path(dir,"data"),engine="polars")$collect())
-    expect_equal(sort(result$value),1:100)
-    expect_setequal(result$group,c("a","b"))
-  }
-  expect_error(parquet_tbl("https://example.com/data.parquet",engine="arrow"),"can't read URLs")
+  result <- dplyr::collect(parquet_tbl(file.path(dir,"data")))
+  expect_equal(sort(result$value),1:100)
+  expect_setequal(result$group,c("001","002"))
+  expect_equal(nrow(dplyr::collect(parquet_tbl(file.path(dir,"data"),hive_partitioning=FALSE))),100)
+  expect_false("group" %in% colnames(parquet_tbl(file.path(dir,"data"),hive_partitioning=FALSE)))
 })
 
 test_that("paths have to be single strings", {
@@ -172,18 +165,6 @@ test_that("empty geometries get written and sort last", {
   expect_equal(nrow(result),3)
   expect_equal(sf::st_is_empty(result),c(FALSE,FALSE,TRUE))
   expect_equal(result$NAME[3],data$NAME[2])
-})
-
-test_that("the arrow engine reads GeoParquet geometry as binary", {
-  skip_if_no_duckdb_extensions()
-  skip_if_not_installed("arrow")
-  data <- nc_data()
-  path <- withr::local_tempfile(fileext=".parquet")
-  data_to_parquet(data,path)
-  dataset <- parquet_tbl(path,engine="arrow")
-  # the docs of parquet_tbl say so, update them when arrow learns the GEOMETRY type
-  expect_equal(dataset$schema$geometry$type$ToString(),"binary")
-  expect_equal(nrow(dplyr::collect(dataset)),nrow(data))
 })
 
 test_that("the compression codec can be chosen", {

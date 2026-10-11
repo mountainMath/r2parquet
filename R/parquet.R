@@ -1,5 +1,4 @@
-# Lazy tables for parquet files at public URLs, on R2 (r2://bucket/path) or at local paths,
-# read with DuckDB, arrow or polars.
+# Lazy DuckDB tables for parquet files at public URLs, on R2 (r2://bucket/path) or at local paths.
 
 # session cache for the duckdb connection
 parquet_cache <- new.env(parent=emptyenv())
@@ -7,7 +6,7 @@ parquet_cache <- new.env(parent=emptyenv())
 #' DuckDB connection shared by the parquet functions
 #'
 #' @description
-#' The in-memory DuckDB connection that `parquet_tbl` (with the default engine), `parquet_metadata` and
+#' The in-memory DuckDB connection that `parquet_tbl`, `parquet_metadata` and
 #' `data_to_parquet` use. It gets created on first use and is cached for the session, so that tables from
 #' different `parquet_tbl` calls can be joined with each other. Use it to bring other data onto the same
 #' connection, e.g. `dplyr::copy_to(parquet_connection(), df)` to join a data frame with a parquet table, or to
@@ -95,82 +94,41 @@ duckdb_parquet_paths <- function(con,path){
 #' Local directories get read as all parquet files within them, URLs have to point to files since directories
 #' can't be listed over https.
 #'
-#' The `engine` determines what gets returned:
-#' * `"duckdb"`, the default, returns a lazy `dplyr` table on a DuckDB connection that is cached for the session
-#'   (`parquet_connection`), so that tables from several calls can be joined, or on the connection given as `con`.
-#'   `dplyr` verbs get translated to SQL. If the table has
-#'   GEOMETRY columns, like GeoParquet files written by `data_to_parquet`, the `spatial` extension gets loaded
-#'   so that spatial functions like `ST_Area` can be used in queries. Use `filter_spatial` to filter by location
-#'   and `collect_parquet` to collect the result with its metadata attached, as an sf object if it has geometry,
-#'   both only work with this engine. `parquet_metadata` reads the metadata of the table's files.
-#' * `"arrow"` returns an arrow `Dataset` that can be queried with `dplyr` verbs. Needs the arrow package, and
-#'   can't read URLs, only paths on R2 and local paths. As of arrow 25 the GEOMETRY columns of GeoParquet files
-#'   written by `data_to_parquet` come back as plain binary (WKB) columns without their crs.
-#' * `"polars"` returns a polars `LazyFrame`, executed via `$collect()`, or with the `tidypolars` package loaded
-#'   queried with `dplyr` verbs ending in `dplyr::collect()`. Needs the polars package. As of polars 1.16
-#'   GeoParquet files written by `data_to_parquet` can't be read, polars rejects the native GEOMETRY type.
+#' The table is a lazy `dplyr` table on a DuckDB connection that is cached for the session (`parquet_connection`),
+#' so that tables from several calls can be joined, or on the connection given as `con`. `dplyr` verbs get
+#' translated to SQL. If the table has GEOMETRY columns, like GeoParquet files written by `data_to_parquet`,
+#' the `spatial` extension gets loaded so that spatial functions like `ST_Area` can be used in queries. Use
+#' `filter_spatial` to filter by location and `collect_parquet` to collect the result with its metadata
+#' attached, as an sf object if it has geometry. `parquet_metadata` reads the metadata of the table's files
+#' and `list_parquet` lists the files.
 #'
 #' @param path URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)
-#' parquet files, or a vector of these. The arrow and polars engines can't mix paths on R2 with other paths.
-#' @param engine `"duckdb"` (the default), `"arrow"` or `"polars"`, see description
+#' parquet files, or a vector of these
 #' @param hive_partitioning if `TRUE`, the default, partition columns get derived from `key=value` components of the
 #' file paths. This includes the directories above a single file, reading one file out of a partitioned
 #' directory, like `data/year=2021/data_0.parquet`, adds a `year` column.
-#' @param con DuckDB connection to create the table on, only for the duckdb engine. Defaults to
-#' `parquet_connection`, the connection shared by all calls. Tables can only be joined when they are on the
-#' same connection, so pass your own connection to join with data that lives there. The `httpfs` and `spatial`
-#' extensions get installed and loaded on it as needed, and the R2 credentials get registered as a secret.
-#' @return a lazy `dplyr` table (DuckDB), an arrow `Dataset` or a polars `LazyFrame`, depending on `engine`
+#' @param con DuckDB connection to create the table on. Defaults to `parquet_connection`, the connection shared
+#' by all calls. Tables can only be joined when they are on the same connection, so pass your own connection to
+#' join with data that lives there. The `httpfs` and `spatial` extensions get installed and loaded on it as
+#' needed, and the R2 credentials get registered as a secret.
+#' @return a lazy `dplyr` table on DuckDB
 #' @export
-parquet_tbl <- function(path,engine=c("duckdb","arrow","polars"),hive_partitioning=TRUE,con=NULL) {
-  engine <- match.arg(engine)
+parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL) {
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
-  is_r2 <- startsWith(path,"r2://")
-  is_url <- !is_r2 & grepl("^[a-z0-9]+://",path)
-  if (engine!="duckdb" && any(is_r2) && !all(is_r2)) {
-    stop("The ",engine," engine can't mix paths on R2 with other paths.")
+  if (is.null(con)) {
+    con <- parquet_connection()
+  } else if (!inherits(con,"duckdb_connection")) {
+    stop("con has to be a DuckDB connection.")
   }
-  if (!is.null(con)) {
-    if (engine!="duckdb") stop("con is only used by the duckdb engine.")
-    if (!inherits(con,"duckdb_connection")) stop("con has to be a DuckDB connection.")
+  path <- duckdb_parquet_paths(con,path)
+  tbl <- duckdb_parquet_tbl(con,path,hive_partitioning=hive_partitioning)
+  if (length(duckdb_geometry_columns(tbl))>0) {
+    DBI::dbExecute(con,"INSTALL spatial")
+    DBI::dbExecute(con,"LOAD spatial")
   }
-  if (engine=="duckdb") {
-    if (is.null(con)) con <- parquet_connection()
-    path <- duckdb_parquet_paths(con,path)
-    tbl <- duckdb_parquet_tbl(con,path,hive_partitioning=hive_partitioning)
-    if (length(duckdb_geometry_columns(tbl))>0) {
-      DBI::dbExecute(con,"INSTALL spatial")
-      DBI::dbExecute(con,"LOAD spatial")
-    }
-    # for parquet_metadata and collect_parquet, dbplyr keeps attributes through its verbs
-    attr(tbl,"r2parquet_paths") <- path
-    tbl
-  } else if (engine=="arrow") {
-    if (!requireNamespace("arrow",quietly=TRUE)) stop("The arrow package is required for the arrow engine.")
-    if (any(is_url)) stop("The arrow engine can't read URLs, use the duckdb or polars engine.")
-    partitioning <- if (hive_partitioning) arrow::hive_partition() else NULL
-    if (any(is_r2)) {
-      # the S3 filesystem addresses files as bucket/path
-      path <- sub("/+$","",sub("^r2://","",path))
-      arrow::open_dataset(path,filesystem=r2_filesystem(),format="parquet",partitioning=partitioning)
-    } else {
-      arrow::open_dataset(path,format="parquet",partitioning=partitioning)
-    }
-  } else {
-    if (!requireNamespace("polars",quietly=TRUE)) stop("The polars package is required for the polars engine.")
-    storage_options <- NULL
-    if (any(is_r2)) {
-      path <- sub("^r2://","s3://",r2_parquet_url(path))
-      credentials <- r2_credentials(c("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
-      storage_options <- c(aws_access_key_id=credentials[["R2_ACCESS_KEY_ID"]],
-                           aws_secret_access_key=credentials[["R2_SECRET_ACCESS_KEY"]],
-                           aws_endpoint_url=r2_endpoint(),
-                           aws_region="auto")
-    } else {
-      path[!is_url] <- local_parquet_glob(path[!is_url])
-    }
-    polars::pl$scan_parquet(path,hive_partitioning=hive_partitioning,storage_options=storage_options)
-  }
+  # for parquet_metadata, list_parquet and collect_parquet, dbplyr keeps attributes through its verbs
+  attr(tbl,"r2parquet_paths") <- path
+  tbl
 }
 
 # one row per parquet file with its size in bytes and modification time in UTC
@@ -191,7 +149,7 @@ local_parquet_files <- function(path){
 #' Lists the parquet files at paths on R2 or at local paths with their size and modification time, or the
 #' files a lazy table from `parquet_tbl` reads. Directories get listed recursively, so a directory of
 #' (partitioned) parquet files lists all the parquet files in it, and a path that does not exist lists nothing.
-#' Paths on R2 need the arrow package and the same credentials as `upload_parquet`. URLs can't be listed, so
+#' Paths on R2 need the same credentials as `upload_parquet`. URLs can't be listed, so
 #' for a table on URLs size and modification time are `NA`.
 #'
 #' @param x `r2://bucket/path` or local path of a parquet file or of a directory with (partitioned) parquet

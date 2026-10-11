@@ -103,7 +103,7 @@ R2 itself has no cache settings, caching happens in Cloudflare's CDN in front of
 
 A long edge TTL is safe because `upload_parquet()` and `remove_parquet()` purge exactly the files they change (`purge_cache = TRUE` is the default). Files uploaded with other tools, or by the package without `R2_API_TOKEN`, are only refreshed when the TTL runs out, or after purging them by hand under *Caching* → *Configuration* → *Purge Cache*. Without an explicit edge TTL, objects without a `Cache-Control` header, which is how the package uploads them, are kept for two hours.
 
-Keep the *Browser TTL* short (or respect the origin, which sends none), as a purge can't reach into browser caches. That matters less for R, where DuckDB, arrow and polars don't keep an HTTP cache between sessions, than for web maps reading the same files with DuckDB-WASM.
+Keep the *Browser TTL* short (or respect the origin, which sends none), as a purge can't reach into browser caches. That matters less for R, where DuckDB doesn't keep an HTTP cache between sessions, than for web maps reading the same files with DuckDB-WASM.
 
 Two further settings:
 
@@ -121,7 +121,7 @@ On a custom domain a rate limiting rule caps the number of requests per client, 
 
 The free plan allows one rule with a 10 second period and a 10 second timeout, paid plans allow longer periods and timeouts and more rules. Rate limiting counts requests, not bytes, including those served from the cache. Choose the threshold generously: DuckDB reads the footer of each file and then the row groups a query needs in parallel range requests, and a partitioned dataset adds requests per partition file. Try it with a typical query against the dataset, with a low threshold and the action set to *Log* first, then look at the counts in *Security* → *Analytics*.
 
-Leave *Bot Fight Mode* and challenge actions off for the data hostname: DuckDB, arrow and polars are HTTP clients that can't solve a challenge, so a challenged request simply fails. Block, rather than challenge, in rate limiting rules for the same reason.
+Leave *Bot Fight Mode* and challenge actions off for the data hostname: DuckDB is an HTTP client that can't solve a challenge, so a challenged request simply fails. Block, rather than challenge, in rate limiting rules for the same reason.
 
 ## CORS
 

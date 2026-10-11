@@ -10,7 +10,7 @@ parquet_connection()
 a DuckDB connection
 }
 \description{
-The in-memory DuckDB connection that `parquet_tbl` (with the default engine), `parquet_metadata` and
+The in-memory DuckDB connection that `parquet_tbl`, `parquet_metadata` and
 `data_to_parquet` use. It gets created on first use and is cached for the session, so that tables from
 different `parquet_tbl` calls can be joined with each other. Use it to bring other data onto the same
 connection, e.g. `dplyr::copy_to(parquet_connection(), df)` to join a data frame with a parquet table, or to

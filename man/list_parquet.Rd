@@ -27,6 +27,6 @@ URL), `size` in bytes and `modified`, the modification time in UTC
 Lists the parquet files at paths on R2 or at local paths with their size and modification time, or the
 files a lazy table from `parquet_tbl` reads. Directories get listed recursively, so a directory of
 (partitioned) parquet files lists all the parquet files in it, and a path that does not exist lists nothing.
-Paths on R2 need the arrow package and the same credentials as `upload_parquet`. URLs can't be listed, so
+Paths on R2 need the same credentials as `upload_parquet`. URLs can't be listed, so
 for a table on URLs size and modification time are `NA`.
 }

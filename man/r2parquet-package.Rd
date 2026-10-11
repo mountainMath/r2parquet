@@ -6,7 +6,7 @@
 \alias{r2parquet-package}
 \title{r2parquet: Parquet and GeoParquet Files on Cloudflare R2}
 \description{
-Publish parquet and GeoParquet files on Cloudflare R2 and query them lazily. Creates R2 buckets with private or public access, including custom domains, uploads and removes (partitioned) parquet files and purges changed files from the Cloudflare cache. Writes GeoParquet 2.0 files sorted along a Hilbert curve for selective remote spatial queries, and provides lazy DuckDB, arrow and polars readers for private R2 buckets as well as DuckDB readers for public URLs and local files, with spatial filtering and conversion to sf.
+Publish parquet and GeoParquet files on Cloudflare R2 and query them lazily. Creates R2 buckets with private or public access, including custom domains, uploads and removes (partitioned) parquet files and purges changed files from the Cloudflare cache. Writes GeoParquet 2.0 files sorted along a Hilbert curve for selective remote spatial queries, and provides lazy DuckDB tables for private R2 buckets, public URLs and local files, with spatial filtering and conversion to sf.
 }
 \seealso{
 Useful links:

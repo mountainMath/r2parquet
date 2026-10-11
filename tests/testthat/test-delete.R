@@ -31,14 +31,15 @@ test_that("failed delete requests are reported", {
 })
 
 test_that("remove_parquet resolves all paths first and removes per bucket", {
-  skip_if_not_installed("arrow")
   deleted <- list()
   purged <- list()
-  objects <- list("bucket/a.parquet"=arrow::FileType$File,"bucket/data"=arrow::FileType$Directory,
-                  "other/b.parquet"=arrow::FileType$File,"bucket/empty"=arrow::FileType$Directory)
-  filesystem <- list(GetFileInfo=function(path)list(list(type=if (is.null(objects[[path]])) arrow::FileType$NotFound else objects[[path]])))
-  local_mocked_bindings(r2_filesystem=function()filesystem,
-                        r2_list_parquet=function(filesystem,r2_bucket,r2_path)if (r2_path=="data") c("data/year=2021/data_0.parquet","data/year=2022/data_0.parquet") else character(),
+  keys <- list(bucket=c("a.parquet","data/year=2021/data_0.parquet","data/year=2022/data_0.parquet","data/notes.txt","empty/readme.txt"),
+               other="b.parquet")
+  local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix=""){
+                          key <- keys[[r2_bucket]]
+                          key <- key[startsWith(key,prefix)]
+                          data.frame(key=key,size=rep(1,length(key)),modified=rep(Sys.time(),length(key)))
+                        },
                         r2_delete_objects=function(r2_bucket,r2_paths)deleted[[r2_bucket]] <<- r2_paths,
                         r2_purge_cache_after_change=function(r2_bucket,r2_paths)purged[[r2_bucket]] <<- r2_paths)
   expect_message(expect_message(

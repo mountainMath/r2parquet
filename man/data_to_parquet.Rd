@@ -71,15 +71,14 @@ file metadata. DuckDB writes row groups in multiples of 2048 rows, smaller value
 row groups of 2048 rows, so data with fewer rows ends up in a single row group and filters can't skip any part of it.
 
 With `partition_by`, `path` is a directory that gets one subdirectory per value, like `year=2021/data_0.parquet`.
-The partition values are only stored in the directory names, readers recover them from there with hive partitioning.
-DuckDB and polars keep string values like `"001"` as strings, arrow infers the type from the values and
-reads them as integers. Partitioned files get written single threaded, as multi threaded writes don't
-keep the sort order within partitions.
+The partition values are only stored in the directory names, readers recover them from there with hive partitioning,
+DuckDB keeps string values like `"001"` as strings. Partitioned files get written single threaded, as multi
+threaded writes don't keep the sort order within partitions.
 
 Destinations on R2 get written to a temporary directory and uploaded via `upload_parquet`. The bucket has to
 exist, use `create_r2_bucket` to create it. This expects the R2 account id and the access key id and secret
 access key of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables, and needs the arrow package. A directory of partitioned files may be named like a
+environment variables. A directory of partitioned files may be named like a
 parquet file, `parquet_tbl` tells files and directories apart. Stale files get removed before the new ones
 are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
 get purged from the Cloudflare cache like in `upload_parquet`, unless `purge_cache` is `FALSE`.
