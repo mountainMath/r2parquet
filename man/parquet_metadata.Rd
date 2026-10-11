@@ -4,6 +4,7 @@
 \alias{parquet_metadata}
 \alias{parquet_metadata.character}
 \alias{parquet_metadata.tbl_lazy}
+\alias{parquet_metadata.data.frame}
 \alias{parquet_metadata.default}
 \title{metadata of parquet files}
 \usage{
@@ -13,15 +14,19 @@ parquet_metadata(x)
 
 \method{parquet_metadata}{tbl_lazy}(x)
 
+\method{parquet_metadata}{data.frame}(x)
+
 \method{parquet_metadata}{default}(x)
 }
 \arguments{
 \item{x}{URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)
-parquet files, a vector of these, or a lazy DuckDB table from `parquet_tbl`. Paths need the same
+parquet files, a vector of these, a lazy DuckDB table from `parquet_tbl`, or data collected with
+`collect_parquet`, which carries the metadata in its `metadata` attribute. Paths need the same
 credentials as `parquet_tbl`.}
 }
 \value{
-a named list of the metadata entries, empty if the files have none
+a named list of the metadata entries, empty if the files have none (or the data was collected
+without attaching it)
 }
 \description{
 Reads the key-value metadata from the footer of parquet files, like the `source`, `license`, `notes` and

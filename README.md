@@ -10,7 +10,7 @@ Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloud
 
 - **Reading public URLs and local files**: `parquet_tbl()`, no credentials needed. Returns a lazy DuckDB table by default, or an arrow `Dataset` or polars `LazyFrame` with `engine = "arrow"` or `"polars"`.
 - **Spatial queries**: `filter_spatial()` on any lazy DuckDB table, `collect_parquet()` collects as sf if the table has geometry.
-- **Metadata**: `parquet_metadata()` reads source, license, notes and column labels from the parquet footer, `collect_parquet()` attaches them to the collected data.
+- **Metadata**: `parquet_metadata()` reads source, license, notes and column labels from the parquet footer, `collect_parquet()` attaches them to the collected data, where `parquet_metadata()` reads them back too.
 - **Joining with other data**: all tables share one DuckDB connection, `parquet_connection()`, so they can be joined with each other and with data frames copied there via `dplyr::copy_to()`. `parquet_tbl(con = )` puts a table on a connection of your own instead.
 
 ## Uploading and managing data on R2

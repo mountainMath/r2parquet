@@ -82,9 +82,11 @@ attach_parquet_metadata <- function(data,metadata){
 #' the GEOMETRY column type and comes with the geometry when collecting via `collect_parquet`.
 #'
 #' @param x URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)
-#' parquet files, a vector of these, or a lazy DuckDB table from `parquet_tbl`. Paths need the same
+#' parquet files, a vector of these, a lazy DuckDB table from `parquet_tbl`, or data collected with
+#' `collect_parquet`, which carries the metadata in its `metadata` attribute. Paths need the same
 #' credentials as `parquet_tbl`.
-#' @return a named list of the metadata entries, empty if the files have none
+#' @return a named list of the metadata entries, empty if the files have none (or the data was collected
+#' without attaching it)
 #' @export
 parquet_metadata <- function(x) UseMethod("parquet_metadata")
 
@@ -105,6 +107,13 @@ parquet_metadata.tbl_lazy <- function(x) {
 
 #' @rdname parquet_metadata
 #' @export
+parquet_metadata.data.frame <- function(x) {
+  metadata <- attr(x,"metadata")
+  if (is.null(metadata)) list() else metadata
+}
+
+#' @rdname parquet_metadata
+#' @export
 parquet_metadata.default <- function(x) {
-  stop("x has to be a path, a vector of paths or a lazy DuckDB table from parquet_tbl.")
+  stop("x has to be a path, a vector of paths, a lazy DuckDB table from parquet_tbl or data collected with collect_parquet.")
 }

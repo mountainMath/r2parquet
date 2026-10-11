@@ -56,6 +56,9 @@ test_that("collect_parquet attaches metadata and labels, also after dplyr verbs"
   expect_equal(attr(result,"metadata")$source,"s")
   expect_equal(attr(result$id,"label"),"Identifier")
   expect_equal(attr(result$value,"label"),"Value")
+  # collected data carries the metadata, sf results included
+  expect_equal(parquet_metadata(result),parquet_metadata(tbl))
+  expect_equal(parquet_metadata(data.frame(a=1)),list())
   filtered <- collect_parquet(dplyr::select(dplyr::filter(tbl,value>1),id))
   expect_equal(nrow(filtered),2)
   expect_equal(attr(filtered,"metadata")$source,"s")
@@ -63,6 +66,7 @@ test_that("collect_parquet attaches metadata and labels, also after dplyr verbs"
   plain <- collect_parquet(tbl,attach_metadata=FALSE)
   expect_null(attr(plain,"metadata"))
   expect_null(attr(plain$id,"label"))
+  expect_equal(parquet_metadata(plain),list())
   # lazy tables not from parquet_tbl have no metadata
   other <- dplyr::tbl(dbplyr::remote_con(tbl),dplyr::sql("SELECT 1 AS a"))
   expect_null(attr(collect_parquet(other),"metadata"))
