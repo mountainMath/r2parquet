@@ -443,6 +443,7 @@ presigned_url <- function(path,expires=3600,method=c("GET","HEAD","PUT")) {
 
 # split r2://bucket/path into bucket and path
 r2_split_path <- function(path){
+  if (!is.character(path) || length(path)!=1) stop("Expected a single R2 path, got ",length(path),".")
   parts <- regmatches(path,regexec("^r2://([^/]+)/?(.*)$",path))[[1]]
   if (length(parts)!=3) stop("R2 paths have to be of the form r2://bucket/path, got ",path,".")
   list(bucket=parts[2],path=sub("^/+","",parts[3]))

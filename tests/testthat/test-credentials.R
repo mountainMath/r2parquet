@@ -16,6 +16,7 @@ test_that("r2 paths get split into bucket and path", {
   expect_equal(r2parquet:::r2_split_path("r2://bucket"),list(bucket="bucket",path=""))
   expect_equal(r2parquet:::r2_split_path("r2://bucket//data/"),list(bucket="bucket",path="data/"))
   expect_error(r2parquet:::r2_split_path("r2:///data"),"r2://bucket/path")
+  expect_error(r2parquet:::r2_split_path(c("r2://bucket/a.parquet","r2://bucket/b.parquet")),"single R2 path")
 })
 
 test_that("arrow and polars engines can't mix R2 with other paths", {
