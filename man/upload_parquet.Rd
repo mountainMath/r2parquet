@@ -35,6 +35,8 @@ permission in the `R2_API_TOKEN` environment variable, see `create_r2_bucket`, a
 Directory uploads write a manifest, a `_manifest.json` file in the destination directory listing the parquet
 files below it with their size, etag and modification time, unless `manifest` is `FALSE`. The manifest lets
 `cache_parquet` and `parquet_tbl(cache = TRUE)` cache the directory from a public URL, where the files can't be
-listed. Uploading a single file updates the manifest of its directory if there is one. `write_manifest`
-writes manifests for directories uploaded earlier.
+listed. Since a manifest lists all parquet files below its directory, uploads also update the existing
+manifests of the directories above the destination, so that uploading a single file or a new partition into
+a dataset keeps the dataset's manifest current. `write_manifest` writes manifests for directories uploaded
+earlier.
 }

@@ -286,10 +286,22 @@ r2_dirname <- function(r2_path){
   ifelse(grepl("/",r2_path,fixed=TRUE),sub("/[^/]*$","",r2_path),"")
 }
 
+# the directories above a key or directory, nearest first, ending with "" for the bucket itself
+r2_ancestors <- function(r2_path){
+  ancestors <- character()
+  while (r2_path!="") {
+    r2_path <- r2_dirname(r2_path)
+    ancestors <- c(ancestors,r2_path)
+  }
+  ancestors
+}
+
 # write the manifest listing the parquet files below a directory, or remove it if no parquet files are left.
-# Without create only an existing manifest gets updated. Returns the key of the manifest if it changed.
+# Without create only an existing manifest gets updated, checked with a HEAD request first since listing the
+# directory, or the whole bucket for "", costs more. Returns the key of the manifest if it changed.
 r2_update_manifest <- function(r2_bucket,r2_dir,create=FALSE){
   key <- r2_manifest_key(r2_dir)
+  if (!create && !r2_object_exists(r2_bucket,key)) return(NULL)
   objects <- r2_objects(r2_bucket,r2_dir)
   exists <- key %in% objects$key
   if (!create && !exists) return(NULL)
@@ -303,9 +315,17 @@ r2_update_manifest <- function(r2_bucket,r2_dir,create=FALSE){
   key
 }
 
-# upload a local parquet file or a directory of parquet files, maintaining the manifest of the directory:
-# directory uploads create one if manifest is TRUE, otherwise an existing manifest gets updated.
-# Returns the uploaded keys and the key of the manifest if it changed.
+# update the manifests of the directories among r2_dirs that have one, returns the keys of the manifests that changed
+r2_update_manifests <- function(r2_bucket,r2_dirs){
+  manifests <- character()
+  for (r2_dir in unique(r2_dirs)) manifests <- c(manifests,r2_update_manifest(r2_bucket,r2_dir))
+  manifests
+}
+
+# upload a local parquet file or a directory of parquet files, maintaining the manifests: directory uploads
+# create one for the directory if manifest is TRUE, otherwise an existing one gets updated, and the manifests of
+# the directories above get updated where they exist, since a manifest lists all parquet files below its
+# directory. Returns the uploaded keys and the keys of the manifests that changed.
 r2_upload <- function(path,r2_bucket,r2_path,manifest=TRUE){
   if (dir.exists(path)) {
     files <- dir(path,"\\.parquet$",recursive=TRUE)
@@ -327,7 +347,8 @@ r2_upload <- function(path,r2_bucket,r2_path,manifest=TRUE){
   for (i in seq_along(files)) {
     r2_put_object(r2_bucket,r2_paths[i],files[i])
   }
-  list(files=r2_paths,manifest=r2_update_manifest(r2_bucket,r2_dir,create=manifest))
+  manifests <- c(r2_update_manifest(r2_bucket,r2_dir,create=manifest),r2_update_manifests(r2_bucket,r2_ancestors(r2_dir)))
+  list(files=r2_paths,manifests=manifests)
 }
 
 # objects in the bucket whose key starts with prefix, with size in bytes, modification time and etag, via the
@@ -436,8 +457,10 @@ create_r2_bucket <- function(r2_bucket,public=FALSE,custom_domain=NULL) {
 #' Directory uploads write a manifest, a `_manifest.json` file in the destination directory listing the parquet
 #' files below it with their size, etag and modification time, unless `manifest` is `FALSE`. The manifest lets
 #' `cache_parquet` and `parquet_tbl(cache = TRUE)` cache the directory from a public URL, where the files can't be
-#' listed. Uploading a single file updates the manifest of its directory if there is one. `write_manifest`
-#' writes manifests for directories uploaded earlier.
+#' listed. Since a manifest lists all parquet files below its directory, uploads also update the existing
+#' manifests of the directories above the destination, so that uploading a single file or a new partition into
+#' a dataset keeps the dataset's manifest current. `write_manifest` writes manifests for directories uploaded
+#' earlier.
 #'
 #' @param path path to local parquet file or directory with (partitioned) parquet files
 #' @param destination destination on R2 as `r2://bucket/path`. If `path` is a file and `destination` ends with a slash (`/`)
@@ -452,7 +475,7 @@ upload_parquet <- function(path,destination,purge_cache=TRUE,manifest=TRUE) {
   destination <- r2_split_path(destination)
   r2_bucket <- destination$bucket
   uploaded <- r2_upload(path,r2_bucket,destination$path,manifest=manifest)
-  if (purge_cache) r2_purge_cache_after_change(r2_bucket,c(uploaded$files,uploaded$manifest))
+  if (purge_cache) r2_purge_cache_after_change(r2_bucket,c(uploaded$files,uploaded$manifests))
   invisible(paste0("r2://",r2_bucket,"/",uploaded$files))
 }
 
@@ -490,8 +513,9 @@ write_manifest <- function(path,purge_cache=TRUE) {
 #' @description
 #' Removes parquet files, or all parquet files in directories of (partitioned) parquet files, together with the
 #' manifests (`_manifest.json`, see `upload_parquet`) below the directories. Other files in the directories are
-#' left in place. Removing single files updates the manifest of their directory if there is one. Removed files
-#' can't be recovered.
+#' left in place. The existing manifests of the directories above the removed files and directories get
+#' updated, since a manifest lists all parquet files below its directory, so removing a file or a partition
+#' from a dataset keeps the dataset's manifest current. Removed files can't be recovered.
 #' Expects the R2 account id and the access key id and secret access key
 #' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
 #' environment variables.
@@ -514,10 +538,10 @@ remove_parquet <- function(path,purge_cache=TRUE) {
     if (r2_path=="") stop("Please specify the path of the parquet file or directory to remove in R2 bucket ",r2_bucket,".")
     objects <- r2_objects(r2_bucket,r2_path)
     manifests <- character()
-    directories <- character()
+    # the manifests above the removed path list its files, the ones below a directory go with it
+    directories <- r2_ancestors(r2_path)
     if (r2_path %in% objects$key) {
       r2_paths <- r2_path
-      directories <- r2_dirname(r2_path)
     } else if (nrow(objects)>0) {
       r2_paths <- objects$key[grepl("\\.parquet$",objects$key)]
       if (length(r2_paths)==0) stop(paste0("No parquet files found in ",r2_path," in R2 bucket ",r2_bucket,"."))
@@ -534,9 +558,9 @@ remove_parquet <- function(path,purge_cache=TRUE) {
     r2_paths <- unique(unlist(lapply(in_bucket,`[[`,"paths")))
     manifests <- unique(unlist(lapply(in_bucket,`[[`,"manifests")))
     r2_delete_objects(r2_bucket,c(r2_paths,manifests))
-    # manifests of the directories single files were removed from, unless the directory itself went
-    directories <- setdiff(unique(unlist(lapply(in_bucket,`[[`,"directories"))),r2_dirname(manifests))
-    for (r2_dir in directories) manifests <- c(manifests,r2_update_manifest(r2_bucket,r2_dir))
+    # manifests of the directories above the removed paths, unless they went with a removed directory
+    directories <- setdiff(unlist(lapply(in_bucket,`[[`,"directories")),r2_dirname(manifests))
+    manifests <- c(manifests,r2_update_manifests(r2_bucket,directories))
     if (purge_cache) r2_purge_cache_after_change(r2_bucket,c(r2_paths,manifests))
     message(paste0("Removed ",length(r2_paths)," file",if (length(r2_paths)>1) "s" else ""," from R2 bucket ",r2_bucket,"."))
     removed <- c(removed,paste0("r2://",r2_bucket,"/",r2_paths))

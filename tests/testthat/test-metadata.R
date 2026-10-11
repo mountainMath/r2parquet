@@ -14,9 +14,11 @@ test_that("metadata round trips through the parquet footer", {
   path <- withr::local_tempfile(fileext=".parquet")
   metadata <- list(source="https://example.org/data",license="OGL-Canada-2.0",notes=c("first","second"),
                    columns=list(id=list(label="Identifier",description="Three digit code"),value="Overridden"),
-                   skipped=NULL)
-  data_to_parquet(df,path,sort_by="id",metadata=metadata)
+                   skipped=NULL,missing=NA)
+  # NULL and NA entries get dropped with a warning instead of ending up as strings in the footer
+  expect_warning(data_to_parquet(df,path,sort_by="id",metadata=metadata),"Dropping the metadata entries skipped, missing")
   result <- parquet_metadata(path)
+  expect_false("missing" %in% names(result))
   expect_equal(result$source,"https://example.org/data")
   expect_equal(result$license,"OGL-Canada-2.0")
   expect_equal(result$notes,c("first","second"))

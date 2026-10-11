@@ -40,8 +40,8 @@
 #' parquet file, `parquet_tbl` tells files and directories apart. Stale files get removed before the new ones
 #' are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
 #' get purged from the Cloudflare cache like in `upload_parquet`, unless `purge_cache` is `FALSE`. Partitioned
-#' writes to R2 write a manifest of the directory, and single files update the manifest of their directory
-#' if there is one, see `upload_parquet`.
+#' writes to R2 write a manifest of the directory, and all writes update the existing manifests of the
+#' directories above the destination, see `upload_parquet`.
 #'
 #' `metadata` gets written into the footer of the parquet files, where other tools can read it too (DuckDB's
 #' `parquet_kv_metadata`, arrow's schema metadata), and `parquet_metadata` reads it back. `collect_parquet`
@@ -50,7 +50,8 @@
 #' `description`, e.g. `columns = list(pop = list(label = "Population", description = "..."))`; a string is
 #' short for the label. Columns of data frames with a `label` attribute, as set by the haven or labelled
 #' packages, get their label added automatically. Parquet footers hold strings, so single values get written
-#' as they are and anything else, like `columns`, as JSON. Changing the metadata means writing the data again.
+#' as they are and anything else, like `columns`, as JSON; `NULL` and `NA` entries get dropped with a warning.
+#' Changing the metadata means writing the data again.
 #'
 #' @param data data frame, sf object or lazy DuckDB table
 #' @param path local path or `r2://bucket/path` of the parquet file to write, or of the directory if `partition_by`
@@ -215,7 +216,7 @@ r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_grou
   message("Uploading ",format(structure(sum(file.size(files)),class="object_size"),units="auto",standard="SI"),
           " in ",length(files)," parquet file",if (length(files)>1) "s"," to ",r2_url,".")
   uploaded <- r2_upload(local_path,r2_bucket,r2_path)
-  if (purge_cache) r2_purge_cache_after_change(r2_bucket,union(stale,c(uploaded$files,uploaded$manifest)))
+  if (purge_cache) r2_purge_cache_after_change(r2_bucket,union(stale,c(uploaded$files,uploaded$manifests)))
   invisible(structure(r2_url,files=paste0("r2://",r2_bucket,"/",uploaded$files)))
 }
 

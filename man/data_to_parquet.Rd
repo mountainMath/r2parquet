@@ -82,8 +82,8 @@ environment variables. A directory of partitioned files may be named like a
 parquet file, `parquet_tbl` tells files and directories apart. Stale files get removed before the new ones
 are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
 get purged from the Cloudflare cache like in `upload_parquet`, unless `purge_cache` is `FALSE`. Partitioned
-writes to R2 write a manifest of the directory, and single files update the manifest of their directory
-if there is one, see `upload_parquet`.
+writes to R2 write a manifest of the directory, and all writes update the existing manifests of the
+directories above the destination, see `upload_parquet`.
 
 `metadata` gets written into the footer of the parquet files, where other tools can read it too (DuckDB's
 `parquet_kv_metadata`, arrow's schema metadata), and `parquet_metadata` reads it back. `collect_parquet`
@@ -92,5 +92,6 @@ attaches it to the collected data, so for consistency use entries like `source` 
 `description`, e.g. `columns = list(pop = list(label = "Population", description = "..."))`; a string is
 short for the label. Columns of data frames with a `label` attribute, as set by the haven or labelled
 packages, get their label added automatically. Parquet footers hold strings, so single values get written
-as they are and anything else, like `columns`, as JSON. Changing the metadata means writing the data again.
+as they are and anything else, like `columns`, as JSON; `NULL` and `NA` entries get dropped with a warning.
+Changing the metadata means writing the data again.
 }

@@ -230,6 +230,13 @@ test_that("cache checks are remembered per copy and forgotten with the paths abo
   expect_equal(ls(checks),file.path(cache,"r2","other","bucket","census","data"))
   expect_null(clear_cache_checks())
   expect_length(ls(checks),0)
+  # a relative cache directory like .cache gives keys starting with a dot, which ls() hides by default
+  checks[[".cache/r2/acct/bucket/census/data"]] <- TRUE
+  r2parquet:::forget_checks(".cache/r2/acct/bucket/census")
+  expect_length(ls(checks,all.names=TRUE),0)
+  checks[[".cache/r2/acct/bucket/census/data"]] <- TRUE
+  clear_cache_checks()
+  expect_length(ls(checks,all.names=TRUE),0)
 })
 
 test_that("cache='offline' reads the copies without contacting the remote, current or not", {

@@ -22,7 +22,8 @@ cache_checks <- new.env(parent=emptyenv())
 # drop the checks of a local path, of the files below it and of the directories above it, since any of these may
 # have changed when the path was updated or removed
 forget_checks <- function(local){
-  for (checked in ls(cache_checks)) {
+  # all.names, since a relative cache directory like .cache gives keys that ls() would otherwise hide
+  for (checked in ls(cache_checks,all.names=TRUE)) {
     if (checked==local || startsWith(checked,paste0(local,"/")) || startsWith(local,paste0(checked,"/"))) rm(list=checked,envir=cache_checks)
   }
 }
@@ -392,7 +393,7 @@ cache_lookup <- function(path){
 #' @return (invisibly) `NULL`
 #' @export
 clear_cache_checks <- function(){
-  rm(list=ls(cache_checks),envir=cache_checks)
+  rm(list=ls(cache_checks,all.names=TRUE),envir=cache_checks)
   invisible(NULL)
 }
 

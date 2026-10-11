@@ -9,7 +9,13 @@ metadata_strings <- function(metadata,columns,labels=NULL){
     stop("metadata has to be a named list.")
   }
   if ("geo" %in% names(metadata)) stop("The metadata entry geo is reserved for the GeoParquet metadata.")
-  metadata <- metadata[!vapply(metadata,is.null,logical(1))]
+  # NULL and NA entries have nothing to write, a NA would end up as the string "NULL" in the footer
+  empty <- vapply(metadata,function(value)is.null(value) || (is.atomic(value) && length(value)==1 && is.na(value)),logical(1))
+  if (any(empty)) {
+    warning(paste0("Dropping the metadata entr",if (sum(empty)>1) "ies " else "y ",paste0(names(metadata)[empty],collapse=", "),
+                   " since ",if (sum(empty)>1) "they are" else "it is"," NULL or NA."),call.=FALSE)
+    metadata <- metadata[!empty]
+  }
   if (!is.null(metadata$columns)) {
     if (!is.list(metadata$columns) || is.null(names(metadata$columns)) || any(names(metadata$columns)=="")) {
       stop("metadata$columns has to be a named list with one entry per column.")
