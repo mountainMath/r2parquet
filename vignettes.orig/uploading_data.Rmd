@@ -102,7 +102,7 @@ con <- parquet_tbl("r2://test/census/2021/lcma000b21f_e.parquet")
 
 data <- con |>
   filter(CMAUID == "462") |>
-  collect_sf()
+  collect_parquet()
 
 ggplot(data) +
   geom_sf()

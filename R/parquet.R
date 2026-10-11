@@ -50,6 +50,20 @@ r2_parquet_url <- function(path){
   },character(1),USE.NAMES=FALSE)
 }
 
+# paths resolved to files or glob patterns DuckDB can read, with the httpfs extension and R2 credentials in place
+duckdb_parquet_paths <- function(con,path){
+  is_r2 <- startsWith(path,"r2://")
+  is_url <- !is_r2 & grepl("^[a-z0-9]+://",path)
+  path[is_r2] <- r2_parquet_url(path[is_r2])
+  path[!is_r2 & !is_url] <- local_parquet_glob(path[!is_r2 & !is_url])
+  if (any(is_r2 | is_url)) {
+    DBI::dbExecute(con,"INSTALL httpfs")
+    DBI::dbExecute(con,"LOAD httpfs")
+  }
+  if (any(is_r2)) duckdb_r2_secret(con)
+  path
+}
+
 #' lazy table to query parquet files at URLs, on R2 or at local paths
 #'
 #' @description
@@ -73,7 +87,8 @@ r2_parquet_url <- function(path){
 #'   so that tables from several calls can be joined. `dplyr` verbs get translated to SQL. If the table has
 #'   GEOMETRY columns, like GeoParquet files written by `data_to_parquet`, the `spatial` extension gets loaded
 #'   so that spatial functions like `ST_Area` can be used in queries. Use `filter_spatial` to filter by location
-#'   and `collect_sf` to collect the result as an sf object, both only work with this engine.
+#'   and `collect_parquet` to collect the result with its metadata attached, as an sf object if it has geometry,
+#'   both only work with this engine. `parquet_metadata` reads the metadata of the table's files.
 #' * `"arrow"` returns an arrow `Dataset` that can be queried with `dplyr` verbs. Needs the arrow package, and
 #'   can't read URLs, only paths on R2 and local paths. As of arrow 25 the GEOMETRY columns of GeoParquet files
 #'   written by `data_to_parquet` come back as plain binary (WKB) columns without their crs.
@@ -98,18 +113,14 @@ parquet_tbl <- function(path,engine=c("duckdb","arrow","polars"),hive_partitioni
   }
   if (engine=="duckdb") {
     con <- parquet_duckdb_connection()
-    path[is_r2] <- r2_parquet_url(path[is_r2])
-    path[!is_r2 & !is_url] <- local_parquet_glob(path[!is_r2 & !is_url])
-    if (any(is_r2 | is_url)) {
-      DBI::dbExecute(con,"INSTALL httpfs")
-      DBI::dbExecute(con,"LOAD httpfs")
-    }
-    if (any(is_r2)) duckdb_r2_secret(con)
+    path <- duckdb_parquet_paths(con,path)
     tbl <- duckdb_parquet_tbl(con,path,hive_partitioning=hive_partitioning)
     if (length(duckdb_geometry_columns(tbl))>0) {
       DBI::dbExecute(con,"INSTALL spatial")
       DBI::dbExecute(con,"LOAD spatial")
     }
+    # for parquet_metadata and collect_parquet, dbplyr keeps attributes through its verbs
+    attr(tbl,"r2parquet_paths") <- path
     tbl
   } else if (engine=="arrow") {
     if (!requireNamespace("arrow",quietly=TRUE)) stop("The arrow package is required for the arrow engine.")

@@ -42,6 +42,15 @@
 #' are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
 #' get purged from the Cloudflare cache like in `upload_parquet`.
 #'
+#' `metadata` gets written into the footer of the parquet files, where other tools can read it too (DuckDB's
+#' `parquet_kv_metadata`, arrow's schema metadata), and `parquet_metadata` reads it back. `collect_parquet`
+#' attaches it to the collected data, so for consistency use entries like `source` (URL of the original data),
+#' `license`, `notes` and `description`, and a `columns` entry with one entry per column holding its `label` and
+#' `description`, e.g. `columns = list(pop = list(label = "Population", description = "..."))`; a string is
+#' short for the label. Columns of data frames with a `label` attribute, as set by the haven or labelled
+#' packages, get their label added automatically. Parquet footers hold strings, so single values get written
+#' as they are and anything else, like `columns`, as JSON. Changing the metadata means writing the data again.
+#'
 #' @param data data frame, sf object or lazy DuckDB table
 #' @param path local path or `r2://bucket/path` of the parquet file to write, or of the directory if `partition_by`
 #' is given. A parquet file on R2 has to end in `.parquet`. Existing files at that path get overwritten.
@@ -52,16 +61,18 @@
 #' existing directory at `path` get removed first, so that no partitions from earlier writes remain, also if the
 #' partition columns changed. Other files below `path` are kept. With `FALSE` written files replace files with the
 #' same path and other files are kept, e.g. to add partitions.
+#' @param metadata optional named list of metadata to write into the parquet footer, see description. The entry
+#' `geo` is reserved for the GeoParquet metadata.
 #' @return (invisibly) `path` for local paths, the uploaded files as `r2://bucket/path` for R2
 #' @export
-data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE) {
+data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE,metadata=NULL) {
   if (!is.character(path) || length(path)!=1) stop("Expected a single path, got ",length(path),".")
   write <- if (startsWith(path,"r2://")) r2_data_to_parquet else local_data_to_parquet
-  write(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,overwrite=overwrite)
+  write(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,overwrite=overwrite,metadata=metadata)
 }
 
 # write data to a local parquet file or directory of partitioned files
-local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE) {
+local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE,metadata=NULL) {
   if (row_group_size<2048) warning("DuckDB writes row groups of at least 2048 rows, row_group_size has no effect below that.",call.=FALSE)
   if (inherits(data,"tbl_lazy")) {
     if (!inherits(data,"tbl_duckdb_connection")) stop("Lazy tables have to be DuckDB tables.")
@@ -109,9 +120,15 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
   }
   missing_columns <- setdiff(c(sort_by,partition_by),columns)
   if (length(missing_columns)>0) stop(paste0("Columns ",paste0(missing_columns,collapse=", ")," not found in data."))
+  labels <- if (is.data.frame(data)) lapply(data,attr,"label")
+  metadata <- metadata_strings(metadata,columns,labels)
 
   order <- if (length(sort_by)>0) DBI::dbQuoteIdentifier(con,sort_by)
   options <- c("FORMAT parquet","COMPRESSION zstd",paste0("ROW_GROUP_SIZE ",as.integer(row_group_size)))
+  if (length(metadata)>0) {
+    options <- c(options,paste0("KV_METADATA {",paste0(DBI::dbQuoteString(con,names(metadata)),": ",
+                                                       DBI::dbQuoteString(con,unname(metadata)),collapse=", "),"}"))
+  }
   if (!is.null(geometry_column)) {
     DBI::dbExecute(con,"INSTALL spatial")
     DBI::dbExecute(con,"LOAD spatial")
@@ -150,7 +167,7 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
 }
 
 # write data to parquet in a temporary directory and upload it to R2
-r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE) {
+r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE,metadata=NULL) {
   if (!requireNamespace("arrow",quietly=TRUE)) {
     stop("The arrow package is required to upload to R2.")
   }
@@ -164,7 +181,7 @@ r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_grou
   dir.create(tmp_dir)
   on.exit(unlink(tmp_dir,recursive=TRUE))
   local_path <- local_data_to_parquet(data,file.path(tmp_dir,basename(r2_path)),sort_by=sort_by,
-                                      partition_by=partition_by,row_group_size=row_group_size)
+                                      partition_by=partition_by,row_group_size=row_group_size,metadata=metadata)
   stale <- character()
   if (overwrite) {
     filesystem <- r2_filesystem()

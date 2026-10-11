@@ -44,7 +44,8 @@ The `engine` determines what gets returned:
   so that tables from several calls can be joined. `dplyr` verbs get translated to SQL. If the table has
   GEOMETRY columns, like GeoParquet files written by `data_to_parquet`, the `spatial` extension gets loaded
   so that spatial functions like `ST_Area` can be used in queries. Use `filter_spatial` to filter by location
-  and `collect_sf` to collect the result as an sf object, both only work with this engine.
+  and `collect_parquet` to collect the result with its metadata attached, as an sf object if it has geometry,
+  both only work with this engine. `parquet_metadata` reads the metadata of the table's files.
 * `"arrow"` returns an arrow `Dataset` that can be queried with `dplyr` verbs. Needs the arrow package, and
   can't read URLs, only paths on R2 and local paths. As of arrow 25 the GEOMETRY columns of GeoParquet files
   written by `data_to_parquet` come back as plain binary (WKB) columns without their crs.

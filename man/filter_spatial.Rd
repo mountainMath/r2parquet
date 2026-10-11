@@ -11,7 +11,8 @@ filter_spatial(tbl, y, geometry_column = NULL, exact = TRUE)
 
 \item{y}{sf, sfc or bbox object to filter by}
 
-\item{geometry_column}{name of the geometry column, defaults to the first GEOMETRY column of `tbl`}
+\item{geometry_column}{name of the geometry column, defaults to the column named `geometry`, as in files
+written by `data_to_parquet`, or else the first GEOMETRY column of `tbl`}
 
 \item{exact}{if `TRUE`, the default, keep rows whose geometry intersects `y`, otherwise keep rows whose
 bounding box intersects the bounding box of `y`}

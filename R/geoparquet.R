@@ -20,10 +20,13 @@ duckdb_geometry_columns <- function(tbl){
   stats::setNames(crs,columns$column_name)
 }
 
-# pick the geometry column of a lazy DuckDB table, the first one if not specified
+# pick the geometry column of a lazy DuckDB table, if not specified the one named geometry as in files
+# written by data_to_parquet, otherwise the first one
 duckdb_geometry_column <- function(tbl,geometry_column=NULL,geometry_columns=duckdb_geometry_columns(tbl)){
   if (length(geometry_columns)==0) stop("The table has no GEOMETRY column.")
-  if (is.null(geometry_column)) geometry_column <- names(geometry_columns)[1]
+  if (is.null(geometry_column)) {
+    geometry_column <- if ("geometry" %in% names(geometry_columns)) "geometry" else names(geometry_columns)[1]
+  }
   if (!(geometry_column %in% names(geometry_columns))) {
     stop(paste0("Column ",geometry_column," is not a GEOMETRY column, geometry columns are ",
                 paste0(names(geometry_columns),collapse=", "),"."))
@@ -61,7 +64,8 @@ make_valid_geometries <- function(geometry){
 #'
 #' @param tbl lazy DuckDB table, e.g. from `parquet_tbl`
 #' @param y sf, sfc or bbox object to filter by
-#' @param geometry_column name of the geometry column, defaults to the first GEOMETRY column of `tbl`
+#' @param geometry_column name of the geometry column, defaults to the column named `geometry`, as in files
+#' written by `data_to_parquet`, or else the first GEOMETRY column of `tbl`
 #' @param exact if `TRUE`, the default, keep rows whose geometry intersects `y`, otherwise keep rows whose
 #' bounding box intersects the bounding box of `y`
 #' @return a lazy `dplyr` table
@@ -90,21 +94,35 @@ filter_spatial <- function(tbl,y,geometry_column=NULL,exact=TRUE) {
   dplyr::filter(tbl,dplyr::sql(paste0(conditions,collapse=" AND ")))
 }
 
-#' collect a lazy DuckDB table of GeoParquet data into an sf object
+#' collect a lazy DuckDB table of parquet data with its metadata
 #'
 #' @description
-#' Executes the query and converts the GEOMETRY columns to sf geometry columns, keeping their crs.
+#' Executes the query and returns the result as a tibble, or as an sf object if the table has GEOMETRY columns,
+#' like GeoParquet files written by `data_to_parquet`, converting them to sf geometry columns with their crs.
+#' The active geometry column is the one named `geometry`, as `data_to_parquet` writes it, or else the first
+#' GEOMETRY column, use `sf::st_set_geometry` to switch to another one.
+#'
+#' For tables from `parquet_tbl` the metadata of the parquet files (see `parquet_metadata`) gets attached
+#' to the result: the whole list as the `metadata` attribute, and the `label` entries of `columns` as `label`
+#' attributes of the columns, as the haven and labelled packages use them. The files are looked up through
+#' the table, so the metadata follows the table through `dplyr` verbs and is the metadata of the left-hand
+#' table of joins.
 #'
 #' @param tbl lazy DuckDB table, e.g. from `parquet_tbl` or `filter_spatial`
-#' @param geometry_column name of the active geometry column, defaults to the first GEOMETRY column of `tbl`
-#' @return an sf object
+#' @param metadata if `TRUE`, the default, attach the metadata of the parquet files as attributes
+#' @return a tibble, or an sf object if the table has GEOMETRY columns
 #' @export
-collect_sf <- function(tbl,geometry_column=NULL) {
+collect_parquet <- function(tbl,metadata=TRUE) {
   geometry_columns <- duckdb_geometry_columns(tbl)
-  geometry_column <- duckdb_geometry_column(tbl,geometry_column,geometry_columns)$name
   data <- dplyr::collect(tbl)
   for (column in names(geometry_columns)) {
     data[[column]] <- sf::st_as_sfc(structure(data[[column]],class="WKB"),crs=geometry_columns[[column]])
   }
-  sf::st_as_sf(data,sf_column_name=geometry_column)
+  if (length(geometry_columns)>0) {
+    data <- sf::st_as_sf(data,sf_column_name=duckdb_geometry_column(tbl,geometry_columns=geometry_columns)$name)
+  }
+  if (isTRUE(metadata) && !is.null(attr(tbl,"r2parquet_paths"))) {
+    data <- attach_parquet_metadata(data,duckdb_parquet_metadata(dbplyr::remote_con(tbl),attr(tbl,"r2parquet_paths")))
+  }
+  data
 }

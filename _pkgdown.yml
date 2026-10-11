@@ -10,7 +10,8 @@ reference:
   contents:
   - parquet_tbl
   - filter_spatial
-  - collect_sf
+  - collect_parquet
+  - parquet_metadata
 - title: Uploading and managing data on R2
   desc: Need the R2 credentials (see the README), except `data_to_parquet()` for local paths.
 - subtitle: Buckets

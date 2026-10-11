@@ -47,7 +47,7 @@ This only reads the metadata, the file carries several geographic identifiers as
 ```{r vancouver-csd}
 data_csd <- db_table |>
   filter(CSDUID=="5915022") |>
-  collect_sf()
+  collect_parquet()
 
 ggplot(data_csd) +
   geom_sf()
@@ -58,7 +58,7 @@ Similarly, we can fetch the data for Metro Vancouver. Both these queries run in 
 ```{r vancouver-cma}
 data_cma <- db_table |>
   filter(CMAUID=="933") |>
-  collect_sf()
+  collect_parquet()
 
 ggplot(data_cma) +
   geom_sf()
@@ -111,7 +111,7 @@ mask <- st_point(c(-123.108, 49.249)) |>
 
 data_mask <- db_table |>
   filter_spatial(mask) |>
-  collect_sf()
+  collect_parquet()
 
 data_mask |>
   st_set_agr("constant") |>

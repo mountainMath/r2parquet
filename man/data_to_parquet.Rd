@@ -10,7 +10,8 @@ data_to_parquet(
   sort_by = NULL,
   partition_by = NULL,
   row_group_size = 10000L,
-  overwrite = TRUE
+  overwrite = TRUE,
+  metadata = NULL
 )
 }
 \arguments{
@@ -29,6 +30,9 @@ is given. A parquet file on R2 has to end in `.parquet`. Existing files at that 
 existing directory at `path` get removed first, so that no partitions from earlier writes remain, also if the
 partition columns changed. Other files below `path` are kept. With `FALSE` written files replace files with the
 same path and other files are kept, e.g. to add partitions.}
+
+\item{metadata}{optional named list of metadata to write into the parquet footer, see description. The entry
+`geo` is reserved for the GeoParquet metadata.}
 }
 \value{
 (invisibly) `path` for local paths, the uploaded files as `r2://bucket/path` for R2
@@ -69,4 +73,13 @@ environment variables, and needs the arrow package. A directory of partitioned f
 parquet file, `parquet_tbl` tells files and directories apart. Stale files get removed before the new ones
 are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
 get purged from the Cloudflare cache like in `upload_parquet`.
+
+`metadata` gets written into the footer of the parquet files, where other tools can read it too (DuckDB's
+`parquet_kv_metadata`, arrow's schema metadata), and `parquet_metadata` reads it back. `collect_parquet`
+attaches it to the collected data, so for consistency use entries like `source` (URL of the original data),
+`license`, `notes` and `description`, and a `columns` entry with one entry per column holding its `label` and
+`description`, e.g. `columns = list(pop = list(label = "Population", description = "..."))`; a string is
+short for the label. Columns of data frames with a `label` attribute, as set by the haven or labelled
+packages, get their label added automatically. Parquet footers hold strings, so single values get written
+as they are and anything else, like `columns`, as JSON. Changing the metadata means writing the data again.
 }
