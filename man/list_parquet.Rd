@@ -20,12 +20,12 @@ list_parquet(x)
 parquet files, a vector of these, or a lazy DuckDB table from `parquet_tbl`}
 }
 \value{
-a tibble with one row per parquet file and the columns `path` (`r2://bucket/path`, URL or local
-path), `size` in bytes, `modified`, the modification time in UTC, `etag`, the etag of the file, which is
-the MD5 hash of its content for files uploaded by this package, `NA` for local files, and `cache`, the status
-of the file in the local cache directory of `cache_parquet`: `"not cached"`, `"current"` when the cached copy
-has the etag of the file, `"stale"` when it does not, and `NA` for local files and where the etag of the
-file is unknown
+a tibble with one row per parquet file and the columns `file`, the file name, `size`, formatted for
+reading like `2.5 kB`, `sizeRaw`, the size in bytes, `modified`, the modification time in UTC, `cache`, the
+status of the file in the local cache directory of `cache_parquet`: `"not cached"`, `"current"` when the
+cached copy has the etag of the file, `"stale"` when it does not, and `NA` for local files and where the
+etag of the file is unknown, `etag`, the etag of the file, which is the MD5 hash of its content for files
+uploaded by this package, `NA` for local files, and `path`, the `r2://bucket/path`, URL or local path
 }
 \description{
 Lists the parquet files at paths on R2, at URLs or at local paths with their size, modification time and

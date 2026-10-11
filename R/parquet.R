@@ -140,10 +140,18 @@ parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=FALSE) {
   tbl
 }
 
-# one row per parquet file with its size in bytes, modification time in UTC, etag and cache status
+# sizes in bytes formatted for reading, like 2.5 kB
+format_size <- function(size){
+  vapply(size,function(s)if (is.na(s)) NA_character_ else format(structure(s,class="object_size"),units="auto",standard="SI"),"")
+}
+
+# one row per parquet file with its name, size in bytes, modification time in UTC, cache status, etag and path
 parquet_files <- function(path,size=NA_real_,modified=NA_real_,etag=NA_character_,cache=NA_character_){
-  dplyr::tibble(path=as.character(path),size=as.numeric(size),modified=.POSIXct(as.numeric(modified),tz="UTC"),
-                etag=as.character(etag),cache=as.character(cache))
+  path <- as.character(path)
+  bytes <- as.numeric(size)
+  # tibble() lets later columns refer to earlier ones, so the bytes are not called size here
+  dplyr::tibble(file=basename(sub("[?#].*$","",path)),size=format_size(bytes),sizeRaw=bytes,
+                modified=.POSIXct(as.numeric(modified),tz="UTC"),cache=as.character(cache),etag=as.character(etag),path=path)
 }
 
 # the file at a URL with size and etag from its headers, or the files the manifest of a directory at the URL
@@ -174,12 +182,12 @@ local_parquet_files <- function(path){
 #'
 #' @param x `r2://bucket/path`, URL or local path of a parquet file or of a directory with (partitioned)
 #' parquet files, a vector of these, or a lazy DuckDB table from `parquet_tbl`
-#' @return a tibble with one row per parquet file and the columns `path` (`r2://bucket/path`, URL or local
-#' path), `size` in bytes, `modified`, the modification time in UTC, `etag`, the etag of the file, which is
-#' the MD5 hash of its content for files uploaded by this package, `NA` for local files, and `cache`, the status
-#' of the file in the local cache directory of `cache_parquet`: `"not cached"`, `"current"` when the cached copy
-#' has the etag of the file, `"stale"` when it does not, and `NA` for local files and where the etag of the
-#' file is unknown
+#' @return a tibble with one row per parquet file and the columns `file`, the file name, `size`, formatted for
+#' reading like `2.5 kB`, `sizeRaw`, the size in bytes, `modified`, the modification time in UTC, `cache`, the
+#' status of the file in the local cache directory of `cache_parquet`: `"not cached"`, `"current"` when the
+#' cached copy has the etag of the file, `"stale"` when it does not, and `NA` for local files and where the
+#' etag of the file is unknown, `etag`, the etag of the file, which is the MD5 hash of its content for files
+#' uploaded by this package, `NA` for local files, and `path`, the `r2://bucket/path`, URL or local path
 #' @export
 list_parquet <- function(x) UseMethod("list_parquet")
 
