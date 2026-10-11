@@ -29,7 +29,7 @@ R2_SECRET_ACCESS_KEY=...
 R2_API_TOKEN=...           # Cloudflare API token
 ```
 
-Restart R after editing `~/.Renviron`. Only what is used has to be set: someone who only uploads to an existing bucket without custom domain needs just the first three.
+`usethis::edit_r_environ()` opens the file for editing; restart R afterwards, the new values are only read on startup. Only what is used has to be set: someone who only uploads to an existing bucket without custom domain needs just the first three.
 
 ## Creating the API token
 

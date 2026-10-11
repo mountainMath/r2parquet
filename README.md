@@ -32,7 +32,7 @@ All of R2 is reached through DuckDB and signed https requests, there are no opti
 
 ## Credentials
 
-Set these environment variables, e.g. in `~/.Renviron`:
+Set these environment variables, e.g. in `~/.Renviron` (`usethis::edit_r_environ()` opens it, restart R afterwards):
 
 | Variable | Needed for |
 | --- | --- |

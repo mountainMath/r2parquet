@@ -21,7 +21,7 @@ library(r2parquet)
 Sys.setenv(R2PARQUET_CACHE_PATH = tempfile())
 ```
 
-The cache lives in the directory named by the `R2PARQUET_CACHE_PATH` environment variable, or in the user cache directory (`tools::R_user_dir("r2parquet", "cache")`) if that is not set. For this vignette we point it at a temporary directory. Cached files mirror their remote location, `r2://bucket/path` as `r2/<account id>/bucket/path` and URLs as `<scheme>/<host>/<path>`, so files from different sources don't collide and one cache directory can serve all projects. Set the environment variable in a project's `.Renviron` for a cache local to that project.
+The cache lives in the directory named by the `R2PARQUET_CACHE_PATH` environment variable, or in the user cache directory (`tools::R_user_dir("r2parquet", "cache")`) if that is not set. For this vignette we point it at a temporary directory. Cached files mirror their remote location, `r2://bucket/path` as `r2/<account id>/bucket/path` and URLs as `<scheme>/<host>/<path>`, so files from different sources don't collide and one cache directory can serve all projects. Set the environment variable in a project's `.Renviron` for a cache local to that project; `usethis::edit_r_environ("project")` creates and opens that file, and R has to be restarted to pick it up.
 
 To cache a dataset set `cache = TRUE` in `parquet_tbl()`, or cache it explicitly with `cache_parquet()`.
 

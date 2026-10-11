@@ -19,7 +19,7 @@ library(r2parquet)
 Sys.setenv(R2PARQUET_CACHE_PATH = tempfile())
 ```
 
-The cache lives in the directory named by the `R2PARQUET_CACHE_PATH` environment variable, or in the user cache directory (`tools::R_user_dir("r2parquet", "cache")`) if that is not set. For this vignette we point it at a temporary directory. Cached files mirror their remote location, `r2://bucket/path` as `r2/<account id>/bucket/path` and URLs as `<scheme>/<host>/<path>`, so files from different sources don't collide and one cache directory can serve all projects. Set the environment variable in a project's `.Renviron` for a cache local to that project.
+The cache lives in the directory named by the `R2PARQUET_CACHE_PATH` environment variable, or in the user cache directory (`tools::R_user_dir("r2parquet", "cache")`) if that is not set. For this vignette we point it at a temporary directory. Cached files mirror their remote location, `r2://bucket/path` as `r2/<account id>/bucket/path` and URLs as `<scheme>/<host>/<path>`, so files from different sources don't collide and one cache directory can serve all projects. Set the environment variable in a project's `.Renviron` for a cache local to that project; `usethis::edit_r_environ("project")` creates and opens that file, and R has to be restarted to pick it up.
 
 To cache a dataset set `cache = TRUE` in `parquet_tbl()`, or cache it explicitly with `cache_parquet()`.
 
@@ -28,7 +28,7 @@ To cache a dataset set `cache = TRUE` in `parquet_tbl()`, or cache it explicitly
 census_cma_url <- "https://data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet"
 
 geos_cma <- parquet_tbl(census_cma_url, cache = TRUE)
-#> Downloading 1 file (12.9 MB) to /var/folders/z4/gcjq2cd93p3bs5bgp8j2vv240000gp/T//RtmpMO8oVZ/filef073e83ac81/https/data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet.
+#> Downloading 1 file (12.9 MB) to /var/folders/z4/gcjq2cd93p3bs5bgp8j2vv240000gp/T//RtmpYwsuKG/file1026736e532e7/https/data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet.
 ```
 
 This downloads the file if the cache has no current copy and opens the table on the local file. The copy is kept current by its etag: every call with `cache = TRUE` checks the remote file and downloads it again when it changed. We can inspect the cache to see what is available locally.
