@@ -4,7 +4,7 @@
 \alias{parquet_tbl}
 \title{lazy table to query parquet files at URLs, on R2 or at local paths}
 \usage{
-parquet_tbl(path, hive_partitioning = TRUE, con = NULL, cache = FALSE)
+parquet_tbl(path, hive_partitioning = TRUE, con = NULL, cache = NULL)
 }
 \arguments{
 \item{path}{URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)
@@ -19,9 +19,12 @@ by all calls. Tables can only be joined when they are on the same connection, so
 join with data that lives there. The `httpfs` and `spatial` extensions get installed and loaded on it as
 needed, and the R2 credentials get registered as a secret.}
 
-\item{cache}{`FALSE`, the default, reads the remote files directly. `TRUE` reads local copies in the cache directory
-given by the `R2PARQUET_CACHE_PATH` environment variable, or the user cache directory if that is not set, and a path
-reads local copies in that directory, see `cache_parquet`.}
+\item{cache}{`NULL`, the default, reads the copies in the local cache directory where they exist and are
+current, with a warning for copies that are out of date, and the remote files otherwise. `TRUE` updates the
+copies first via `cache_parquet`, downloading the files on first use, and reads them. `FALSE` reads the remote
+files directly. `"offline"` reads the copies without checking them against the remote files, whether they are
+current or not, and fails for paths that have no copy. The cache directory is the one in the
+`R2PARQUET_CACHE_PATH` environment variable, or the user cache directory if that is not set.}
 }
 \value{
 a lazy `dplyr` table on DuckDB
@@ -50,8 +53,14 @@ the `spatial` extension gets loaded so that spatial functions like `ST_Area` can
 attached, as an sf object if it has geometry. `parquet_metadata` reads the metadata of the table's files
 and `list_parquet` lists the files.
 
-With `cache`, remote files get downloaded once into a local cache directory via `cache_parquet` and the table
-reads the local copies, for data that gets queried regularly. Each call checks the remote files and
-downloads what changed, and falls back to the cached copy with a warning when the remote can't be reached.
-Directories at public URLs can only be cached if they have a manifest, see `upload_parquet`.
+Remote files can be kept in a local cache directory via `cache_parquet`, for data that gets queried regularly,
+and the table then reads the local copies. By default (`cache = NULL`) a cached copy gets used if it is
+current, checked against the etags of the remote files, and the remote files get read otherwise, with a
+warning when the copy is out of date. Paths without a copy in the cache are read remotely without any
+request to check them, so the default costs nothing for them. `cache = TRUE` caches the files first, downloading what is
+new or changed, and `cache = FALSE` always reads the remote files. In both the default and `cache = TRUE`
+the cached copy gets used with a warning when the remote can't be reached, e.g. offline.
+`cache = "offline"` reads the cached copy as it is, without contacting the remote, for working without a
+network connection, or to compare the copy with the current remote files (`cache = FALSE`) before updating
+it. Directories at public URLs can only be cached if they have a manifest, see `upload_parquet`.
 }

@@ -21,6 +21,5 @@ the path of the copy, and `path`, the `r2://bucket/path` or URL it is a copy of
 Lists the parquet files that `cache_parquet` and `parquet_tbl(cache = TRUE)` downloaded into the cache
 directory, the one in the `R2PARQUET_CACHE_PATH` environment variable or the user cache directory, with the
 remote path each is a copy of and the etag recorded when it was downloaded. `list_parquet` on the remote
-paths tells whether the copies are still current. A cache at a directory of your own, passed to
-`cache_parquet` as a path, is a plain directory, list it with `list_parquet` and remove it with `unlink`.
+paths tells whether the copies are still current.
 }

@@ -4,14 +4,11 @@
 \alias{cache_parquet}
 \title{local copies of parquet files on R2 or at URLs}
 \usage{
-cache_parquet(path, cache = TRUE)
+cache_parquet(path)
 }
 \arguments{
 \item{path}{URL or `r2://bucket/path` of the parquet file or the directory with (partitioned) parquet
 files, or a vector of these}
-
-\item{cache}{`TRUE` to use the directory in the `R2PARQUET_CACHE_PATH` environment variable, or the user
-cache directory (`tools::R_user_dir("r2parquet", "cache")`) if that is not set, or the path of the cache directory}
 }
 \value{
 the local paths of the cached files or directories, one per path, ready for `parquet_tbl`
@@ -22,7 +19,13 @@ keeps them current, so that data used regularly can be queried locally instead o
 `parquet_tbl(cache = TRUE)` uses it to read from the cache. Each call checks the remote files and only
 downloads files whose etag changed or that are new, removes files from the cache that are gone remotely,
 and records the etags in a manifest (`_manifest.json`) in the cache directory. If the remote can't be
-reached, e.g. offline, an existing cached copy gets used with a warning.
+reached, e.g. offline, an existing cached copy gets used with a warning. Once a dataset is cached,
+`parquet_tbl` reads the copy by default as long as it is current, and `parquet_tbl(cache = "offline")` reads
+it without checking, see its `cache` argument.
+
+The cache directory is the one in the `R2PARQUET_CACHE_PATH` environment variable, or the user cache
+directory (`tools::R_user_dir("r2parquet", "cache")`) if that is not set. Set the environment variable, e.g.
+in `.Renviron`, for a cache local to a project.
 
 Paths on R2 (`r2://bucket/path`) get listed with the same credentials as `upload_parquet`. URLs of files,
 including presigned URLs, get checked with a request for their first byte, which returns the etag.

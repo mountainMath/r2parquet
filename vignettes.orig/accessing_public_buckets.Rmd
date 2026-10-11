@@ -61,7 +61,7 @@ ggplot(data_csd) +
        caption=parquet_metadata(data_csd)$attribution)
 ```
 
-Similarly, we can fetch the data for Metro Vancouver. Both these queries run in less than a second because under the hood only the ranges for the data that's actually required are identified and read, with only limited unneeded data making the trip from R2 to the R session.
+Similarly, we can fetch the data for Metro Vancouver. The remote parquet file is over 300 MB in size, but both these queries run in less than a second because under the hood only the ranges for the data that's actually required are identified and read, with only limited unneeded data making the trip from R2 to the R session.
 
 ```{r vancouver-cma}
 data_cma <- db_table |>

@@ -22,10 +22,10 @@ test_that("cache_parquet mirrors R2 paths and only downloads what changed", {
                           downloads <<- c(downloads,r2_path)
                           file.copy(file.path(fixture$dir,sub("^census/","",r2_path)),file,overwrite=TRUE)
                         })
-  withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret")
   cache <- local_cache_dir()
+  withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret",R2PARQUET_CACHE_PATH=cache)
 
-  expect_message(local <- cache_parquet("r2://bucket/census/data",cache),"Downloading 2 files")
+  expect_message(local <- cache_parquet("r2://bucket/census/data"),"Downloading 2 files")
   expect_equal(local,file.path(cache,"r2","acct","bucket","census","data"))
   expect_setequal(dir(local,recursive=TRUE),c("_manifest.json","year=2021/data_0.parquet","year=2022/data_0.parquet"))
   expect_equal(downloads,c("census/data/year=2021/data_0.parquet","census/data/year=2022/data_0.parquet"))
@@ -34,39 +34,39 @@ test_that("cache_parquet mirrors R2 paths and only downloads what changed", {
   expect_equal(manifest$etag,objects$etag[startsWith(objects$key,"census/data/")])
   # nothing to do the second time, the table reads the local copy
   downloads <- character()
-  expect_no_message(expect_equal(cache_parquet("r2://bucket/census/data",cache),local))
+  expect_no_message(expect_equal(cache_parquet("r2://bucket/census/data"),local))
   expect_length(downloads,0)
-  tbl <- parquet_tbl("r2://bucket/census/data",cache=cache)
+  tbl <- parquet_tbl("r2://bucket/census/data",cache=TRUE)
   expect_equal(dplyr::pull(dplyr::count(tbl)),3)
   expect_equal(dplyr::pull(dplyr::count(dplyr::filter(tbl,year=="2022"))),1)
   expect_equal(list_parquet(tbl)$path,file.path(local,c("year=2021","year=2022"),"data_0.parquet"))
   # a changed file gets downloaded again, a removed one goes
   objects$etag[objects$key=="census/data/year=2021/data_0.parquet"] <- "changed"
   objects <- objects[objects$key!="census/data/year=2022/data_0.parquet",]
-  expect_message(cache_parquet("r2://bucket/census/data",cache),"Downloading 1 file ")
+  expect_message(cache_parquet("r2://bucket/census/data"),"Downloading 1 file ")
   expect_equal(downloads,"census/data/year=2021/data_0.parquet")
   expect_setequal(dir(local,recursive=TRUE),c("_manifest.json","year=2021/data_0.parquet"))
   expect_false(dir.exists(file.path(local,"year=2022")))
   # single files keep a manifest in their directory, next to entries of other files
   downloads <- character()
   objects <- fixture$objects
-  expect_message(single <- cache_parquet("r2://bucket/census/single.parquet",cache),"Downloading 1 file")
+  expect_message(single <- cache_parquet("r2://bucket/census/single.parquet"),"Downloading 1 file")
   expect_equal(single,file.path(cache,"r2","acct","bucket","census","single.parquet"))
   expect_true(file.exists(single))
   expect_equal(jsonlite::fromJSON(file.path(dirname(single),"_manifest.json"))$files$path,"single.parquet")
-  expect_no_message(cache_parquet("r2://bucket/census/single.parquet",cache))
+  expect_no_message(cache_parquet("r2://bucket/census/single.parquet"))
   expect_equal(downloads,"census/single.parquet")
   # several paths, local paths pass through, missing paths and bad arguments
-  expect_message(expect_equal(cache_parquet(c("r2://bucket/census/data",fixture$dir,"r2://bucket/census/single.parquet"),cache),
+  expect_message(expect_equal(cache_parquet(c("r2://bucket/census/data",fixture$dir,"r2://bucket/census/single.parquet")),
                               c(local,fixture$dir,single)),"Downloading 2 files")
-  expect_error(cache_parquet("r2://bucket/census/missing.parquet",cache),"does not exist")
-  expect_error(cache_parquet("r2://bucket",cache),"specify the path")
-  expect_error(cache_parquet("r2://bucket/census/data",cache=""),"cache has to be")
-  expect_error(cache_parquet(1,cache),"character vector")
+  expect_error(cache_parquet("r2://bucket/census/missing.parquet"),"does not exist")
+  expect_error(cache_parquet("r2://bucket"),"specify the path")
+  expect_error(cache_parquet(1),"character vector")
   expect_error(parquet_tbl("r2://bucket/census/data",cache=NA),"cache has to be")
+  expect_error(parquet_tbl("r2://bucket/census/data",cache=cache),"cache has to be")
 })
 
-test_that("cache=TRUE uses the cache path from the environment and the cache survives being offline", {
+test_that("the cache directory comes from the environment or the user cache directory and survives being offline", {
   fixture <- cache_fixture()
   objects <- fixture$objects
   local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix="")objects[startsWith(objects$key,prefix),],
@@ -77,11 +77,11 @@ test_that("cache=TRUE uses the cache path from the environment and the cache sur
   withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret",R2PARQUET_CACHE_PATH=cache)
   expect_message(local <- cache_parquet("r2://bucket/census/data"),"Downloading")
   expect_equal(local,file.path(cache,"r2","acct","bucket","census","data"))
-  expect_message(single <- cache_parquet("r2://bucket/census/single.parquet",TRUE),"Downloading")
+  expect_message(single <- cache_parquet("r2://bucket/census/single.parquet"),"Downloading")
   expect_equal(dplyr::pull(dplyr::count(parquet_tbl("r2://bucket/census/single.parquet",cache=TRUE))),3)
   # without the environment variable the user cache directory is used
   withr::local_envvar(R2PARQUET_CACHE_PATH="")
-  expect_equal(r2parquet:::cache_directory(TRUE),tools::R_user_dir("r2parquet","cache"))
+  expect_equal(r2parquet:::cache_directory(),tools::R_user_dir("r2parquet","cache"))
   withr::local_envvar(R2PARQUET_CACHE_PATH=cache)
   # the remote can't be reached: cached copies get used with a warning, anything else fails
   local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix="")stop("Could not resolve host"))
@@ -91,20 +91,118 @@ test_that("cache=TRUE uses the cache path from the environment and the cache sur
   expect_warning(expect_equal(dplyr::pull(dplyr::count(parquet_tbl("r2://bucket/census/data",cache=TRUE))),3),"cached copy")
 })
 
+test_that("cache=NULL reads current copies, warns about stale ones and leaves the cache alone", {
+  fixture <- cache_fixture()
+  objects <- fixture$objects
+  listings <- 0
+  downloads <- character()
+  local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix=""){
+                          listings <<- listings+1
+                          objects[startsWith(objects$key,prefix),]
+                        },
+                        r2_get_object=function(r2_bucket,r2_path,file){
+                          downloads <<- c(downloads,r2_path)
+                          file.copy(file.path(fixture$dir,sub("^census/","",r2_path)),file,overwrite=TRUE)
+                        })
+  cache <- local_cache_dir()
+  withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret",R2PARQUET_CACHE_PATH=cache)
+  lookup <- r2parquet:::cache_lookup
+  # nothing cached: the remote paths, without asking the remote, local paths pass through
+  expect_equal(lookup(c("r2://bucket/census/data","r2://bucket/census/single.parquet",fixture$dir)),
+               c("r2://bucket/census/data","r2://bucket/census/single.parquet",fixture$dir))
+  expect_equal(listings,0)
+  # a path that can't be located in the cache is left to the remote read
+  withr::with_envvar(c(R2_ACCOUNT_ID=""),expect_equal(lookup("r2://bucket/census/data"),"r2://bucket/census/data"))
+  # current copies get used, the table reads them
+  suppressMessages({
+    local <- cache_parquet("r2://bucket/census/data")
+    single <- cache_parquet("r2://bucket/census/single.parquet")
+  })
+  listings <- 0
+  expect_no_warning(expect_equal(lookup(c("r2://bucket/census/data","r2://bucket/census/single.parquet")),c(local,single)))
+  expect_equal(listings,2)
+  tbl <- parquet_tbl("r2://bucket/census/data")
+  expect_equal(dplyr::pull(dplyr::count(tbl)),3)
+  expect_equal(list_parquet(tbl)$path,file.path(local,c("year=2021","year=2022"),"data_0.parquet"))
+  # a changed file makes the copy stale: a warning, the remote path, nothing downloaded
+  downloads <- character()
+  objects$etag[objects$key=="census/data/year=2021/data_0.parquet"] <- "changed"
+  expect_warning(expect_equal(lookup("r2://bucket/census/data"),"r2://bucket/census/data"),"out of date.*cache_parquet")
+  expect_no_warning(expect_equal(lookup("r2://bucket/census/single.parquet"),single))
+  expect_length(downloads,0)
+  expect_equal(list_parquet("r2://bucket/census/data")$cache,c("stale","current"))
+  objects <- fixture$objects
+  # so does a file that is gone remotely, or that was removed from the cache
+  objects <- objects[objects$key!="census/data/year=2022/data_0.parquet",]
+  expect_warning(lookup("r2://bucket/census/data"),"out of date")
+  objects <- fixture$objects
+  objects$etag[objects$key=="census/single.parquet"] <- "changed"
+  expect_warning(expect_equal(lookup("r2://bucket/census/single.parquet"),"r2://bucket/census/single.parquet"),"out of date")
+  objects <- fixture$objects
+  suppressMessages(remove_from_cache("r2://bucket/census/data/year=2021/data_0.parquet"))
+  expect_no_warning(expect_equal(lookup("r2://bucket/census/data"),"r2://bucket/census/data"))
+  suppressMessages(cache_parquet("r2://bucket/census/data"))
+  # the remote can't be reached: the copies get used with a warning, paths without a copy stay remote
+  local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix="")stop("Could not resolve host"))
+  expect_warning(expect_equal(lookup("r2://bucket/census/data"),local),"Could not resolve host")
+  expect_no_warning(expect_equal(lookup("r2://bucket/census/other.parquet"),"r2://bucket/census/other.parquet"))
+  expect_warning(expect_equal(dplyr::pull(dplyr::count(parquet_tbl("r2://bucket/census/data"))),3),"cached copy")
+})
+
+test_that("cache='offline' reads the copies without contacting the remote, current or not", {
+  fixture <- cache_fixture()
+  objects <- fixture$objects
+  listings <- 0
+  local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix=""){
+                          listings <<- listings+1
+                          objects[startsWith(objects$key,prefix),]
+                        },
+                        r2_get_object=function(r2_bucket,r2_path,file){
+                          file.copy(file.path(fixture$dir,sub("^census/","",r2_path)),file,overwrite=TRUE)
+                        })
+  cache <- local_cache_dir()
+  withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret",R2PARQUET_CACHE_PATH=cache)
+  offline <- r2parquet:::cache_offline
+  expect_error(offline("r2://bucket/census/data"),"No copy of r2://bucket/census/data in the cache")
+  expect_error(parquet_tbl("r2://bucket/census/single.parquet",cache="offline"),"No copy")
+  expect_equal(listings,0)
+  suppressMessages({
+    local <- cache_parquet("r2://bucket/census/data")
+    single <- cache_parquet("r2://bucket/census/single.parquet")
+  })
+  listings <- 0
+  expect_equal(offline(c("r2://bucket/census/data","r2://bucket/census/single.parquet",fixture$dir)),c(local,single,fixture$dir))
+  # files and directories below a cached directory are covered by its manifest
+  expect_equal(offline(c("r2://bucket/census/data/year=2022","r2://bucket/census/data/year=2022/data_0.parquet")),
+               c(file.path(local,"year=2022"),file.path(local,"year=2022","data_0.parquet")))
+  expect_error(offline("r2://bucket/census/data/year=2023"),"No copy")
+  # a stale copy gets read all the same, without a warning or a request
+  objects$etag[objects$key=="census/data/year=2021/data_0.parquet"] <- "changed"
+  expect_no_warning(tbl <- parquet_tbl("r2://bucket/census/data",cache="offline"))
+  expect_equal(dplyr::pull(dplyr::count(tbl)),3)
+  expect_equal(list_parquet(tbl)$path,file.path(local,c("year=2021","year=2022"),"data_0.parquet"))
+  expect_equal(listings,0)
+  # a copy that no longer covers its directory is no copy
+  suppressMessages(remove_from_cache("r2://bucket/census/data/year=2021/data_0.parquet"))
+  expect_error(offline("r2://bucket/census/data"),"No copy")
+  expect_equal(offline("r2://bucket/census/data/year=2022/data_0.parquet"),file.path(local,"year=2022","data_0.parquet"))
+  expect_error(parquet_tbl("r2://bucket/census/data",cache="local"),"cache has to be")
+})
+
 test_that("downloads that do not match their etag are rejected", {
   fixture <- cache_fixture()
   objects <- fixture$objects[fixture$objects$key=="census/single.parquet",]
   local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix="")objects[startsWith(objects$key,prefix),],
                         r2_get_object=function(r2_bucket,r2_path,file)writeBin(as.raw(1:10),file))
-  withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret")
   cache <- local_cache_dir()
-  expect_error(suppressMessages(cache_parquet("r2://bucket/census/single.parquet",cache)),"does not match its etag")
+  withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret",R2PARQUET_CACHE_PATH=cache)
+  expect_error(suppressMessages(cache_parquet("r2://bucket/census/single.parquet")),"does not match its etag")
   local <- file.path(cache,"r2","acct","bucket","census")
   expect_false(file.exists(file.path(local,"single.parquet")))
   expect_length(dir(local,all.files=TRUE,no..=TRUE),0)
   # etags that are not md5 hashes, like for multipart uploads, are not checked
   objects$etag <- "abc-2"
-  expect_message(cache_parquet("r2://bucket/census/single.parquet",cache),"Downloading")
+  expect_message(cache_parquet("r2://bucket/census/single.parquet"),"Downloading")
   expect_true(file.exists(file.path(local,"single.parquet")))
 })
 
@@ -152,7 +250,7 @@ test_that("URLs get cached by host, files via their headers and directories via 
   expect_true(is.na(list_parquet("https://data.example.com/census/missing.parquet")$etag))
   # a file, also with a query string like presigned urls have
   requests <- list()
-  expect_message(single <- cache_parquet("https://data.example.com/census/single.parquet?X-Amz-Signature=abc",cache),"Downloading 1 file")
+  expect_message(single <- cache_parquet("https://data.example.com/census/single.parquet?X-Amz-Signature=abc"),"Downloading 1 file")
   expect_equal(single,file.path(cache,"https","data.example.com","census","single.parquet"))
   expect_equal(vapply(requests,`[[`,"",i="verb"),c("HEAD","DOWNLOAD"))
   expect_equal(requests[[2]]$url,"https://data.example.com/census/single.parquet?X-Amz-Signature=abc")
@@ -160,21 +258,21 @@ test_that("URLs get cached by host, files via their headers and directories via 
   expect_equal(manifest$etag,objects$etag[objects$key=="census/single.parquet"])
   expect_equal(manifest$modified,"2026-10-10T12:00:00Z")
   requests <- list()
-  expect_no_message(cache_parquet("https://data.example.com/census/single.parquet",cache))
+  expect_no_message(cache_parquet("https://data.example.com/census/single.parquet"))
   expect_equal(vapply(requests,`[[`,"",i="verb"),"HEAD")
   expect_equal(list_parquet("https://data.example.com/census/single.parquet")$cache,"current")
   # a directory via its manifest
   requests <- list()
-  expect_message(local <- cache_parquet("https://data.example.com/census/data",cache),"Downloading 2 files")
+  expect_message(local <- cache_parquet("https://data.example.com/census/data"),"Downloading 2 files")
   expect_equal(local,file.path(cache,"https","data.example.com","census","data"))
   expect_equal(vapply(requests,`[[`,"",i="verb"),c("HEAD","GET","DOWNLOAD","DOWNLOAD"))
   expect_equal(requests[[2]]$url,"https://data.example.com/census/data/_manifest.json")
   expect_equal(requests[[3]]$url,"https://data.example.com/census/data/year=2021/data_0.parquet")
-  expect_equal(dplyr::pull(dplyr::count(parquet_tbl("https://data.example.com/census/data/",cache=cache))),3)
+  expect_equal(dplyr::pull(dplyr::count(parquet_tbl("https://data.example.com/census/data/",cache=TRUE))),3)
   expect_equal(list_parquet("https://data.example.com/census/data")$cache,rep("current",2))
   # a trailing slash skips the request for the file
   requests <- list()
-  cache_parquet("https://data.example.com/census/data/",cache)
+  cache_parquet("https://data.example.com/census/data/")
   expect_equal(vapply(requests,`[[`,"",i="verb"),"GET")
   # the cache lists the copies by their URLs
   cached <- list_cache()
@@ -185,9 +283,9 @@ test_that("URLs get cached by host, files via their headers and directories via 
   expect_equal(list_cache("https://data.example.com/census/single.parquet?X-Amz-Signature=abc")$path,
                "https://data.example.com/census/single.parquet")
   # directories without a manifest, and URLs that are not files on a host
-  expect_error(cache_parquet("https://data.example.com/census/",cache),"no manifest")
-  expect_error(cache_parquet("https://data.example.com/",cache),"has to point to")
-  expect_error(cache_parquet("https://data.example.com/../x.parquet",cache),"has to point to")
+  expect_error(cache_parquet("https://data.example.com/census/"),"no manifest")
+  expect_error(cache_parquet("https://data.example.com/"),"has to point to")
+  expect_error(cache_parquet("https://data.example.com/../x.parquet"),"has to point to")
 })
 
 test_that("list_cache and remove_from_cache work on the cache directory and keep its manifests in line", {

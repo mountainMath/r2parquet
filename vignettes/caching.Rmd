@@ -1,0 +1,92 @@
+---
+title: "Caching"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Caching}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+<!-- Generated from vignettes.orig/caching.Rmd -- do not edit. -->
+<!-- Rebuild with: Rscript vignettes.orig/precompute.R -->
+
+
+
+Keeping a local copy of a parquet file is useful when we work with the same file a lot, or run queries that can't be served well by targeted range reads, like scanning whole columns across the file. In those cases the slower initial download is made up for by faster queries afterwards. Another reason for a local copy is that it is available offline.
+
+
+``` r
+library(r2parquet)
+Sys.setenv(R2PARQUET_CACHE_PATH = tempfile())
+```
+
+The cache lives in the directory named by the `R2PARQUET_CACHE_PATH` environment variable, or in the user cache directory (`tools::R_user_dir("r2parquet", "cache")`) if that is not set. For this vignette we point it at a temporary directory. Cached files mirror their remote location, `r2://bucket/path` as `r2/<account id>/bucket/path` and URLs as `<scheme>/<host>/<path>`, so files from different sources don't collide and one cache directory can serve all projects. Set the environment variable in a project's `.Renviron` for a cache local to that project.
+
+To cache a dataset set `cache = TRUE` in `parquet_tbl()`, or cache it explicitly with `cache_parquet()`.
+
+
+``` r
+census_cma_url <- "https://data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet"
+
+geos_cma <- parquet_tbl(census_cma_url, cache = TRUE)
+#> Downloading 1 file (12.9 MB) to /var/folders/z4/gcjq2cd93p3bs5bgp8j2vv240000gp/T//RtmpMO8oVZ/filef073e83ac81/https/data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet.
+```
+
+This downloads the file if the cache has no current copy and opens the table on the local file. The copy is kept current by its etag: every call with `cache = TRUE` checks the remote file and downloads it again when it changed. We can inspect the cache to see what is available locally.
+
+
+``` r
+list_cache()
+#> # A tibble: 1 × 7
+#>   file                  size     sizeRaw modified            etag    local path 
+#>   <chr>                 <chr>      <dbl> <dttm>              <chr>   <chr> <chr>
+#> 1 lcma000b21f_e.parquet 12.9 MB 12921821 2026-10-11 04:22:56 4b8979… /var… http…
+```
+
+Once a dataset is cached, `parquet_tbl()` reads the copy by default as long as it is current. The `cache` argument chooses how the cache gets used:
+
+* `cache = NULL`, the default, reads the local copy if it is current, and otherwise reads the remote file and warns that the copy is out of date. Paths that have no copy in the cache are read remotely without any check, so the default costs nothing for them.
+* `cache = TRUE` updates the copy if it is out of date, downloading it on first use, and reads it.
+* `cache = FALSE` always reads the remote file.
+* `cache = "offline"` reads the local copy as it is, without contacting the remote, and fails if there is none. This is for working without a network connection, and for looking at what changed: read the copy with `cache = "offline"` and the current remote file with `cache = FALSE`, compare, then update the copy with `cache = TRUE`.
+
+With the default and with `cache = TRUE`, a copy also gets used, with a warning, when the remote can't be reached.
+
+
+``` r
+geos_cma <- parquet_tbl(census_cma_url)
+
+geos_cma |>
+  dplyr::select(CMAUID, CMANAME, CMATYPE, LANDAREA) |>
+  head()
+#> # A query:  ?? x 4
+#> # Database: DuckDB 1.5.6 [jens@Darwin 27.0.0:R 4.6.1/:memory:]
+#>   CMAUID CMANAME             CMATYPE LANDAREA
+#>   <chr>  <chr>               <chr>      <dbl>
+#> 1 001    St. John's          B          932. 
+#> 2 010    Grand Falls-Windsor D           54.8
+#> 3 011    Gander              D         2413. 
+#> 4 015    Corner Brook        D         1123. 
+#> 5 105    Charlottetown       D         1112. 
+#> 6 110    Summerside          D          125.
+```
+
+Directories of (partitioned) parquet files on R2 get cached the same way, as `r2://bucket/path`. Directories at public URLs can't be listed over https, so they need a `_manifest.json` next to the files, which `upload_parquet()` and `data_to_parquet()` write for directories uploaded to R2 and `write_manifest()` adds to existing ones.
+
+Listing remote parquet files also states whether the cache holds a current copy.
+
+
+``` r
+list_parquet(census_cma_url)
+#> # A tibble: 1 × 7
+#>   file                  size     sizeRaw modified            cache   etag  path 
+#>   <chr>                 <chr>      <dbl> <dttm>              <chr>   <chr> <chr>
+#> 1 lcma000b21f_e.parquet 12.9 MB 12921821 2026-10-11 04:22:56 current 4b89… http…
+```
+
+We can remove the local copy when we don't need the file any more.
+
+
+``` r
+remove_from_cache(census_cma_url)
+#> Removed 1 file from the cache.
+```

@@ -6,14 +6,10 @@
 
 manifest_name <- "_manifest.json"
 
-# directory of the cache: TRUE picks R2PARQUET_CACHE_PATH or the user cache directory, otherwise the path given
-cache_directory <- function(cache){
-  if (isTRUE(cache)) {
-    cache <- Sys.getenv("R2PARQUET_CACHE_PATH")
-    if (cache=="") cache <- tools::R_user_dir("r2parquet","cache")
-  } else if (!is.character(cache) || length(cache)!=1 || is.na(cache) || cache=="") {
-    stop("cache has to be TRUE or the path of the cache directory.")
-  }
+# directory of the cache: R2PARQUET_CACHE_PATH or the user cache directory
+cache_directory <- function(){
+  cache <- Sys.getenv("R2PARQUET_CACHE_PATH")
+  if (cache=="") cache <- tools::R_user_dir("r2parquet","cache")
   # forward slashes throughout, dirname() and dir() return them on Windows too, so paths compare
   sub("(.)/+$","\\1",gsub("\\\\","/",path.expand(cache)))
 }
@@ -102,7 +98,7 @@ cache_location <- function(path,cache_dir){
     r2_path <- sub("/+$","",p$path)
     if (r2_path=="") stop("Please specify the path of the parquet file or directory to cache in R2 bucket ",p$bucket,".")
     account <- r2_credentials("R2_ACCOUNT_ID")[["R2_ACCOUNT_ID"]]
-    return(list(local=file.path(cache_dir,"r2",account,p$bucket,r2_path),bucket=p$bucket,path=r2_path,url=NULL))
+    return(list(local=file.path(cache_dir,"r2",account,p$bucket,r2_path),bucket=p$bucket,path=r2_path,url=NULL,cache_dir=cache_dir))
   }
   url <- httr::parse_url(path)
   segments <- strsplit(url$path %||% "","/",fixed=TRUE)[[1]]
@@ -110,7 +106,8 @@ cache_location <- function(path,cache_dir){
   if (length(segments)==0 || any(segments %in% c(".","..")) || is.null(url$hostname)) {
     stop("The URL has to point to a parquet file or a directory on a host, got ",path,".")
   }
-  list(local=do.call(file.path,as.list(c(cache_dir,url$scheme,url$hostname,segments))),bucket=NULL,path=NULL,url=path)
+  list(local=do.call(file.path,as.list(c(cache_dir,url$scheme,url$hostname,segments))),bucket=NULL,path=NULL,url=path,
+       cache_dir=cache_dir)
 }
 
 # the remote files of the dataset with their etags, relative to the manifest directory, and a function to download one
@@ -174,19 +171,43 @@ cache_download <- function(source,file,target){
   if (!file.rename(tmp,target)) stop(paste0("Could not move the download of ",file$key," to ",target,"."))
 }
 
-# bring the local copy of the dataset in line with the remote files, returns the local path
-sync_cache <- function(location,source){
-  local <- location$local
-  manifest_dir <- if (source$is_file) dirname(local) else local
-  dir.create(manifest_dir,recursive=TRUE,showWarnings=FALSE)
-  manifest_file <- file.path(manifest_dir,manifest_name)
-  known <- read_local_manifest(manifest_file)
-  remote <- source$files
+# the directory holding the manifest of a cached path, a file is listed in the manifest of its directory
+manifest_directory <- function(location,source){
+  if (source$is_file) dirname(location$local) else location$local
+}
+
+# which of the remote files have a current copy: the etag the manifest recorded is the remote one and the
+# file is there with the remote size
+current_files <- function(manifest_dir,remote){
+  known <- read_local_manifest(file.path(manifest_dir,manifest_name))
   targets <- file.path(manifest_dir,remote$path)
   known_etag <- known$etag[match(remote$path,known$path)]
   current <- !is.na(known_etag) & !is.na(remote$etag) & known_etag==remote$etag & file.exists(targets) &
     (is.na(remote$size) | file.size(targets)==remote$size)
   current[is.na(current)] <- FALSE
+  current
+}
+
+# whether the local copy of the dataset is in line with the remote files without touching it: every remote
+# file has a current copy, and a directory holds no parquet files beyond the remote ones, since the table
+# reads every file below it
+cache_current <- function(location,source){
+  manifest_dir <- manifest_directory(location,source)
+  remote <- source$files
+  all(current_files(manifest_dir,remote)) &&
+    (source$is_file || length(setdiff(dir(location$local,"\\.parquet$",recursive=TRUE),remote$path))==0)
+}
+
+# bring the local copy of the dataset in line with the remote files, returns the local path
+sync_cache <- function(location,source){
+  local <- location$local
+  manifest_dir <- manifest_directory(location,source)
+  dir.create(manifest_dir,recursive=TRUE,showWarnings=FALSE)
+  manifest_file <- file.path(manifest_dir,manifest_name)
+  known <- read_local_manifest(manifest_file)
+  remote <- source$files
+  targets <- file.path(manifest_dir,remote$path)
+  current <- current_files(manifest_dir,remote)
   if (any(!current)) {
     size <- sum(remote$size[!current],na.rm=TRUE)
     message("Downloading ",sum(!current)," file",if (sum(!current)>1) "s",
@@ -211,13 +232,20 @@ sync_cache <- function(location,source){
   local
 }
 
-# the cached copy without checking the remote, for when the remote can't be reached: a directory whose
-# manifest covers it, or a file listed in the manifest of its directory
+# the cached copy without checking the remote: a directory whose manifest covers it, or a file or directory
+# below a directory whose manifest lists or covers it, as the files of a cached partitioned dataset are
 cached_copy <- function(location){
   local <- location$local
   if (isTRUE(attr(read_local_manifest(file.path(local,manifest_name)),"directory"))) return(local)
-  known <- read_local_manifest(file.path(dirname(local),manifest_name))
-  if (basename(local) %in% known$path && file.exists(local)) return(local)
+  directory <- dirname(local)
+  relative <- basename(local)
+  while (startsWith(directory,paste0(location$cache_dir,"/"))) {
+    known <- read_local_manifest(file.path(directory,manifest_name))
+    if (relative %in% known$path && file.exists(local)) return(local)
+    if (isTRUE(attr(known,"directory")) && dir.exists(local)) return(local)
+    relative <- paste0(basename(directory),"/",relative)
+    directory <- dirname(directory)
+  }
   NULL
 }
 
@@ -229,7 +257,13 @@ cached_copy <- function(location){
 #' `parquet_tbl(cache = TRUE)` uses it to read from the cache. Each call checks the remote files and only
 #' downloads files whose etag changed or that are new, removes files from the cache that are gone remotely,
 #' and records the etags in a manifest (`_manifest.json`) in the cache directory. If the remote can't be
-#' reached, e.g. offline, an existing cached copy gets used with a warning.
+#' reached, e.g. offline, an existing cached copy gets used with a warning. Once a dataset is cached,
+#' `parquet_tbl` reads the copy by default as long as it is current, and `parquet_tbl(cache = "offline")` reads
+#' it without checking, see its `cache` argument.
+#'
+#' The cache directory is the one in the `R2PARQUET_CACHE_PATH` environment variable, or the user cache
+#' directory (`tools::R_user_dir("r2parquet", "cache")`) if that is not set. Set the environment variable, e.g.
+#' in `.Renviron`, for a cache local to a project.
 #'
 #' Paths on R2 (`r2://bucket/path`) get listed with the same credentials as `upload_parquet`. URLs of files,
 #' including presigned URLs, get checked with a request for their first byte, which returns the etag.
@@ -247,18 +281,16 @@ cached_copy <- function(location){
 #'
 #' @param path URL or `r2://bucket/path` of the parquet file or the directory with (partitioned) parquet
 #' files, or a vector of these
-#' @param cache `TRUE` to use the directory in the `R2PARQUET_CACHE_PATH` environment variable, or the user
-#' cache directory (`tools::R_user_dir("r2parquet", "cache")`) if that is not set, or the path of the cache directory
 #' @return the local paths of the cached files or directories, one per path, ready for `parquet_tbl`
 #' @export
-cache_parquet <- function(path,cache=TRUE) {
+cache_parquet <- function(path) {
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
-  cache_dir <- cache_directory(cache)
+  cache_dir <- cache_directory()
   vapply(path,function(p){
     is_r2 <- startsWith(p,"r2://")
     if (!is_r2 && !grepl("^https?://",p)) return(p)
     location <- cache_location(p,cache_dir)
-    source <- tryCatch(if (is_r2) r2_cache_source(location) else url_cache_source(location),error=function(e)e)
+    source <- tryCatch(cache_source(location),error=function(e)e)
     if (inherits(source,"error")) {
       local <- cached_copy(location)
       if (is.null(local)) stop(source)
@@ -266,6 +298,48 @@ cache_parquet <- function(path,cache=TRUE) {
       return(local)
     }
     sync_cache(location,source)
+  },character(1),USE.NAMES=FALSE)
+}
+
+# the remote files of a cached path, from R2 or at a URL
+cache_source <- function(location){
+  if (is.null(location$url)) r2_cache_source(location) else url_cache_source(location)
+}
+
+# the paths parquet_tbl(cache = "offline") reads: the copies in the cache, whether current or not, without any
+# request to the remote, an error for a path that has no copy
+cache_offline <- function(path){
+  cache_dir <- cache_directory()
+  vapply(path,function(p){
+    if (!startsWith(p,"r2://") && !grepl("^https?://",p)) return(p)
+    local <- cached_copy(cache_location(p,cache_dir))
+    if (is.null(local)) stop(paste0("No copy of ",p," in the cache. Cache it with cache_parquet() or parquet_tbl(cache = TRUE) first."))
+    local
+  },character(1),USE.NAMES=FALSE)
+}
+
+# the paths parquet_tbl(cache = NULL) reads: the copy in the cache where there is one and it is current, the
+# remote path otherwise. The remote only gets checked when there is a copy, so paths that were never cached
+# cost nothing, and a copy that is out of date is reported but left alone. A copy whose remote can't be
+# checked, e.g. offline, gets used with a warning like cache_parquet does.
+cache_lookup <- function(path){
+  cache_dir <- cache_directory()
+  vapply(path,function(p){
+    if (!startsWith(p,"r2://") && !grepl("^https?://",p)) return(p)
+    # a path that can't be located in the cache, like r2:// without credentials, is left to the remote read
+    location <- tryCatch(cache_location(p,cache_dir),error=function(e)NULL)
+    if (is.null(location)) return(p)
+    local <- cached_copy(location)
+    if (is.null(local)) return(p)
+    source <- tryCatch(cache_source(location),error=function(e)e)
+    if (inherits(source,"error")) {
+      warning(paste0("Checking ",p," failed, using the cached copy in ",local,". ",conditionMessage(source)),call.=FALSE)
+      return(local)
+    }
+    if (cache_current(location,source)) return(local)
+    warning(paste0("The cached copy of ",p," is out of date, reading the remote files. ",
+                   "Update it with cache_parquet() or parquet_tbl(cache = TRUE)."),call.=FALSE)
+    p
   },character(1),USE.NAMES=FALSE)
 }
 
@@ -304,7 +378,7 @@ cache_status <- function(path,etag){
   status <- rep(NA_character_,length(path))
   remote <- startsWith(path,"r2://") | grepl("^https?://",path)
   if (!any(remote)) return(status)
-  cache_dir <- cache_directory(TRUE)
+  cache_dir <- cache_directory()
   local <- vapply(path[remote],function(p)tryCatch(cache_location(p,cache_dir)$local,error=function(e)NA_character_),"",USE.NAMES=FALSE)
   known <- cache_contents(cache_dir)
   known <- known$etag[match(local,known$local)]
@@ -344,8 +418,7 @@ prune_manifests <- function(local,cache_dir){
 #' Lists the parquet files that `cache_parquet` and `parquet_tbl(cache = TRUE)` downloaded into the cache
 #' directory, the one in the `R2PARQUET_CACHE_PATH` environment variable or the user cache directory, with the
 #' remote path each is a copy of and the etag recorded when it was downloaded. `list_parquet` on the remote
-#' paths tells whether the copies are still current. A cache at a directory of your own, passed to
-#' `cache_parquet` as a path, is a plain directory, list it with `list_parquet` and remove it with `unlink`.
+#' paths tells whether the copies are still current.
 #'
 #' @param path `r2://bucket/path` or URL of a parquet file or directory, or a vector of these, to list only
 #' the copies of these. `r2://` paths need the `R2_ACCOUNT_ID` environment variable, since the cache is kept
@@ -356,7 +429,7 @@ prune_manifests <- function(local,cache_dir){
 #' the path of the copy, and `path`, the `r2://bucket/path` or URL it is a copy of
 #' @export
 list_cache <- function(path=NULL) {
-  cache_dir <- cache_directory(TRUE)
+  cache_dir <- cache_directory()
   files <- cache_contents(cache_dir)
   if (!is.null(path)) {
     if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
@@ -383,7 +456,7 @@ list_cache <- function(path=NULL) {
 #' @export
 remove_from_cache <- function(path) {
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
-  cache_dir <- cache_directory(TRUE)
+  cache_dir <- cache_directory()
   local <- vapply(path,function(p)remote_cache_location(p,cache_dir)$local,"",USE.NAMES=FALSE)
   missing <- !file.exists(local)
   if (any(missing)) stop(paste0("Not in the cache: ",paste0(path[missing],collapse=", "),"."))
