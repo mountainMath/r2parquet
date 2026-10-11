@@ -57,30 +57,35 @@
 #' @param sort_by optional vector of column names to sort by, for spatial data before sorting spatially
 #' @param partition_by optional vector of column names to partition by
 #' @param row_group_size number of rows per row group, rounded up to a multiple of 2048 by DuckDB, default is 10000
-#' @param overwrite if `TRUE`, the default, parquet files in hive partition directories (`key=value`) below an
+#' @param remove_stale if `TRUE`, the default, parquet files in hive partition directories (`key=value`) below an
 #' existing directory at `path` get removed first, so that no partitions from earlier writes remain, also if the
 #' partition columns changed. Other files below `path` are kept. With `FALSE` written files replace files with the
-#' same path and other files are kept, e.g. to add partitions.
+#' same path and other files are kept, e.g. to add partitions. Files at the paths being written always get replaced.
 #' @param metadata optional named list of metadata to write into the parquet footer, see description. The entry
 #' `geo` is reserved for the GeoParquet metadata.
+#' @param compression parquet compression codec, `"zstd"` (the default), `"snappy"`, `"gzip"`, `"brotli"`,
+#' `"lz4"`, `"lz4_raw"` or `"uncompressed"`. zstd compresses well and decompresses fast, which suits files
+#' that get read remotely.
 #' @param purge_cache if `TRUE`, the default, purge the changed files from the Cloudflare cache of custom domains
 #' of the bucket when writing to R2, like `upload_parquet`. Ignored for local paths.
 #' @return (invisibly) `path`, normalized to `r2://bucket/path` for R2, ready to be passed to `parquet_tbl`,
 #' with the parquet files that were written, local paths or `r2://bucket/path`, in the `files` attribute
 #' @export
-data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE,metadata=NULL,purge_cache=TRUE) {
+data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,remove_stale=TRUE,metadata=NULL,
+                            compression=c("zstd","snappy","gzip","brotli","lz4","lz4_raw","uncompressed"),purge_cache=TRUE) {
   if (!is.character(path) || length(path)!=1) stop("Expected a single path, got ",length(path),".")
+  compression <- match.arg(compression)
   if (startsWith(path,"r2://")) {
     r2_data_to_parquet(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,
-                       overwrite=overwrite,metadata=metadata,purge_cache=purge_cache)
+                       remove_stale=remove_stale,metadata=metadata,compression=compression,purge_cache=purge_cache)
   } else {
     local_data_to_parquet(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,
-                          overwrite=overwrite,metadata=metadata)
+                          remove_stale=remove_stale,metadata=metadata,compression=compression)
   }
 }
 
 # write data to a local parquet file or directory of partitioned files
-local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE,metadata=NULL) {
+local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,remove_stale=TRUE,metadata=NULL,compression="zstd") {
   if (row_group_size<2048) warning("DuckDB writes row groups of at least 2048 rows, row_group_size has no effect below that.",call.=FALSE)
   if (inherits(data,"tbl_lazy")) {
     if (!inherits(data,"tbl_duckdb_connection")) stop("Lazy tables have to be DuckDB tables.")
@@ -132,7 +137,7 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
   metadata <- metadata_strings(metadata,columns,labels)
 
   order <- if (length(sort_by)>0) DBI::dbQuoteIdentifier(con,sort_by)
-  options <- c("FORMAT parquet","COMPRESSION zstd",paste0("ROW_GROUP_SIZE ",as.integer(row_group_size)))
+  options <- c("FORMAT parquet",paste0("COMPRESSION ",compression),paste0("ROW_GROUP_SIZE ",as.integer(row_group_size)))
   if (length(metadata)>0) {
     options <- c(options,paste0("KV_METADATA {",paste0(DBI::dbQuoteString(con,names(metadata)),": ",
                                                        DBI::dbQuoteString(con,unname(metadata)),collapse=", "),"}"))
@@ -156,7 +161,7 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
   }
   if (length(partition_by)>0) {
     # DuckDB's OVERWRITE keeps partitions that are not in the new data
-    if (overwrite && dir.exists(path)) {
+    if (remove_stale && dir.exists(path)) {
       files <- dir(path,"\\.parquet$",recursive=TRUE)
       unlink(file.path(path,files[is_partition_file(files)]))
       directories <- rev(list.dirs(path,recursive=TRUE)[-1])
@@ -176,7 +181,7 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
 }
 
 # write data to parquet in a temporary directory and upload it to R2
-r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE,metadata=NULL,purge_cache=TRUE) {
+r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,remove_stale=TRUE,metadata=NULL,compression="zstd",purge_cache=TRUE) {
   if (!requireNamespace("arrow",quietly=TRUE)) {
     stop("The arrow package is required to upload to R2.")
   }
@@ -190,9 +195,10 @@ r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_grou
   dir.create(tmp_dir)
   on.exit(unlink(tmp_dir,recursive=TRUE))
   local_path <- local_data_to_parquet(data,file.path(tmp_dir,basename(r2_path)),sort_by=sort_by,
-                                      partition_by=partition_by,row_group_size=row_group_size,metadata=metadata)
+                                      partition_by=partition_by,row_group_size=row_group_size,metadata=metadata,
+                                      compression=compression)
   stale <- character()
-  if (overwrite) {
+  if (remove_stale) {
     filesystem <- r2_filesystem()
     file_type <- filesystem$GetFileInfo(paste0(r2_bucket,"/",r2_path))[[1]]$type
     if (file_type==arrow::FileType$Directory) {

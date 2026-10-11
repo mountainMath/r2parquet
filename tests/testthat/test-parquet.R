@@ -29,3 +29,33 @@ test_that("a disconnected shared connection gets replaced", {
   expect_false(identical(parquet_connection(),old))
   expect_equal(nrow(collect_parquet(parquet_tbl(path))),3)
 })
+
+test_that("list_parquet lists local files and the files of a table", {
+  dir <- withr::local_tempdir()
+  df <- data.frame(group=c("a","b"),value=1:2)
+  data_to_parquet(df,file.path(dir,"data"),partition_by="group")
+  data_to_parquet(df,file.path(dir,"single.parquet"))
+  writeLines("x",file.path(dir,"data","notes.txt"))
+  files <- list_parquet(file.path(dir,"data"))
+  expect_s3_class(files,"tbl_df")
+  expect_named(files,c("path","size","modified"))
+  expect_setequal(files$path,file.path(dir,"data",c("group=a","group=b"),"data_0.parquet"))
+  expect_true(all(files$size>0))
+  expect_s3_class(files$modified,"POSIXct")
+  expect_equal(attr(files$modified,"tzone"),"UTC")
+  # files, several paths with duplicates, and missing paths
+  expect_equal(list_parquet(file.path(dir,"single.parquet"))$path,file.path(dir,"single.parquet"))
+  expect_equal(nrow(list_parquet(c(file.path(dir,"data"),file.path(dir,"single.parquet"),dir))),3)
+  expect_equal(nrow(list_parquet(file.path(dir,"missing"))),0)
+  expect_named(list_parquet(character()),c("path","size","modified"))
+  # the files a table reads, URLs can't be listed
+  expect_equal(list_parquet(parquet_tbl(file.path(dir,"data"))),files)
+  expect_equal(list_parquet(parquet_tbl(file.path(dir,"single.parquet")))$path,file.path(dir,"single.parquet"))
+  tbl <- parquet_tbl(file.path(dir,"single.parquet"))
+  attr(tbl,"r2parquet_paths") <- "https://example.com/data.parquet"
+  url <- list_parquet(tbl)
+  expect_equal(url$path,"https://example.com/data.parquet")
+  expect_true(is.na(url$size))
+  expect_error(list_parquet(dplyr::tbl(parquet_connection(),dplyr::sql("SELECT 1"))),"not created by parquet_tbl")
+  expect_error(list_parquet(1),"path")
+})

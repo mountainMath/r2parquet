@@ -12,6 +12,7 @@ reference:
   - filter_spatial
   - collect_parquet
   - parquet_metadata
+  - list_parquet
   - parquet_connection
 - title: Uploading and managing data on R2
   desc: Need the R2 credentials (see the README), except `data_to_parquet()` for local paths.

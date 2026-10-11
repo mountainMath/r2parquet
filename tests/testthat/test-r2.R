@@ -30,8 +30,15 @@ test_that("parquet files can be uploaded, queried and removed", {
   uploaded <- attr(uploaded,"files")
   expect_length(uploaded,2)
   expect_equal(dplyr::pull(dplyr::count(parquet_tbl(other_path))),5)
+  # listing the directory, a file and the files of a table
+  files <- list_parquet(dir_path)
+  expect_setequal(files$path,c(uploaded,other_path))
+  expect_true(all(files$size>0))
+  expect_true(all(abs(difftime(files$modified,Sys.time(),units="mins"))<10))
+  expect_equal(list_parquet(other_path)$path,other_path)
   remove_parquet(other_path,purge_cache=FALSE)
   tbl <- parquet_tbl(dir_path)
+  expect_setequal(list_parquet(tbl)$path,uploaded)
   # stale group= partitions would be read too and double the row count
   expect_equal(dplyr::pull(dplyr::count(tbl)),nrow(df))
   expect_equal(dplyr::pull(dplyr::count(dplyr::filter(tbl,high_sid==1L))),sum(df$SID74>5))

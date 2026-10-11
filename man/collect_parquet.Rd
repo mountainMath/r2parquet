@@ -4,12 +4,12 @@
 \alias{collect_parquet}
 \title{collect a lazy DuckDB table of parquet data with its metadata}
 \usage{
-collect_parquet(tbl, metadata = TRUE)
+collect_parquet(tbl, attach_metadata = TRUE)
 }
 \arguments{
 \item{tbl}{lazy DuckDB table, e.g. from `parquet_tbl` or `filter_spatial`}
 
-\item{metadata}{if `TRUE`, the default, attach the metadata of the parquet files as attributes}
+\item{attach_metadata}{if `TRUE`, the default, attach the metadata of the parquet files as attributes}
 }
 \value{
 a tibble, or an sf object if the table has GEOMETRY columns

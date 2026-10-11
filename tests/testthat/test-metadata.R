@@ -60,12 +60,13 @@ test_that("collect_parquet attaches metadata and labels, also after dplyr verbs"
   expect_equal(nrow(filtered),2)
   expect_equal(attr(filtered,"metadata")$source,"s")
   expect_equal(attr(filtered$id,"label"),"Identifier")
-  plain <- collect_parquet(tbl,metadata=FALSE)
+  plain <- collect_parquet(tbl,attach_metadata=FALSE)
   expect_null(attr(plain,"metadata"))
   expect_null(attr(plain$id,"label"))
   # lazy tables not from parquet_tbl have no metadata
   other <- dplyr::tbl(dbplyr::remote_con(tbl),dplyr::sql("SELECT 1 AS a"))
   expect_null(attr(collect_parquet(other),"metadata"))
+  expect_error(parquet_metadata(1),"path")
   expect_error(parquet_metadata(other),"not created by parquet_tbl")
 })
 
@@ -75,7 +76,7 @@ test_that("partitioned directories share their metadata and disagreeing files wa
   data_to_parquet(df,file.path(dir,"data"),partition_by="group",metadata=list(source="s"))
   expect_equal(parquet_metadata(file.path(dir,"data")),list(source="s"))
   expect_equal(parquet_metadata(parquet_tbl(file.path(dir,"data"))),list(source="s"))
-  data_to_parquet(df[df$group=="b",],file.path(dir,"data"),partition_by="group",overwrite=FALSE,metadata=list(source="t",license="l"))
+  data_to_parquet(df[df$group=="b",],file.path(dir,"data"),partition_by="group",remove_stale=FALSE,metadata=list(source="t",license="l"))
   expect_warning(result <- parquet_metadata(file.path(dir,"data")),"disagree on the metadata entry source")
   expect_equal(result,list(source="s",license="l"))
 })

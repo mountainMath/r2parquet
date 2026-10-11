@@ -2,9 +2,18 @@
 % Please edit documentation in R/metadata.R
 \name{parquet_metadata}
 \alias{parquet_metadata}
+\alias{parquet_metadata.character}
+\alias{parquet_metadata.tbl_lazy}
+\alias{parquet_metadata.default}
 \title{metadata of parquet files}
 \usage{
 parquet_metadata(x)
+
+\method{parquet_metadata}{character}(x)
+
+\method{parquet_metadata}{tbl_lazy}(x)
+
+\method{parquet_metadata}{default}(x)
 }
 \arguments{
 \item{x}{URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)

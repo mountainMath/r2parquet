@@ -277,6 +277,28 @@ r2_list_parquet <- function(filesystem,r2_bucket,r2_path){
   substring(paths[grepl("\\.parquet$",paths)],nchar(r2_bucket)+2)
 }
 
+# the parquet file at an R2 path, or the parquet files below the directory at the path, with size and
+# modification time, nothing for a path that does not exist
+r2_parquet_files <- function(path){
+  if (!requireNamespace("arrow",quietly=TRUE)) stop("The arrow package is required to list files on R2.")
+  path <- r2_split_path(path)
+  r2_path <- sub("/+$","",path$path)
+  bucket_path <- paste0(path$bucket,if (r2_path!="") "/",r2_path)
+  filesystem <- r2_filesystem()
+  info <- filesystem$GetFileInfo(bucket_path)[[1]]
+  if (info$type==arrow::FileType$File) {
+    infos <- list(info)
+  } else if (info$type==arrow::FileType$Directory) {
+    infos <- filesystem$GetFileInfo(arrow::FileSelector$create(bucket_path,recursive=TRUE))
+    infos <- Filter(function(i)i$type==arrow::FileType$File && grepl("\\.parquet$",i$path),infos)
+  } else {
+    infos <- list()
+  }
+  parquet_files(paste0("r2://",vapply(infos,function(i)i$path,"")),
+                vapply(infos,function(i)as.numeric(i$size),numeric(1)),
+                vapply(infos,function(i)if (is.null(i$mtime)) NA_real_ else as.numeric(i$mtime),numeric(1)))
+}
+
 #' create Cloudflare R2 bucket with private or public access
 #'
 #' @description
@@ -292,7 +314,7 @@ r2_list_parquet <- function(filesystem,r2_bucket,r2_path){
 #' `remove_parquet` purge changed files from the cache. Each custom domain can only serve one bucket, use subdomains like
 #' `data.example.com` to serve several buckets from one zone.
 #'
-#' @param r2_bucket R2 bucket name
+#' @param r2_bucket R2 bucket name, or the bucket as `r2://bucket` like the other functions address it
 #' @param public if `TRUE`, enable public read access to the bucket via the `r2.dev` URL, default is `FALSE`.
 #' Ignored if `custom_domain` is set.
 #' @param custom_domain optional domain, like `data.example.com`, to connect to the bucket for public read access.
@@ -300,6 +322,9 @@ r2_list_parquet <- function(filesystem,r2_bucket,r2_path){
 #' @return (invisibly) the public base url of the bucket if it is publicly accessible, otherwise `NULL`
 #' @export
 create_r2_bucket <- function(r2_bucket,public=FALSE,custom_domain=NULL) {
+  if (!is.character(r2_bucket) || length(r2_bucket)!=1) stop("Expected a single bucket name.")
+  r2_bucket <- sub("/+$","",sub("^r2://","",r2_bucket))
+  if (r2_bucket=="" || grepl("/",r2_bucket,fixed=TRUE)) stop("r2_bucket has to be a bucket name or r2://bucket, got ",r2_bucket,".")
   response <- r2_api("GET",paste0("/",r2_bucket))
   if (httr::status_code(response)==404) {
     message(paste0("Creating R2 bucket ",r2_bucket,"."))

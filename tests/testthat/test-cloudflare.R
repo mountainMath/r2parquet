@@ -19,6 +19,12 @@ test_that("existing buckets are left alone", {
   expect_message(url <- create_r2_bucket("b"),"already exists")
   expect_null(url)
   expect_length(requests,1)
+  # the bucket can be given as r2://bucket like everywhere else
+  expect_message(create_r2_bucket("r2://b/"),"already exists")
+  expect_equal(requests[[2]]$path,"/accounts/abc/r2/buckets/b")
+  expect_error(create_r2_bucket("r2://b/path"),"bucket name or r2://bucket")
+  expect_error(create_r2_bucket("r2://"),"bucket name or r2://bucket")
+  expect_error(create_r2_bucket(c("a","b")),"single bucket name")
 })
 
 test_that("new public buckets get created with the r2.dev domain", {

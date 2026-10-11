@@ -10,8 +10,9 @@ data_to_parquet(
   sort_by = NULL,
   partition_by = NULL,
   row_group_size = 10000L,
-  overwrite = TRUE,
+  remove_stale = TRUE,
   metadata = NULL,
+  compression = c("zstd", "snappy", "gzip", "brotli", "lz4", "lz4_raw", "uncompressed"),
   purge_cache = TRUE
 )
 }
@@ -27,13 +28,17 @@ is given. A parquet file on R2 has to end in `.parquet`. Existing files at that 
 
 \item{row_group_size}{number of rows per row group, rounded up to a multiple of 2048 by DuckDB, default is 10000}
 
-\item{overwrite}{if `TRUE`, the default, parquet files in hive partition directories (`key=value`) below an
+\item{remove_stale}{if `TRUE`, the default, parquet files in hive partition directories (`key=value`) below an
 existing directory at `path` get removed first, so that no partitions from earlier writes remain, also if the
 partition columns changed. Other files below `path` are kept. With `FALSE` written files replace files with the
-same path and other files are kept, e.g. to add partitions.}
+same path and other files are kept, e.g. to add partitions. Files at the paths being written always get replaced.}
 
 \item{metadata}{optional named list of metadata to write into the parquet footer, see description. The entry
 `geo` is reserved for the GeoParquet metadata.}
+
+\item{compression}{parquet compression codec, `"zstd"` (the default), `"snappy"`, `"gzip"`, `"brotli"`,
+`"lz4"`, `"lz4_raw"` or `"uncompressed"`. zstd compresses well and decompresses fast, which suits files
+that get read remotely.}
 
 \item{purge_cache}{if `TRUE`, the default, purge the changed files from the Cloudflare cache of custom domains
 of the bucket when writing to R2, like `upload_parquet`. Ignored for local paths.}

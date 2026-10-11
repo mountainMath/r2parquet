@@ -86,15 +86,25 @@ attach_parquet_metadata <- function(data,metadata){
 #' credentials as `parquet_tbl`.
 #' @return a named list of the metadata entries, empty if the files have none
 #' @export
-parquet_metadata <- function(x) {
-  if (inherits(x,"tbl_lazy")) {
-    path <- attr(x,"r2parquet_paths")
-    if (is.null(path)) stop("The table was not created by parquet_tbl, pass the path of the parquet files instead.")
-    con <- dbplyr::remote_con(x)
-  } else {
-    if (!is.character(x)) stop("x has to be a path, a vector of paths or a lazy DuckDB table from parquet_tbl.")
-    con <- parquet_connection()
-    path <- duckdb_parquet_paths(con,x)
-  }
-  duckdb_parquet_metadata(con,path)
+parquet_metadata <- function(x) UseMethod("parquet_metadata")
+
+#' @rdname parquet_metadata
+#' @export
+parquet_metadata.character <- function(x) {
+  con <- parquet_connection()
+  duckdb_parquet_metadata(con,duckdb_parquet_paths(con,x))
+}
+
+#' @rdname parquet_metadata
+#' @export
+parquet_metadata.tbl_lazy <- function(x) {
+  path <- attr(x,"r2parquet_paths")
+  if (is.null(path)) stop("The table was not created by parquet_tbl, pass the path of the parquet files instead.")
+  duckdb_parquet_metadata(dbplyr::remote_con(x),path)
+}
+
+#' @rdname parquet_metadata
+#' @export
+parquet_metadata.default <- function(x) {
+  stop("x has to be a path, a vector of paths or a lazy DuckDB table from parquet_tbl.")
 }

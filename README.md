@@ -16,7 +16,7 @@ Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloud
 ## Uploading and managing data on R2
 
 - **Buckets**: `create_r2_bucket()` creates private or public buckets, public via the `r2.dev` URL or a custom domain.
-- **Files**: `upload_parquet()` uploads single parquet files or directories of (partitioned) parquet files, `remove_parquet()` removes them. Both purge the changed files from the Cloudflare cache of the bucket's custom domains.
+- **Files**: `upload_parquet()` uploads single parquet files or directories of (partitioned) parquet files, `remove_parquet()` removes them and `list_parquet()` lists them with size and modification time. Uploads and removals purge the changed files from the Cloudflare cache of the bucket's custom domains.
 - **Writing**: `data_to_parquet()` writes data frames, sf objects and lazy DuckDB tables to parquet, optionally sorted (`sort_by`) and partitioned (`partition_by`), so remote queries only download the row groups they need. sf objects become GeoParquet 2.0 files sorted along a Hilbert curve. Given an `r2://bucket/path` destination it writes and uploads in one go, replacing earlier uploads including stale partitions. `metadata` like the source URL, license and column labels goes into the parquet footer.
 - **Reading private buckets**: `parquet_tbl("r2://bucket/path")` with any of the engines.
 - **Sharing private files**: `presigned_url()` creates time limited download (or upload) URLs for files in private buckets.

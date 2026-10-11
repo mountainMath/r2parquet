@@ -109,10 +109,10 @@ filter_spatial <- function(tbl,y,geometry_column=NULL,exact=TRUE) {
 #' table of joins.
 #'
 #' @param tbl lazy DuckDB table, e.g. from `parquet_tbl` or `filter_spatial`
-#' @param metadata if `TRUE`, the default, attach the metadata of the parquet files as attributes
+#' @param attach_metadata if `TRUE`, the default, attach the metadata of the parquet files as attributes
 #' @return a tibble, or an sf object if the table has GEOMETRY columns
 #' @export
-collect_parquet <- function(tbl,metadata=TRUE) {
+collect_parquet <- function(tbl,attach_metadata=TRUE) {
   geometry_columns <- duckdb_geometry_columns(tbl)
   data <- dplyr::collect(tbl)
   for (column in names(geometry_columns)) {
@@ -121,7 +121,7 @@ collect_parquet <- function(tbl,metadata=TRUE) {
   if (length(geometry_columns)>0) {
     data <- sf::st_as_sf(data,sf_column_name=duckdb_geometry_column(tbl,geometry_columns=geometry_columns)$name)
   }
-  if (isTRUE(metadata) && !is.null(attr(tbl,"r2parquet_paths"))) {
+  if (isTRUE(attach_metadata) && !is.null(attr(tbl,"r2parquet_paths"))) {
     data <- attach_parquet_metadata(data,duckdb_parquet_metadata(dbplyr::remote_con(tbl),attr(tbl,"r2parquet_paths")))
   }
   data

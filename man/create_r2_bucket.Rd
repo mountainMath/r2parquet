@@ -7,7 +7,7 @@
 create_r2_bucket(r2_bucket, public = FALSE, custom_domain = NULL)
 }
 \arguments{
-\item{r2_bucket}{R2 bucket name}
+\item{r2_bucket}{R2 bucket name, or the bucket as `r2://bucket` like the other functions address it}
 
 \item{public}{if `TRUE`, enable public read access to the bucket via the `r2.dev` URL, default is `FALSE`.
 Ignored if `custom_domain` is set.}

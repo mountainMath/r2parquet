@@ -172,3 +172,57 @@ parquet_tbl <- function(path,engine=c("duckdb","arrow","polars"),hive_partitioni
     polars::pl$scan_parquet(path,hive_partitioning=hive_partitioning,storage_options=storage_options)
   }
 }
+
+# one row per parquet file with its size in bytes and modification time in UTC
+parquet_files <- function(path,size=NA_real_,modified=NA_real_){
+  dplyr::tibble(path=as.character(path),size=as.numeric(size),modified=.POSIXct(as.numeric(modified),tz="UTC"))
+}
+
+# the local parquet file at a path, or the parquet files below the directory, nothing if there is neither
+local_parquet_files <- function(path){
+  files <- if (dir.exists(path)) dir(path,"\\.parquet$",recursive=TRUE,full.names=TRUE) else if (file.exists(path)) path else character()
+  info <- file.info(files,extra_cols=FALSE)
+  parquet_files(files,info$size,info$mtime)
+}
+
+#' list parquet files
+#'
+#' @description
+#' Lists the parquet files at paths on R2 or at local paths with their size and modification time, or the
+#' files a lazy table from `parquet_tbl` reads. Directories get listed recursively, so a directory of
+#' (partitioned) parquet files lists all the parquet files in it, and a path that does not exist lists nothing.
+#' Paths on R2 need the arrow package and the same credentials as `upload_parquet`. URLs can't be listed, so
+#' for a table on URLs size and modification time are `NA`.
+#'
+#' @param x `r2://bucket/path` or local path of a parquet file or of a directory with (partitioned) parquet
+#' files, a vector of these, or a lazy DuckDB table from `parquet_tbl`
+#' @return a tibble with one row per parquet file and the columns `path` (`r2://bucket/path`, local path or
+#' URL), `size` in bytes and `modified`, the modification time in UTC
+#' @export
+list_parquet <- function(x) UseMethod("list_parquet")
+
+#' @rdname list_parquet
+#' @export
+list_parquet.character <- function(x) {
+  is_r2 <- startsWith(x,"r2://")
+  is_url <- !is_r2 & grepl("^[a-z0-9]+://",x)
+  files <- lapply(seq_along(x),function(i){
+    if (is_r2[i]) r2_parquet_files(x[i]) else if (is_url[i]) parquet_files(x[i]) else local_parquet_files(x[i])
+  })
+  dplyr::distinct(dplyr::bind_rows(parquet_files(character()),files))
+}
+
+#' @rdname list_parquet
+#' @export
+list_parquet.tbl_lazy <- function(x) {
+  path <- attr(x,"r2parquet_paths")
+  if (is.null(path)) stop("The table was not created by parquet_tbl, pass the path of the parquet files instead.")
+  # parquet_tbl resolves directories to globs for all parquet files in them
+  list_parquet(sub("/\\*\\*/\\*\\.parquet$","",path))
+}
+
+#' @rdname list_parquet
+#' @export
+list_parquet.default <- function(x) {
+  stop("x has to be a path, a vector of paths or a lazy DuckDB table from parquet_tbl.")
+}

@@ -47,8 +47,8 @@ test_that("partitioned data frames keep string partition values and the sort ord
   # writing again replaces the directory
   data_to_parquet(df[df$group=="001",],file.path(dir,"data"),partition_by="group")
   expect_equal(dir(file.path(dir,"data")),"group=001")
-  # without overwrite other partitions are kept
-  data_to_parquet(df[df$group=="010",],file.path(dir,"data"),partition_by="group",overwrite=FALSE)
+  # without remove_stale other partitions are kept
+  data_to_parquet(df[df$group=="010",],file.path(dir,"data"),partition_by="group",remove_stale=FALSE)
   expect_equal(dir(file.path(dir,"data")),c("group=001","group=010"))
 })
 
@@ -147,7 +147,7 @@ test_that("paths have to be single strings", {
   expect_error(data_to_parquet(data.frame(a=1),1),"single path")
 })
 
-test_that("overwrite only removes parquet files in hive partition directories", {
+test_that("remove_stale only removes parquet files in hive partition directories", {
   expect_equal(r2parquet:::is_partition_file(c("a.parquet","year=2021/data_0.parquet","other/x.parquet",
                                                "k=v/sub/y.parquet","year=/z.parquet")),
                c(FALSE,TRUE,FALSE,TRUE,TRUE))
@@ -184,4 +184,19 @@ test_that("the arrow engine reads GeoParquet geometry as binary", {
   # the docs of parquet_tbl say so, update them when arrow learns the GEOMETRY type
   expect_equal(dataset$schema$geometry$type$ToString(),"binary")
   expect_equal(nrow(dplyr::collect(dataset)),nrow(data))
+})
+
+test_that("the compression codec can be chosen", {
+  df <- data.frame(id=1:100,value=rnorm(100))
+  path <- withr::local_tempfile(fileext=".parquet")
+  con <- DBI::dbConnect(duckdb::duckdb())
+  withr::defer(DBI::dbDisconnect(con,shutdown=TRUE))
+  codec <- function()unique(DBI::dbGetQuery(con,paste0("SELECT compression FROM parquet_metadata('",path,"')"))$compression)
+  data_to_parquet(df,path)
+  expect_equal(codec(),"ZSTD")
+  data_to_parquet(df,path,compression="snappy")
+  expect_equal(codec(),"SNAPPY")
+  data_to_parquet(df,path,compression="uncompressed")
+  expect_equal(codec(),"UNCOMPRESSED")
+  expect_error(data_to_parquet(df,path,compression="bz2"))
 })
