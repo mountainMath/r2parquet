@@ -33,7 +33,7 @@ We showcase how to upload tabular and spatial data to R2.
 
 ## Tabular data
 
-As an example consider the geographic attributes file for the 2021 census. StatCan has disabled programmatic download, so the file has to be [downloaded manually](https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=2021_92-151_X.zip&k=%20%20%20%20%209602&loc=/census-recensement/2021/geo/aip-pia/attribute-attribs/files-fichiers/2021_92-151_X.zip) and the `download_path` parameter point to where the downloaded file lives.
+As an example consider the geographic attributes file for the 2021 census. StatCan has disabled programmatic download, so the file has to be [downloaded manually](https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=2021_92-151_X.zip&k=%20%20%20%20%209602&loc=/census-recensement/2021/geo/aip-pia/attribute-attribs/files-fichiers/2021_92-151_X.zip) and unzipped into `download_path`, so that `2021_92-151_X.csv` is directly in it.
 
 ```{r}
 path <- file.path(params$download_path, "2021_92-151_X.csv")
@@ -80,7 +80,7 @@ parquet_tbl("r2://test/census/2021/2021_92-151_X.parquet") |>
 
 ## Spatial data
 
-For this we consider hosting the StatCan metro area (CMA) level geographies from the 2021 census. StatCan has disabled programmatic download, so the geodatabase has to be [downloaded manually](https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=lcma000b21f_e.zip&k=%20%20%20%20%206393&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lcma000b21f_e.zip) and the `download_path` parameter set to the (unzipped) folder with the geodatabase.
+For this we consider hosting the StatCan metro area (CMA) level geographies from the 2021 census. StatCan has disabled programmatic download, so the geodatabase has to be [downloaded manually](https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=lcma000b21f_e.zip&k=%20%20%20%20%206393&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lcma000b21f_e.zip) and unzipped so that it ends up at `lcma000b21f_e/lcma000b21f_e.gdb` within `download_path`.
 
 We then read the data and cast it to MULTIPOLYGON. Some StatCan geography files contain MULTISURFACE geometries, which have to be converted before writing parquet files, for this file the cast does not change anything.
 
