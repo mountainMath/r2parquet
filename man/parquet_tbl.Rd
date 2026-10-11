@@ -4,7 +4,7 @@
 \alias{parquet_tbl}
 \title{lazy table to query parquet files at URLs, on R2 or at local paths}
 \usage{
-parquet_tbl(path, hive_partitioning = TRUE, con = NULL)
+parquet_tbl(path, hive_partitioning = TRUE, con = NULL, cache = FALSE)
 }
 \arguments{
 \item{path}{URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)
@@ -18,6 +18,10 @@ directory, like `data/year=2021/data_0.parquet`, adds a `year` column.}
 by all calls. Tables can only be joined when they are on the same connection, so pass your own connection to
 join with data that lives there. The `httpfs` and `spatial` extensions get installed and loaded on it as
 needed, and the R2 credentials get registered as a secret.}
+
+\item{cache}{`FALSE`, the default, reads the remote files directly. `TRUE` reads local copies in the cache directory
+given by the `R2PARQUET_CACHE_PATH` environment variable, or the user cache directory if that is not set, and a path
+reads local copies in that directory, see `cache_parquet`.}
 }
 \value{
 a lazy `dplyr` table on DuckDB
@@ -45,4 +49,9 @@ the `spatial` extension gets loaded so that spatial functions like `ST_Area` can
 `filter_spatial` to filter by location and `collect_parquet` to collect the result with its metadata
 attached, as an sf object if it has geometry. `parquet_metadata` reads the metadata of the table's files
 and `list_parquet` lists the files.
+
+With `cache`, remote files get downloaded once into a local cache directory via `cache_parquet` and the table
+reads the local copies, for data that gets queried regularly. Each call checks the remote files and
+downloads what changed, and falls back to the cached copy with a warning when the remote can't be reached.
+Directories at public URLs can only be cached if they have a manifest, see `upload_parquet`.
 }

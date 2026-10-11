@@ -16,8 +16,10 @@ vector of these}
 (invisibly) the removed files as `r2://bucket/path`
 }
 \description{
-Removes parquet files, or all parquet files in directories of (partitioned) parquet files.
-Other files in the directories are left in place. Removed files can't be recovered.
+Removes parquet files, or all parquet files in directories of (partitioned) parquet files, together with the
+manifests (`_manifest.json`, see `upload_parquet`) below the directories. Other files in the directories are
+left in place. Removing single files updates the manifest of their directory if there is one. Removed files
+can't be recovered.
 Expects the R2 account id and the access key id and secret access key
 of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
 environment variables.

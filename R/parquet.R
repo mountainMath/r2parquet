@@ -102,6 +102,11 @@ duckdb_parquet_paths <- function(con,path){
 #' attached, as an sf object if it has geometry. `parquet_metadata` reads the metadata of the table's files
 #' and `list_parquet` lists the files.
 #'
+#' With `cache`, remote files get downloaded once into a local cache directory via `cache_parquet` and the table
+#' reads the local copies, for data that gets queried regularly. Each call checks the remote files and
+#' downloads what changed, and falls back to the cached copy with a warning when the remote can't be reached.
+#' Directories at public URLs can only be cached if they have a manifest, see `upload_parquet`.
+#'
 #' @param path URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)
 #' parquet files, or a vector of these
 #' @param hive_partitioning if `TRUE`, the default, partition columns get derived from `key=value` components of the
@@ -111,15 +116,19 @@ duckdb_parquet_paths <- function(con,path){
 #' by all calls. Tables can only be joined when they are on the same connection, so pass your own connection to
 #' join with data that lives there. The `httpfs` and `spatial` extensions get installed and loaded on it as
 #' needed, and the R2 credentials get registered as a secret.
+#' @param cache `FALSE`, the default, reads the remote files directly. `TRUE` reads local copies in the cache directory
+#' given by the `R2PARQUET_CACHE_PATH` environment variable, or the user cache directory if that is not set, and a path
+#' reads local copies in that directory, see `cache_parquet`.
 #' @return a lazy `dplyr` table on DuckDB
 #' @export
-parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL) {
+parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=FALSE) {
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
   if (is.null(con)) {
     con <- parquet_connection()
   } else if (!inherits(con,"duckdb_connection")) {
     stop("con has to be a DuckDB connection.")
   }
+  if (!isFALSE(cache)) path <- cache_parquet(path,cache)
   path <- duckdb_parquet_paths(con,path)
   tbl <- duckdb_parquet_tbl(con,path,hive_partitioning=hive_partitioning)
   if (length(duckdb_geometry_columns(tbl))>0) {
@@ -131,9 +140,18 @@ parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL) {
   tbl
 }
 
-# one row per parquet file with its size in bytes and modification time in UTC
-parquet_files <- function(path,size=NA_real_,modified=NA_real_){
-  dplyr::tibble(path=as.character(path),size=as.numeric(size),modified=.POSIXct(as.numeric(modified),tz="UTC"))
+# one row per parquet file with its size in bytes, modification time in UTC, etag and cache status
+parquet_files <- function(path,size=NA_real_,modified=NA_real_,etag=NA_character_,cache=NA_character_){
+  dplyr::tibble(path=as.character(path),size=as.numeric(size),modified=.POSIXct(as.numeric(modified),tz="UTC"),
+                etag=as.character(etag),cache=as.character(cache))
+}
+
+# the file at a URL with size and etag from its headers, or the files the manifest of a directory at the URL
+# lists, just the URL if there is neither or it can't be reached
+url_parquet_files <- function(url){
+  source <- if (grepl("^https?://",url)) tryCatch(url_cache_source(list(url=url)),error=function(e)NULL)
+  if (is.null(source)) return(parquet_files(url))
+  parquet_files(source$files$key,source$files$size,source$files$modified,source$files$etag)
 }
 
 # the local parquet file at a path, or the parquet files below the directory, nothing if there is neither
@@ -146,16 +164,22 @@ local_parquet_files <- function(path){
 #' list parquet files
 #'
 #' @description
-#' Lists the parquet files at paths on R2 or at local paths with their size and modification time, or the
-#' files a lazy table from `parquet_tbl` reads. Directories get listed recursively, so a directory of
-#' (partitioned) parquet files lists all the parquet files in it, and a path that does not exist lists nothing.
-#' Paths on R2 need the same credentials as `upload_parquet`. URLs can't be listed, so
-#' for a table on URLs size and modification time are `NA`.
+#' Lists the parquet files at paths on R2, at URLs or at local paths with their size, modification time and
+#' etag, and whether the local cache holds a current copy, or the files a lazy table from `parquet_tbl` reads.
+#' Directories get listed recursively, so a directory of (partitioned) parquet files lists all the parquet
+#' files in it, and a path that does not exist lists nothing. Paths on R2 need the same credentials as
+#' `upload_parquet`. Files at URLs, including presigned URLs, get their size and etag from a request for their
+#' first byte, directories at URLs from the manifest next to the files (see `upload_parquet`). A URL with
+#' neither, or one that can't be reached, is listed as it is with `NA`s.
 #'
-#' @param x `r2://bucket/path` or local path of a parquet file or of a directory with (partitioned) parquet
-#' files, a vector of these, or a lazy DuckDB table from `parquet_tbl`
-#' @return a tibble with one row per parquet file and the columns `path` (`r2://bucket/path`, local path or
-#' URL), `size` in bytes and `modified`, the modification time in UTC
+#' @param x `r2://bucket/path`, URL or local path of a parquet file or of a directory with (partitioned)
+#' parquet files, a vector of these, or a lazy DuckDB table from `parquet_tbl`
+#' @return a tibble with one row per parquet file and the columns `path` (`r2://bucket/path`, URL or local
+#' path), `size` in bytes, `modified`, the modification time in UTC, `etag`, the etag of the file, which is
+#' the MD5 hash of its content for files uploaded by this package, `NA` for local files, and `cache`, the status
+#' of the file in the local cache directory of `cache_parquet`: `"not cached"`, `"current"` when the cached copy
+#' has the etag of the file, `"stale"` when it does not, and `NA` for local files and where the etag of the
+#' file is unknown
 #' @export
 list_parquet <- function(x) UseMethod("list_parquet")
 
@@ -165,9 +189,11 @@ list_parquet.character <- function(x) {
   is_r2 <- startsWith(x,"r2://")
   is_url <- !is_r2 & grepl("^[a-z0-9]+://",x)
   files <- lapply(seq_along(x),function(i){
-    if (is_r2[i]) r2_parquet_files(x[i]) else if (is_url[i]) parquet_files(x[i]) else local_parquet_files(x[i])
+    if (is_r2[i]) r2_parquet_files(x[i]) else if (is_url[i]) url_parquet_files(x[i]) else local_parquet_files(x[i])
   })
-  dplyr::distinct(dplyr::bind_rows(parquet_files(character()),files))
+  files <- dplyr::distinct(dplyr::bind_rows(parquet_files(character()),files))
+  files$cache <- cache_status(files$path,files$etag)
+  files
 }
 
 #' @rdname list_parquet

@@ -25,6 +25,7 @@ Imports:
     jsonlite,
     sf,
     stats,
+    tools,
     utils
 Suggests:
     ggplot2,

@@ -16,17 +16,23 @@ list_parquet(x)
 \method{list_parquet}{default}(x)
 }
 \arguments{
-\item{x}{`r2://bucket/path` or local path of a parquet file or of a directory with (partitioned) parquet
-files, a vector of these, or a lazy DuckDB table from `parquet_tbl`}
+\item{x}{`r2://bucket/path`, URL or local path of a parquet file or of a directory with (partitioned)
+parquet files, a vector of these, or a lazy DuckDB table from `parquet_tbl`}
 }
 \value{
-a tibble with one row per parquet file and the columns `path` (`r2://bucket/path`, local path or
-URL), `size` in bytes and `modified`, the modification time in UTC
+a tibble with one row per parquet file and the columns `path` (`r2://bucket/path`, URL or local
+path), `size` in bytes, `modified`, the modification time in UTC, `etag`, the etag of the file, which is
+the MD5 hash of its content for files uploaded by this package, `NA` for local files, and `cache`, the status
+of the file in the local cache directory of `cache_parquet`: `"not cached"`, `"current"` when the cached copy
+has the etag of the file, `"stale"` when it does not, and `NA` for local files and where the etag of the
+file is unknown
 }
 \description{
-Lists the parquet files at paths on R2 or at local paths with their size and modification time, or the
-files a lazy table from `parquet_tbl` reads. Directories get listed recursively, so a directory of
-(partitioned) parquet files lists all the parquet files in it, and a path that does not exist lists nothing.
-Paths on R2 need the same credentials as `upload_parquet`. URLs can't be listed, so
-for a table on URLs size and modification time are `NA`.
+Lists the parquet files at paths on R2, at URLs or at local paths with their size, modification time and
+etag, and whether the local cache holds a current copy, or the files a lazy table from `parquet_tbl` reads.
+Directories get listed recursively, so a directory of (partitioned) parquet files lists all the parquet
+files in it, and a path that does not exist lists nothing. Paths on R2 need the same credentials as
+`upload_parquet`. Files at URLs, including presigned URLs, get their size and etag from a request for their
+first byte, directories at URLs from the manifest next to the files (see `upload_parquet`). A URL with
+neither, or one that can't be reached, is listed as it is with `NA`s.
 }

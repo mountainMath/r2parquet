@@ -39,7 +39,9 @@
 #' environment variables. A directory of partitioned files may be named like a
 #' parquet file, `parquet_tbl` tells files and directories apart. Stale files get removed before the new ones
 #' are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
-#' get purged from the Cloudflare cache like in `upload_parquet`, unless `purge_cache` is `FALSE`.
+#' get purged from the Cloudflare cache like in `upload_parquet`, unless `purge_cache` is `FALSE`. Partitioned
+#' writes to R2 write a manifest of the directory, and single files update the manifest of their directory
+#' if there is one, see `upload_parquet`.
 #'
 #' `metadata` gets written into the footer of the parquet files, where other tools can read it too (DuckDB's
 #' `parquet_kv_metadata`, arrow's schema metadata), and `parquet_metadata` reads it back. `collect_parquet`
@@ -212,9 +214,9 @@ r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_grou
   files <- attr(local_path,"files")
   message("Uploading ",format(structure(sum(file.size(files)),class="object_size"),units="auto",standard="SI"),
           " in ",length(files)," parquet file",if (length(files)>1) "s"," to ",r2_url,".")
-  uploaded <- upload_parquet(local_path,r2_url,purge_cache=FALSE)
-  if (purge_cache) r2_purge_cache_after_change(r2_bucket,union(stale,substring(uploaded,nchar(r2_bucket)+7)))
-  invisible(structure(r2_url,files=uploaded))
+  uploaded <- r2_upload(local_path,r2_bucket,r2_path)
+  if (purge_cache) r2_purge_cache_after_change(r2_bucket,union(stale,c(uploaded$files,uploaded$manifest)))
+  invisible(structure(r2_url,files=paste0("r2://",r2_bucket,"/",uploaded$files)))
 }
 
 # whether paths relative to a dataset directory are in hive partition directories (key=value), as partitioned writes produce them

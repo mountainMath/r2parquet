@@ -81,7 +81,9 @@ access key of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY
 environment variables. A directory of partitioned files may be named like a
 parquet file, `parquet_tbl` tells files and directories apart. Stale files get removed before the new ones
 are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
-get purged from the Cloudflare cache like in `upload_parquet`, unless `purge_cache` is `FALSE`.
+get purged from the Cloudflare cache like in `upload_parquet`, unless `purge_cache` is `FALSE`. Partitioned
+writes to R2 write a manifest of the directory, and single files update the manifest of their directory
+if there is one, see `upload_parquet`.
 
 `metadata` gets written into the footer of the parquet files, where other tools can read it too (DuckDB's
 `parquet_kv_metadata`, arrow's schema metadata), and `parquet_metadata` reads it back. `collect_parquet`

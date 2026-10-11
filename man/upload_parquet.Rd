@@ -4,7 +4,7 @@
 \alias{upload_parquet}
 \title{transfer parquet files to Cloudflare R2}
 \usage{
-upload_parquet(path, destination, purge_cache = TRUE)
+upload_parquet(path, destination, purge_cache = TRUE, manifest = TRUE)
 }
 \arguments{
 \item{path}{path to local parquet file or directory with (partitioned) parquet files}
@@ -14,6 +14,9 @@ or is just the bucket, the basename of `path` gets appended. If `path` is a dire
 under which the content of the directory gets placed.}
 
 \item{purge_cache}{if `TRUE`, the default, purge the uploaded files from the Cloudflare cache of custom domains of the bucket}
+
+\item{manifest}{if `TRUE`, the default, write the manifest of the destination directory when `path` is a directory.
+An existing manifest gets updated either way, a stale manifest would be worse than none}
 }
 \value{
 (invisibly) the uploaded files as `r2://bucket/path`
@@ -28,4 +31,10 @@ environment variables.
 If the bucket is served via a custom domain, the uploaded files get purged from the Cloudflare cache
 so that the new versions are served right away. This needs the value of an R2 API token with Zone Cache Purge
 permission in the `R2_API_TOKEN` environment variable, see `create_r2_bucket`, and is skipped if it is not set.
+
+Directory uploads write a manifest, a `_manifest.json` file in the destination directory listing the parquet
+files below it with their size, etag and modification time, unless `manifest` is `FALSE`. The manifest lets
+`cache_parquet` and `parquet_tbl(cache = TRUE)` cache the directory from a public URL, where the files can't be
+listed. Uploading a single file updates the manifest of its directory if there is one. `write_manifest`
+writes manifests for directories uploaded earlier.
 }

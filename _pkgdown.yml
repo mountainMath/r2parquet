@@ -13,6 +13,9 @@ reference:
   - collect_parquet
   - parquet_metadata
   - list_parquet
+  - cache_parquet
+  - list_cache
+  - remove_from_cache
   - parquet_connection
 - title: Uploading and managing data on R2
   desc: Need the R2 credentials (see the README), except `data_to_parquet()` for local paths.
@@ -24,6 +27,7 @@ reference:
   - data_to_parquet
   - upload_parquet
   - remove_parquet
+  - write_manifest
 - subtitle: Sharing private files
   contents:
   - presigned_url

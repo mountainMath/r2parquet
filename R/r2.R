@@ -88,8 +88,9 @@ sigv4_presigned_url <- function(verb,base_url,path,expires,access_key,secret,reg
   paste0(base_url,path,"?",query_string,"&X-Amz-Signature=",signature$signature)
 }
 
-# signed request via the S3 compatible API, the body is a raw vector or a string
-r2_request <- function(verb,r2_bucket,r2_path="",query=list(),headers=list(),body=raw()){
+# signed request via the S3 compatible API, the body is a raw vector or a string, config is further httr
+# configuration like httr::write_disk
+r2_request <- function(verb,r2_bucket,r2_path="",query=list(),headers=list(),body=raw(),config=NULL){
   credentials <- r2_credentials(c("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
   endpoint <- r2_endpoint()
   path <- r2_canonical_path(r2_bucket,r2_path)
@@ -98,8 +99,9 @@ r2_request <- function(verb,r2_bucket,r2_path="",query=list(),headers=list(),bod
                            access_key=credentials[["R2_ACCESS_KEY_ID"]],
                            secret=credentials[["R2_SECRET_ACCESS_KEY"]],region="auto")
   query_string <- sigv4_query_string(query)
-  httr::VERB(verb,paste0(endpoint,path,if (query_string!="") "?",query_string),
-             do.call(httr::add_headers,headers),
+  request_config <- do.call(httr::add_headers,headers)
+  if (!is.null(config)) request_config <- c(request_config,config)
+  httr::VERB(verb,paste0(endpoint,path,if (query_string!="") "?",query_string),request_config,
              body=if (length(body)>0) body)
 }
 
@@ -260,16 +262,75 @@ r2_purge_cache_after_change <- function(r2_bucket,r2_paths){
 # upload a local file as an object in a single PUT request with a signed payload, so the file gets read into
 # memory (the S3 API allows up to 5GB per PUT, httr's streaming upload_file leaks file connections)
 r2_put_object <- function(r2_bucket,r2_path,file){
-  response <- r2_request("PUT",r2_bucket,r2_path,body=readBin(file,raw(),file.size(file)),
-                         headers=list("content-type"="application/octet-stream"))
+  r2_put_body(r2_bucket,r2_path,readBin(file,raw(),file.size(file)),"application/octet-stream",what=file)
+}
+
+# upload a raw vector or string as an object
+r2_put_body <- function(r2_bucket,r2_path,body,content_type,what="the file"){
+  if (!is.raw(body)) body <- charToRaw(enc2utf8(as.character(body)))
+  response <- r2_request("PUT",r2_bucket,r2_path,body=body,headers=list("content-type"=content_type))
   if (httr::status_code(response)>=400) {
-    stop(paste0("Uploading ",file," to r2://",r2_bucket,"/",r2_path," failed with status ",httr::status_code(response),". ",
+    stop(paste0("Uploading ",what," to r2://",r2_bucket,"/",r2_path," failed with status ",httr::status_code(response),". ",
                 httr::content(response,"text",encoding="UTF-8")))
   }
   invisible(response)
 }
 
-# objects in the bucket whose key starts with prefix, with size in bytes and modification time, via the
+# key of the manifest of a directory, "" is the bucket itself
+r2_manifest_key <- function(r2_dir){
+  paste0(r2_dir,if (r2_dir!="") "/",manifest_name)
+}
+
+# directory an object is in, "" for the bucket itself
+r2_dirname <- function(r2_path){
+  ifelse(grepl("/",r2_path,fixed=TRUE),sub("/[^/]*$","",r2_path),"")
+}
+
+# write the manifest listing the parquet files below a directory, or remove it if no parquet files are left.
+# Without create only an existing manifest gets updated. Returns the key of the manifest if it changed.
+r2_update_manifest <- function(r2_bucket,r2_dir,create=FALSE){
+  key <- r2_manifest_key(r2_dir)
+  objects <- r2_objects(r2_bucket,r2_dir)
+  exists <- key %in% objects$key
+  if (!create && !exists) return(NULL)
+  files <- objects[grepl("\\.parquet$",objects$key),]
+  if (nrow(files)==0) {
+    if (exists) r2_delete_objects(r2_bucket,key)
+    return(if (exists) key)
+  }
+  files <- manifest_files(substring(files$key,nchar(r2_dir)+1+(r2_dir!="")),files$size,files$etag,files$modified)
+  r2_put_body(r2_bucket,key,manifest_json(files),"application/json",what="the manifest")
+  key
+}
+
+# upload a local parquet file or a directory of parquet files, maintaining the manifest of the directory:
+# directory uploads create one if manifest is TRUE, otherwise an existing manifest gets updated.
+# Returns the uploaded keys and the key of the manifest if it changed.
+r2_upload <- function(path,r2_bucket,r2_path,manifest=TRUE){
+  if (dir.exists(path)) {
+    files <- dir(path,"\\.parquet$",recursive=TRUE)
+    if (length(files)==0) stop(paste0("No parquet files found in ",path,"."))
+    r2_dir <- sub("/+$","",r2_path)
+    r2_paths <- paste0(r2_dir,if (r2_dir!="") "/",files)
+    files <- file.path(path,files)
+  } else if (file.exists(path)) {
+    if (r2_path=="" || endsWith(r2_path,"/")) {
+      r2_path=paste0(r2_path,basename(path))
+    }
+    r2_dir <- r2_dirname(r2_path)
+    r2_paths <- r2_path
+    files <- path
+    manifest <- FALSE
+  } else {
+    stop(paste0("File or directory ",path," does not exist."))
+  }
+  for (i in seq_along(files)) {
+    r2_put_object(r2_bucket,r2_paths[i],files[i])
+  }
+  list(files=r2_paths,manifest=r2_update_manifest(r2_bucket,r2_dir,create=manifest))
+}
+
+# objects in the bucket whose key starts with prefix, with size in bytes, modification time and etag, via the
 # ListObjectsV2 API that returns up to 1000 objects per page
 r2_list_objects <- function(r2_bucket,prefix=""){
   pages <- list()
@@ -284,7 +345,8 @@ r2_list_objects <- function(r2_bucket,prefix=""){
     objects <- xml_elements(content,"Contents")
     pages[[length(pages)+1]] <- data.frame(key=xml_field(objects,"Key"),
                                            size=as.numeric(xml_field(objects,"Size")),
-                                           modified=as.POSIXct(xml_field(objects,"LastModified"),format="%Y-%m-%dT%H:%M:%OS",tz="UTC"))
+                                           modified=as.POSIXct(xml_field(objects,"LastModified"),format="%Y-%m-%dT%H:%M:%OS",tz="UTC"),
+                                           etag=clean_etag(xml_field(objects,"ETag")))
     if (!identical(xml_field(content,"IsTruncated"),"true")) break
     token <- xml_field(content,"NextContinuationToken")
   }
@@ -306,7 +368,7 @@ r2_parquet_files <- function(path){
   r2_path <- sub("/+$","",path$path)
   objects <- r2_objects(path$bucket,r2_path)
   objects <- if (r2_path %in% objects$key) objects[objects$key==r2_path,] else objects[grepl("\\.parquet$",objects$key),]
-  parquet_files(paste0("r2://",path$bucket,"/",objects$key),objects$size,objects$modified)
+  parquet_files(paste0("r2://",path$bucket,"/",objects$key),objects$size,objects$modified,objects$etag)
 }
 
 #' create Cloudflare R2 bucket with private or public access
@@ -371,44 +433,65 @@ create_r2_bucket <- function(r2_bucket,public=FALSE,custom_domain=NULL) {
 #' so that the new versions are served right away. This needs the value of an R2 API token with Zone Cache Purge
 #' permission in the `R2_API_TOKEN` environment variable, see `create_r2_bucket`, and is skipped if it is not set.
 #'
+#' Directory uploads write a manifest, a `_manifest.json` file in the destination directory listing the parquet
+#' files below it with their size, etag and modification time, unless `manifest` is `FALSE`. The manifest lets
+#' `cache_parquet` and `parquet_tbl(cache = TRUE)` cache the directory from a public URL, where the files can't be
+#' listed. Uploading a single file updates the manifest of its directory if there is one. `write_manifest`
+#' writes manifests for directories uploaded earlier.
+#'
 #' @param path path to local parquet file or directory with (partitioned) parquet files
 #' @param destination destination on R2 as `r2://bucket/path`. If `path` is a file and `destination` ends with a slash (`/`)
 #' or is just the bucket, the basename of `path` gets appended. If `path` is a directory, `destination` is the directory
 #' under which the content of the directory gets placed.
 #' @param purge_cache if `TRUE`, the default, purge the uploaded files from the Cloudflare cache of custom domains of the bucket
+#' @param manifest if `TRUE`, the default, write the manifest of the destination directory when `path` is a directory.
+#' An existing manifest gets updated either way, a stale manifest would be worse than none
 #' @return (invisibly) the uploaded files as `r2://bucket/path`
 #' @export
-upload_parquet <- function(path,destination,purge_cache=TRUE) {
+upload_parquet <- function(path,destination,purge_cache=TRUE,manifest=TRUE) {
   destination <- r2_split_path(destination)
   r2_bucket <- destination$bucket
-  r2_path <- destination$path
-  if (dir.exists(path)) {
-    files <- dir(path,"\\.parquet$",recursive=TRUE)
-    if (length(files)==0) stop(paste0("No parquet files found in ",path,"."))
-    if (r2_path!="") r2_path=paste0(sub("/+$","",r2_path),"/")
-    r2_paths <- paste0(r2_path,files)
-    files <- file.path(path,files)
-  } else if (file.exists(path)) {
-    if (r2_path=="" || endsWith(r2_path,"/")) {
-      r2_path=paste0(r2_path,basename(path))
-    }
-    r2_paths <- r2_path
-    files <- path
-  } else {
-    stop(paste0("File or directory ",path," does not exist."))
-  }
-  for (i in seq_along(files)) {
-    r2_put_object(r2_bucket,r2_paths[i],files[i])
-  }
-  if (purge_cache) r2_purge_cache_after_change(r2_bucket,r2_paths)
-  invisible(paste0("r2://",r2_bucket,"/",r2_paths))
+  uploaded <- r2_upload(path,r2_bucket,destination$path,manifest=manifest)
+  if (purge_cache) r2_purge_cache_after_change(r2_bucket,c(uploaded$files,uploaded$manifest))
+  invisible(paste0("r2://",r2_bucket,"/",uploaded$files))
+}
+
+#' write manifests for directories of parquet files on Cloudflare R2
+#'
+#' @description
+#' Writes a `_manifest.json` file into directories on R2, listing the parquet files below the directory with
+#' their size, etag and modification time. `upload_parquet` and `data_to_parquet` write manifests for the
+#' directories they upload, this writes them for directories uploaded before, or uploaded without a manifest.
+#' Manifests let `cache_parquet` and `parquet_tbl(cache = TRUE)` cache a directory from its public URL, since
+#' directories can't be listed over https. Expects the same credentials as `upload_parquet`, and purges the
+#' manifest from the Cloudflare cache of the bucket's custom domains like `upload_parquet` does.
+#'
+#' @param path directory with (partitioned) parquet files on R2 as `r2://bucket/path`, or a vector of these
+#' @param purge_cache if `TRUE`, the default, purge the manifests from the Cloudflare cache of custom domains of the bucket
+#' @return (invisibly) the manifests as `r2://bucket/path/_manifest.json`
+#' @export
+write_manifest <- function(path,purge_cache=TRUE) {
+  if (!is.character(path) || length(path)==0) stop("path has to be one or more R2 paths of the form r2://bucket/path.")
+  manifests <- vapply(path,function(p){
+    p <- r2_split_path(p)
+    r2_dir <- sub("/+$","",p$path)
+    objects <- r2_objects(p$bucket,r2_dir)
+    if (r2_dir %in% objects$key) stop(paste0("r2://",p$bucket,"/",r2_dir," is a file, manifests describe directories."))
+    if (!any(grepl("\\.parquet$",objects$key))) stop(paste0("No parquet files found in ",r2_dir," in R2 bucket ",p$bucket,"."))
+    key <- r2_update_manifest(p$bucket,r2_dir,create=TRUE)
+    if (purge_cache) r2_purge_cache_after_change(p$bucket,key)
+    paste0("r2://",p$bucket,"/",key)
+  },character(1),USE.NAMES=FALSE)
+  invisible(manifests)
 }
 
 #' remove parquet files from Cloudflare R2
 #'
 #' @description
-#' Removes parquet files, or all parquet files in directories of (partitioned) parquet files.
-#' Other files in the directories are left in place. Removed files can't be recovered.
+#' Removes parquet files, or all parquet files in directories of (partitioned) parquet files, together with the
+#' manifests (`_manifest.json`, see `upload_parquet`) below the directories. Other files in the directories are
+#' left in place. Removing single files updates the manifest of their directory if there is one. Removed files
+#' can't be recovered.
 #' Expects the R2 account id and the access key id and secret access key
 #' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
 #' environment variables.
@@ -430,22 +513,31 @@ remove_parquet <- function(path,purge_cache=TRUE) {
     r2_path <- sub("/+$","",p$path)
     if (r2_path=="") stop("Please specify the path of the parquet file or directory to remove in R2 bucket ",r2_bucket,".")
     objects <- r2_objects(r2_bucket,r2_path)
+    manifests <- character()
+    directories <- character()
     if (r2_path %in% objects$key) {
       r2_paths <- r2_path
+      directories <- r2_dirname(r2_path)
     } else if (nrow(objects)>0) {
       r2_paths <- objects$key[grepl("\\.parquet$",objects$key)]
       if (length(r2_paths)==0) stop(paste0("No parquet files found in ",r2_path," in R2 bucket ",r2_bucket,"."))
+      manifests <- objects$key[basename(objects$key)==manifest_name]
     } else {
       stop(paste0("File or directory ",r2_path," does not exist in R2 bucket ",r2_bucket,"."))
     }
-    list(bucket=r2_bucket,paths=r2_paths)
+    list(bucket=r2_bucket,paths=r2_paths,manifests=manifests,directories=directories)
   })
   buckets <- vapply(resolved,`[[`,"",i="bucket")
   removed <- character()
   for (r2_bucket in unique(buckets)) {
-    r2_paths <- unique(unlist(lapply(resolved[buckets==r2_bucket],`[[`,"paths")))
-    r2_delete_objects(r2_bucket,r2_paths)
-    if (purge_cache) r2_purge_cache_after_change(r2_bucket,r2_paths)
+    in_bucket <- resolved[buckets==r2_bucket]
+    r2_paths <- unique(unlist(lapply(in_bucket,`[[`,"paths")))
+    manifests <- unique(unlist(lapply(in_bucket,`[[`,"manifests")))
+    r2_delete_objects(r2_bucket,c(r2_paths,manifests))
+    # manifests of the directories single files were removed from, unless the directory itself went
+    directories <- setdiff(unique(unlist(lapply(in_bucket,`[[`,"directories"))),r2_dirname(manifests))
+    for (r2_dir in directories) manifests <- c(manifests,r2_update_manifest(r2_bucket,r2_dir))
+    if (purge_cache) r2_purge_cache_after_change(r2_bucket,c(r2_paths,manifests))
     message(paste0("Removed ",length(r2_paths)," file",if (length(r2_paths)>1) "s" else ""," from R2 bucket ",r2_bucket,"."))
     removed <- c(removed,paste0("r2://",r2_bucket,"/",r2_paths))
   }
