@@ -39,7 +39,7 @@ As an example consider the geographic attributes file for the 2021 census. StatC
 path <- file.path(params$download_path, "2021_92-151_X.csv")
 ```
 
-The file has close to half a million rows, one per dissemination block, and takes 300 MB as CSV. Rather than reading it into R, we let DuckDB read it lazily, `data_to_parquet()` then writes lazy DuckDB tables with a single DuckDB `COPY` straight from the CSV to parquet, and uploads the parquet file in chunks, without the data ever passing through R.
+The file has close to half a million rows, one per dissemination block, and takes 300 MB as CSV. Rather than reading it into R, we let DuckDB read it lazily, `data_to_parquet()` then writes lazy DuckDB tables with a single DuckDB `COPY` straight from the CSV to parquet, and uploads the parquet file, without the data ever being read into an R data frame.
 
 Trial and error determined that the CSV is Windows-1252 encoded, which DuckDB reads via its `encodings` extension. We read all columns as text, otherwise DuckDB would turn codes like `SACCODE` `"001"` into numbers, and convert the numeric columns explicitly instead. The column names are bilingual, like `DBUID_IDIDU`, we keep the English part.
 
@@ -59,7 +59,7 @@ geo_attributes
 
 Sorting by the dissemination block id keeps the blocks of each province, census division and subdivision together in the same row groups, so queries filtering on these only download the row groups they need.
 
-We also encode basic metadata on data provenance and licence to give clarity what the data it and where it comes from. 
+We also encode basic metadata on data provenance and licence to give clarity what the data is and where it comes from.
 
 ```{r}
 metadata <- list(
@@ -141,6 +141,7 @@ ggplot(data) +
        caption=parquet_metadata(data)$attribution) 
 ```
 
+The metadata is accessible from the lazy table `con` as well as from the collected `data`, and is used here for the caption.
 
 ## Cleanup
 

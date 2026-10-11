@@ -37,7 +37,31 @@ db_table |> colnames()
 #> [13] "geometry"
 ```
 
-This only reads the metadata, the file carries several geographic identifiers as well as the geography. A simple query would be to fetch the data for just the City of Vancouver.
+This only reads the parquet metadata, the file carries several geographic identifiers as well as the geography. The table also carries custom metadata that gives more information about data provenance and licence.
+
+
+``` r
+db_table |> parquet_metadata()
+#> $title
+#> [1] "2021 Census – Boundary files - Dissemination blocks"
+#> 
+#> $source_url
+#> [1] "https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=ldb_000b21f_e.zip&k=%20%20%20248570&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/ldb_000b21f_e.zip"
+#> 
+#> $reference_guide
+#> [1] "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21"
+#> 
+#> $licence
+#> [1] "Statistics Canada Open Licence"
+#> 
+#> $licence_url
+#> [1] "https://www.statcan.gc.ca/en/terms-conditions/open-licence"
+#> 
+#> $attribution
+#> [1] "Statistics Canada Product ldb_000b21f_e"
+```
+
+A simple query would be to fetch the data for just the City of Vancouver.
 
 
 ``` r
@@ -46,7 +70,9 @@ data_csd <- db_table |>
   collect_parquet()
 
 ggplot(data_csd) +
-  geom_sf()
+  geom_sf() +
+  labs(title="City of Vancouver Dissemination Blocks",
+       caption=parquet_metadata(data_csd)$attribution)
 ```
 
 <div class="figure">
@@ -63,7 +89,9 @@ data_cma <- db_table |>
   collect_parquet()
 
 ggplot(data_cma) +
-  geom_sf()
+  geom_sf() +
+  labs(title="Metro Vancouver Dissemination Blocks",
+       caption=parquet_metadata(data_cma)$attribution)
 ```
 
 <div class="figure">
@@ -85,8 +113,10 @@ and read just the ones for Metro Vancouver.
 geo_attributes <- parquet_tbl(geo_attributes_path) |>
   filter(CMAUID=="933") |>
   select(DBUID,Population=DBPOP2021) |>
-  collect()
+  collect_parquet()
 ```
+
+`collect_parquet()` works for tables without geometry too, and unlike `collect()` it attaches the file metadata, so the attribution of both sources can go into the caption.
 
 
 ``` r
@@ -102,8 +132,8 @@ data_cma |>
   scale_fill_viridis_d(option = "magma") +
   labs(title="Population density in Metro Vancouver",
        fill="Pop/ha",
-       caption="StatCan Census 2021") +
-  coord_sf(datum=NA)
+       caption=paste0(parquet_metadata(data_cma)$attribution, " | ",
+                      parquet_metadata(geo_attributes)$attribution))
 ```
 
 <div class="figure">
@@ -115,14 +145,14 @@ data_cma |>
 
 # Spatial queries
 
-We can also use efficient spatial filtering when getting the data, for example querying data within a 10 km radius around the centroid of the City of Vancouver.
+We can also use efficient spatial filtering when getting the data, for example querying data within a 10 km radius around central Toronto.
 
 
 ``` r
 library(sf)
 #> Linking to GEOS 3.13.0, GDAL 3.8.5, PROJ 9.5.1; sf_use_s2() is TRUE
 
-mask <- st_point(c(-123.108, 49.249)) |> 
+mask <- st_point(c(-79.3842, 43.6514)) |> 
   st_sfc(crs = 4326) |>
   st_buffer(10000, max_cells = 10000) 
 
@@ -133,24 +163,15 @@ data_mask <- db_table |>
 data_mask |>
   st_set_agr("constant") |>
   st_intersection(mask |> st_transform(st_crs(data_mask))) |>
-  left_join(geo_attributes, by="DBUID") |>
-  mutate(density=Population/(LANDAREA*100)) |>
-  mutate(density=if_else(is.finite(density),density,0)) |>
-  mutate(bands=cut(density,breaks=c(-Inf,0,10,20,50,100,200,500,1000,Inf),
-                   labels=c("0","0-10","10-20","20-50","50-100","100-200",
-                            "200-500","500-1000",">1000"))) |>
-  ggplot(aes(fill=bands)) +
-  geom_sf(colour=NA) +
-  scale_fill_viridis_d(option = "magma") +
-  labs(title="Population density in central Metro Vancouver",
-       fill="Pop/ha",
-       caption="StatCan Census 2021") +
-  coord_sf(datum=NA)
+  ggplot() +
+  geom_sf() +
+  labs(title="Dissemination blocks in central Toronto",
+       caption=parquet_metadata(data_mask)$attribution) 
 ```
 
 <div class="figure">
-<img src="accessing_public_buckets-radius-1.png" alt="plot of chunk radius" width="100%" />
-<p class="caption">plot of chunk radius</p>
+<img src="accessing_public_buckets-toronto-radius-1.png" alt="plot of chunk toronto-radius" width="100%" />
+<p class="caption">plot of chunk toronto-radius</p>
 </div>
 
-The `filter_spatial` function returns every feature that intersects the mask, clipping the returned data with `st_intersection` makes for a prettier plot.
+The `filter_spatial` function returns every feature that intersects the mask, clipping the returned data with `st_intersection` makes for a prettier plot. `filter_spatial()` transforms the mask to the crs of the data automatically, `st_intersection()` needs the explicit transformation.

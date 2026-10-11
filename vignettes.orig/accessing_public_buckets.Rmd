@@ -42,7 +42,13 @@ db_table <- parquet_tbl(census_db_url)
 db_table |> colnames()
 ```
 
-This only reads the metadata, the file carries several geographic identifiers as well as the geography. A simple query would be to fetch the data for just the City of Vancouver.
+This only reads the parquet metadata, the file carries several geographic identifiers as well as the geography. The table also carries custom metadata that gives more information about data provenance and licence.
+
+```{r}
+db_table |> parquet_metadata()
+```
+
+A simple query would be to fetch the data for just the City of Vancouver.
 
 ```{r vancouver-csd}
 data_csd <- db_table |>
@@ -50,7 +56,9 @@ data_csd <- db_table |>
   collect_parquet()
 
 ggplot(data_csd) +
-  geom_sf()
+  geom_sf() +
+  labs(title="City of Vancouver Dissemination Blocks",
+       caption=parquet_metadata(data_csd)$attribution)
 ```
 
 Similarly, we can fetch the data for Metro Vancouver. Both these queries run in less than a second because under the hood only the ranges for the data that's actually required are identified and read, with only limited unneeded data making the trip from R2 to the R session.
@@ -61,7 +69,9 @@ data_cma <- db_table |>
   collect_parquet()
 
 ggplot(data_cma) +
-  geom_sf()
+  geom_sf() +
+  labs(title="Metro Vancouver Dissemination Blocks",
+       caption=parquet_metadata(data_cma)$attribution)
 ```
 
 To build on this we query the geographic attributes hosted at
@@ -76,8 +86,10 @@ and read just the ones for Metro Vancouver.
 geo_attributes <- parquet_tbl(geo_attributes_path) |>
   filter(CMAUID=="933") |>
   select(DBUID,Population=DBPOP2021) |>
-  collect()
+  collect_parquet()
 ```
+
+`collect_parquet()` works for tables without geometry too, and unlike `collect()` it attaches the file metadata, so the attribution of both sources can go into the caption.
 
 ```{r vancouver-density}
 data_cma |>
@@ -92,20 +104,20 @@ data_cma |>
   scale_fill_viridis_d(option = "magma") +
   labs(title="Population density in Metro Vancouver",
        fill="Pop/ha",
-       caption="StatCan Census 2021") +
-  coord_sf(datum=NA)
+       caption=paste0(parquet_metadata(data_cma)$attribution, " | ",
+                      parquet_metadata(geo_attributes)$attribution))
 ```
 
 
 
 # Spatial queries
 
-We can also use efficient spatial filtering when getting the data, for example querying data within a 10 km radius around the centroid of the City of Vancouver.
+We can also use efficient spatial filtering when getting the data, for example querying data within a 10 km radius around central Toronto.
 
-```{r radius}
+```{r toronto-radius}
 library(sf)
 
-mask <- st_point(c(-123.108, 49.249)) |> 
+mask <- st_point(c(-79.3842, 43.6514)) |> 
   st_sfc(crs = 4326) |>
   st_buffer(10000, max_cells = 10000) 
 
@@ -116,19 +128,10 @@ data_mask <- db_table |>
 data_mask |>
   st_set_agr("constant") |>
   st_intersection(mask |> st_transform(st_crs(data_mask))) |>
-  left_join(geo_attributes, by="DBUID") |>
-  mutate(density=Population/(LANDAREA*100)) |>
-  mutate(density=if_else(is.finite(density),density,0)) |>
-  mutate(bands=cut(density,breaks=c(-Inf,0,10,20,50,100,200,500,1000,Inf),
-                   labels=c("0","0-10","10-20","20-50","50-100","100-200",
-                            "200-500","500-1000",">1000"))) |>
-  ggplot(aes(fill=bands)) +
-  geom_sf(colour=NA) +
-  scale_fill_viridis_d(option = "magma") +
-  labs(title="Population density in central Metro Vancouver",
-       fill="Pop/ha",
-       caption="StatCan Census 2021") +
-  coord_sf(datum=NA)
+  ggplot() +
+  geom_sf() +
+  labs(title="Dissemination blocks in central Toronto",
+       caption=parquet_metadata(data_mask)$attribution) 
 ```
 
-The `filter_spatial` function returns every feature that intersects the mask, clipping the returned data with `st_intersection` makes for a prettier plot.
+The `filter_spatial` function returns every feature that intersects the mask, clipping the returned data with `st_intersection` makes for a prettier plot. `filter_spatial()` transforms the mask to the crs of the data automatically, `st_intersection()` needs the explicit transformation.

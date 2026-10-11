@@ -31,7 +31,7 @@ As an example consider the geographic attributes file for the 2021 census. StatC
 path <- file.path(params$download_path, "2021_92-151_X.csv")
 ```
 
-The file has close to half a million rows, one per dissemination block, and takes 300 MB as CSV. Rather than reading it into R, we let DuckDB read it lazily, `data_to_parquet()` then writes lazy DuckDB tables with a single DuckDB `COPY` straight from the CSV to parquet, and uploads the parquet file in chunks, without the data ever passing through R.
+The file has close to half a million rows, one per dissemination block, and takes 300 MB as CSV. Rather than reading it into R, we let DuckDB read it lazily, `data_to_parquet()` then writes lazy DuckDB tables with a single DuckDB `COPY` straight from the CSV to parquet, and uploads the parquet file, without the data ever being read into an R data frame.
 
 Trial and error determined that the CSV is Windows-1252 encoded, which DuckDB reads via its `encodings` extension. We read all columns as text, otherwise DuckDB would turn codes like `SACCODE` `"001"` into numbers, and convert the numeric columns explicitly instead. The column names are bilingual, like `DBUID_IDIDU`, we keep the English part.
 
@@ -73,10 +73,25 @@ geo_attributes
 
 Sorting by the dissemination block id keeps the blocks of each province, census division and subdivision together in the same row groups, so queries filtering on these only download the row groups they need.
 
+We also encode basic metadata on data provenance and licence to give clarity what the data is and where it comes from.
+
+
+``` r
+metadata <- list(
+  "title"="2021 Census – Geographic Attribute File",
+  "source_url"="https://www12.statcan.gc.ca/census-recensement/2021/geo/aip-pia/attribute-attribs/index2021-eng.cfm?year=2021",
+  "reference_guide"="https://www150.statcan.gc.ca/n1/en/catalogue/92-151-G2021001",
+  "licence"="Statistics Canada Open Licence",
+  "licence_url"="https://www.statcan.gc.ca/en/terms-conditions/open-licence",
+  "attribution"="Statistics Canada Product 2021_92-151_X"
+)
+```
+
+
 
 ``` r
 data_to_parquet(geo_attributes, "r2://test/census/2021/2021_92-151_X.parquet", 
-                sort_by = "DBUID")
+                sort_by = "DBUID", metadata = metadata)
 #> Uploading 10.2 MB in 1 parquet file to r2://test/census/2021/2021_92-151_X.parquet.
 
 DBI::dbDisconnect(csv_con, shutdown = TRUE)
@@ -117,15 +132,33 @@ We then read the data and cast it to MULTIPOLYGON. Some StatCan geography files 
 
 
 ``` r
-d <- sf::st_read(file.path(params$download_path, "lcma000b21f_e/lcma000b21f_e.gdb"), quiet = TRUE) |>
+cma_geos <- sf::st_read(file.path(params$download_path,"lcma000b21f_e/lcma000b21f_e.gdb"),
+                        quiet = TRUE) |>
   sf::st_cast("MULTIPOLYGON")
 ```
 
-We then write this to a parquet file on R2, with the first path component being the bucket, which has to exist already (see `create_r2_bucket()` and the [Setting up R2](setting_up_r2.html) article for the credentials needed). Under the hood `data_to_parquet()` renames the geometry column to `geometry`, repairs invalid geometries, orders the rows by the `sort_by` columns, if any, and further along a Hilbert curve, and uploads the resulting GeoParquet file.
+We then write this to a parquet file on R2, with the first path component being the bucket, which has to exist already (see `create_r2_bucket()` and the [Setting up R2](setting_up_r2.html) article for the credentials needed). 
+
+We again create a basic metadata template.
 
 
 ``` r
-data_to_parquet(d, "r2://test/census/2021/lcma000b21f_e.parquet", sort_by = "CMAUID")
+metadata <- list(
+  "title"="2021 Census – Boundary files - Census metropolitan areas and census agglomerations",
+  "source_url"="https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=lcma000b21g_e.zip&k=%20%20%20%2011472&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lcma000b21g_e.zip",
+  "reference_guide"="https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21",
+  "licence"="Statistics Canada Open Licence",
+  "licence_url"="https://www.statcan.gc.ca/en/terms-conditions/open-licence",
+  "attribution"="Statistics Canada Product lcma000b21f_e"
+)
+```
+
+Under the hood `data_to_parquet()` renames the geometry column to `geometry`, repairs invalid geometries, orders the rows by the `sort_by` columns, if any, and further along a Hilbert curve, and uploads the resulting GeoParquet file.
+
+
+``` r
+data_to_parquet(cma_geos, "r2://test/census/2021/lcma000b21f_e.parquet", 
+                sort_by = "CMAUID", metadata = metadata )
 #> Renaming geometry column SHAPE to the GeoParquet standard name geometry.
 #> Repairing 2 invalid geometries via sf::st_make_valid.
 #> Uploading 12.9 MB in 1 parquet file to r2://test/census/2021/lcma000b21f_e.parquet.
@@ -142,7 +175,9 @@ data <- con |>
   collect_parquet()
 
 ggplot(data) +
-  geom_sf()
+  geom_sf() +
+  labs(title = "Montréal CMA boundary",
+       caption=parquet_metadata(data)$attribution) 
 ```
 
 <div class="figure">
@@ -150,6 +185,7 @@ ggplot(data) +
 <p class="caption">plot of chunk montreal</p>
 </div>
 
+The metadata is accessible from the lazy table `con` as well as from the collected `data`, and is used here for the caption.
 
 ## Cleanup
 
@@ -157,9 +193,8 @@ To leave things as we found them initially we remove the files we uploaded here 
 
 
 ``` r
-remove_parquet("r2://test/census/2021/2021_92-151_X.parquet")
-#> Removed 1 file from R2 bucket test.
-remove_parquet("r2://test/census/2021/lcma000b21f_e.parquet")
-#> Removed 1 file from R2 bucket test.
+remove_parquet(c("r2://test/census/2021/2021_92-151_X.parquet",
+                 "r2://test/census/2021/lcma000b21f_e.parquet"))
+#> Removed 2 files from R2 bucket test.
 ```
 
