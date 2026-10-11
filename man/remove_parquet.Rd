@@ -7,7 +7,8 @@
 remove_parquet(path, purge_cache = TRUE)
 }
 \arguments{
-\item{path}{parquet file, or directory with (partitioned) parquet files, on R2 as `r2://bucket/path`}
+\item{path}{parquet file, or directory with (partitioned) parquet files, on R2 as `r2://bucket/path`, or a
+vector of these}
 
 \item{purge_cache}{if `TRUE`, the default, purge the removed files from the Cloudflare cache of custom domains of the bucket}
 }
@@ -15,12 +16,13 @@ remove_parquet(path, purge_cache = TRUE)
 (invisibly) the removed files as `r2://bucket/path`
 }
 \description{
-Removes a single parquet file, or all parquet files in a directory of (partitioned) parquet files.
-Other files in the directory are left in place. Removed files can't be recovered.
+Removes parquet files, or all parquet files in directories of (partitioned) parquet files.
+Other files in the directories are left in place. Removed files can't be recovered.
 Expects the R2 account id and the access key id and secret access key
 of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
 environment variables.
 
-If the bucket is served via a custom domain, the removed files get purged from the Cloudflare cache,
-with the same requirements as for `upload_parquet`.
+All paths get resolved to files first, so a path that does not exist stops the call before anything is
+removed. The files are then removed in one batch per bucket. If the bucket is served via a custom domain,
+the removed files get purged from the Cloudflare cache, with the same requirements as for `upload_parquet`.
 }

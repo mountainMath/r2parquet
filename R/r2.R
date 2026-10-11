@@ -376,16 +376,18 @@ upload_parquet <- function(path,destination,purge_cache=TRUE) {
 #' remove parquet files from Cloudflare R2
 #'
 #' @description
-#' Removes a single parquet file, or all parquet files in a directory of (partitioned) parquet files.
-#' Other files in the directory are left in place. Removed files can't be recovered.
+#' Removes parquet files, or all parquet files in directories of (partitioned) parquet files.
+#' Other files in the directories are left in place. Removed files can't be recovered.
 #' Expects the R2 account id and the access key id and secret access key
 #' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
 #' environment variables.
 #'
-#' If the bucket is served via a custom domain, the removed files get purged from the Cloudflare cache,
-#' with the same requirements as for `upload_parquet`.
+#' All paths get resolved to files first, so a path that does not exist stops the call before anything is
+#' removed. The files are then removed in one batch per bucket. If the bucket is served via a custom domain,
+#' the removed files get purged from the Cloudflare cache, with the same requirements as for `upload_parquet`.
 #'
-#' @param path parquet file, or directory with (partitioned) parquet files, on R2 as `r2://bucket/path`
+#' @param path parquet file, or directory with (partitioned) parquet files, on R2 as `r2://bucket/path`, or a
+#' vector of these
 #' @param purge_cache if `TRUE`, the default, purge the removed files from the Cloudflare cache of custom domains of the bucket
 #' @return (invisibly) the removed files as `r2://bucket/path`
 #' @export
@@ -393,58 +395,69 @@ remove_parquet <- function(path,purge_cache=TRUE) {
   if (!requireNamespace("arrow",quietly=TRUE)) {
     stop("The arrow package is required to access R2.")
   }
-  path <- r2_split_path(path)
-  r2_bucket <- path$bucket
-  r2_path <- sub("/+$","",path$path)
-  if (r2_path=="") stop("Please specify the path of the parquet file or directory to remove.")
+  if (!is.character(path) || length(path)==0) stop("path has to be one or more R2 paths of the form r2://bucket/path.")
   filesystem <- r2_filesystem()
-  bucket_path <- paste0(r2_bucket,"/",r2_path)
-  file_type <- filesystem$GetFileInfo(bucket_path)[[1]]$type
-  if (file_type==arrow::FileType$File) {
-    r2_paths <- r2_path
-  } else if (file_type==arrow::FileType$Directory) {
-    r2_paths <- r2_list_parquet(filesystem,r2_bucket,r2_path)
-    if (length(r2_paths)==0) stop(paste0("No parquet files found in ",r2_path," in R2 bucket ",r2_bucket,"."))
-  } else {
-    stop(paste0("File or directory ",r2_path," does not exist in R2 bucket ",r2_bucket,"."))
+  resolved <- lapply(path,function(p){
+    p <- r2_split_path(p)
+    r2_bucket <- p$bucket
+    r2_path <- sub("/+$","",p$path)
+    if (r2_path=="") stop("Please specify the path of the parquet file or directory to remove in R2 bucket ",r2_bucket,".")
+    file_type <- filesystem$GetFileInfo(paste0(r2_bucket,"/",r2_path))[[1]]$type
+    if (file_type==arrow::FileType$File) {
+      r2_paths <- r2_path
+    } else if (file_type==arrow::FileType$Directory) {
+      r2_paths <- r2_list_parquet(filesystem,r2_bucket,r2_path)
+      if (length(r2_paths)==0) stop(paste0("No parquet files found in ",r2_path," in R2 bucket ",r2_bucket,"."))
+    } else {
+      stop(paste0("File or directory ",r2_path," does not exist in R2 bucket ",r2_bucket,"."))
+    }
+    list(bucket=r2_bucket,paths=r2_paths)
+  })
+  buckets <- vapply(resolved,`[[`,"",i="bucket")
+  removed <- character()
+  for (r2_bucket in unique(buckets)) {
+    r2_paths <- unique(unlist(lapply(resolved[buckets==r2_bucket],`[[`,"paths")))
+    r2_delete_objects(r2_bucket,r2_paths)
+    if (purge_cache) r2_purge_cache_after_change(r2_bucket,r2_paths)
+    message(paste0("Removed ",length(r2_paths)," file",if (length(r2_paths)>1) "s" else ""," from R2 bucket ",r2_bucket,"."))
+    removed <- c(removed,paste0("r2://",r2_bucket,"/",r2_paths))
   }
-  r2_delete_objects(r2_bucket,r2_paths)
-  if (purge_cache) r2_purge_cache_after_change(r2_bucket,r2_paths)
-  message(paste0("Removed ",length(r2_paths)," file",if (length(r2_paths)>1) "s" else ""," from R2 bucket ",r2_bucket,"."))
-  invisible(paste0("r2://",r2_bucket,"/",r2_paths))
+  invisible(removed)
 }
 
 #' presigned URL for a file on Cloudflare R2
 #'
 #' @description
-#' URL that grants time limited access to a single file in a private bucket, without credentials.
+#' URLs that grant time limited access to single files in a private bucket, without credentials.
 #' Anyone with the URL can download the file (`method="GET"`) or, for `method="PUT"`, upload a file
-#' to that path until the URL expires, so treat the URL like a password. The URL is signed locally,
-#' creating it does not check that the file exists.
+#' to that path until the URL expires, so treat the URL like a password. The URLs are signed locally,
+#' creating them does not check that the files exist.
 #' Expects the R2 account id and the access key id and secret access key
 #' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-#' environment variables. The URL stops working when the API token is revoked.
+#' environment variables. The URLs stop working when the API token is revoked.
 #'
-#' @param path file on R2 as `r2://bucket/path`
-#' @param expires number of seconds the URL is valid for, between 1 second and 7 days (604800 seconds),
+#' @param path file on R2 as `r2://bucket/path`, or a vector of these
+#' @param expires number of seconds the URLs are valid for, between 1 second and 7 days (604800 seconds),
 #' default is one hour
-#' @param method HTTP method the URL is valid for, `"GET"` (the default) to download, `"HEAD"` to
+#' @param method HTTP method the URLs are valid for, `"GET"` (the default) to download, `"HEAD"` to
 #' get the file's metadata, or `"PUT"` to upload
-#' @return the presigned URL
+#' @return the presigned URLs, one per path
 #' @export
 presigned_url <- function(path,expires=3600,method=c("GET","HEAD","PUT")) {
   method <- match.arg(method)
   if (!is.numeric(expires) || length(expires)!=1 || expires<1 || expires>604800) {
     stop("expires has to be between 1 and 604800 seconds (7 days).")
   }
-  path <- r2_split_path(path)
-  r2_bucket <- path$bucket
-  r2_path <- path$path
-  if (r2_path=="" || endsWith(r2_path,"/")) stop("The path has to be the path of a file.")
+  if (!is.character(path)) stop("path has to be one or more R2 paths of the form r2://bucket/path.")
   credentials <- r2_credentials(c("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
-  sigv4_presigned_url(method,r2_endpoint(),r2_canonical_path(r2_bucket,r2_path),expires,
-                      access_key=credentials[["R2_ACCESS_KEY_ID"]],
-                      secret=credentials[["R2_SECRET_ACCESS_KEY"]],region="auto")
+  endpoint <- r2_endpoint()
+  vapply(path,function(p){
+    p <- r2_split_path(p)
+    if (p$path=="" || endsWith(p$path,"/")) stop("The path has to be the path of a file, got r2://",p$bucket,"/",p$path,".")
+    sigv4_presigned_url(method,endpoint,r2_canonical_path(p$bucket,p$path),expires,
+                        access_key=credentials[["R2_ACCESS_KEY_ID"]],
+                        secret=credentials[["R2_SECRET_ACCESS_KEY"]],region="auto")
+  },character(1),USE.NAMES=FALSE)
 }
 
 # split r2://bucket/path into bucket and path

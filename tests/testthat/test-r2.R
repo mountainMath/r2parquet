@@ -22,10 +22,12 @@ test_that("parquet files can be uploaded, queried and removed", {
   dir_path <- paste0(prefix,"/partitioned.parquet")
   # stale partitions get removed when uploading again, other files in the directory stay
   stale <- data_to_parquet(df,dir_path,partition_by="group")
-  expect_length(stale,2)
+  expect_equal(c(stale),dir_path)
+  expect_length(attr(stale,"files"),2)
   other_path <- paste0(dir_path,"/other.parquet")
   data_to_parquet(df[1:5,],other_path)
   expect_message(uploaded <- data_to_parquet(df,dir_path,partition_by="high_sid"),"Removing 2 stale parquet files")
+  uploaded <- attr(uploaded,"files")
   expect_length(uploaded,2)
   expect_equal(dplyr::pull(dplyr::count(parquet_tbl(other_path))),5)
   remove_parquet(other_path,purge_cache=FALSE)
@@ -50,7 +52,8 @@ test_that("parquet files can be uploaded, queried and removed", {
   expect_equal(httr::status_code(response),200)
   expect_equal(dplyr::pull(dplyr::count(parquet_tbl(put_path))),nrow(data))
 
-  expect_message(removed <- remove_parquet(prefix,purge_cache=FALSE),"Removed 4 files")
+  # several paths at once, a file inside the directory only gets removed once
+  expect_message(removed <- remove_parquet(c(put_path,prefix),purge_cache=FALSE),"Removed 4 files")
   expect_setequal(removed,c(r2_path,put_path,uploaded))
   expect_error(remove_parquet(prefix,purge_cache=FALSE),"does not exist")
 })

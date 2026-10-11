@@ -40,7 +40,7 @@
 #' environment variables, and needs the arrow package. A directory of partitioned files may be named like a
 #' parquet file, `parquet_tbl` tells files and directories apart. Stale files get removed before the new ones
 #' are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
-#' get purged from the Cloudflare cache like in `upload_parquet`.
+#' get purged from the Cloudflare cache like in `upload_parquet`, unless `purge_cache` is `FALSE`.
 #'
 #' `metadata` gets written into the footer of the parquet files, where other tools can read it too (DuckDB's
 #' `parquet_kv_metadata`, arrow's schema metadata), and `parquet_metadata` reads it back. `collect_parquet`
@@ -63,12 +63,20 @@
 #' same path and other files are kept, e.g. to add partitions.
 #' @param metadata optional named list of metadata to write into the parquet footer, see description. The entry
 #' `geo` is reserved for the GeoParquet metadata.
-#' @return (invisibly) `path` for local paths, the uploaded files as `r2://bucket/path` for R2
+#' @param purge_cache if `TRUE`, the default, purge the changed files from the Cloudflare cache of custom domains
+#' of the bucket when writing to R2, like `upload_parquet`. Ignored for local paths.
+#' @return (invisibly) `path`, normalized to `r2://bucket/path` for R2, ready to be passed to `parquet_tbl`,
+#' with the parquet files that were written, local paths or `r2://bucket/path`, in the `files` attribute
 #' @export
-data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE,metadata=NULL) {
+data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE,metadata=NULL,purge_cache=TRUE) {
   if (!is.character(path) || length(path)!=1) stop("Expected a single path, got ",length(path),".")
-  write <- if (startsWith(path,"r2://")) r2_data_to_parquet else local_data_to_parquet
-  write(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,overwrite=overwrite,metadata=metadata)
+  if (startsWith(path,"r2://")) {
+    r2_data_to_parquet(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,
+                       overwrite=overwrite,metadata=metadata,purge_cache=purge_cache)
+  } else {
+    local_data_to_parquet(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,
+                          overwrite=overwrite,metadata=metadata)
+  }
 }
 
 # write data to a local parquet file or directory of partitioned files
@@ -83,7 +91,7 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
     columns <- colnames(data)
   } else if (inherits(data,"sf")) {
     if ("geometry" %in% setdiff(names(data),attr(data,"sf_column"))) stop("Data has a non-geometry column named geometry.")
-    con <- parquet_duckdb_connection()
+    con <- parquet_connection()
     DBI::dbExecute(con,"INSTALL spatial")
     DBI::dbExecute(con,"LOAD spatial")
     geometry_column <- "geometry"
@@ -109,7 +117,7 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
     if (length(sfc_columns)>0) {
       stop(paste0("Column ",paste0(sfc_columns,collapse=", ")," holds geometries, convert data to sf via sf::st_as_sf first."))
     }
-    con <- parquet_duckdb_connection()
+    con <- parquet_connection()
     duckdb::duckdb_register(con,"r2parquet_df_data",data)
     on.exit(duckdb::duckdb_unregister(con,"r2parquet_df_data"))
     source <- "r2parquet_df_data"
@@ -163,11 +171,12 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
   DBI::dbExecute(con,paste0("COPY (SELECT * FROM ",source,
                             if (length(order)>0) paste0(" ORDER BY ",paste0(order,collapse=", ")),
                             ") TO ",DBI::dbQuoteString(con,path)," (",paste0(options,collapse=", "),")"))
-  invisible(path)
+  files <- if (length(partition_by)>0) dir(path,"\\.parquet$",recursive=TRUE,full.names=TRUE) else path
+  invisible(structure(path,files=files))
 }
 
 # write data to parquet in a temporary directory and upload it to R2
-r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE,metadata=NULL) {
+r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,overwrite=TRUE,metadata=NULL,purge_cache=TRUE) {
   if (!requireNamespace("arrow",quietly=TRUE)) {
     stop("The arrow package is required to upload to R2.")
   }
@@ -199,12 +208,12 @@ r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_grou
       r2_delete_objects(r2_bucket,stale)
     }
   }
-  files <- if (partitioned) dir(local_path,"\\.parquet$",recursive=TRUE,full.names=TRUE) else local_path
+  files <- attr(local_path,"files")
   message("Uploading ",format(structure(sum(file.size(files)),class="object_size"),units="auto",standard="SI"),
           " in ",length(files)," parquet file",if (length(files)>1) "s"," to ",r2_url,".")
   uploaded <- upload_parquet(local_path,r2_url,purge_cache=FALSE)
-  r2_purge_cache_after_change(r2_bucket,union(stale,substring(uploaded,nchar(r2_bucket)+7)))
-  invisible(uploaded)
+  if (purge_cache) r2_purge_cache_after_change(r2_bucket,union(stale,substring(uploaded,nchar(r2_bucket)+7)))
+  invisible(structure(r2_url,files=uploaded))
 }
 
 # whether paths relative to a dataset directory are in hive partition directories (key=value), as partitioned writes produce them

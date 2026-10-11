@@ -7,23 +7,23 @@
 presigned_url(path, expires = 3600, method = c("GET", "HEAD", "PUT"))
 }
 \arguments{
-\item{path}{file on R2 as `r2://bucket/path`}
+\item{path}{file on R2 as `r2://bucket/path`, or a vector of these}
 
-\item{expires}{number of seconds the URL is valid for, between 1 second and 7 days (604800 seconds),
+\item{expires}{number of seconds the URLs are valid for, between 1 second and 7 days (604800 seconds),
 default is one hour}
 
-\item{method}{HTTP method the URL is valid for, `"GET"` (the default) to download, `"HEAD"` to
+\item{method}{HTTP method the URLs are valid for, `"GET"` (the default) to download, `"HEAD"` to
 get the file's metadata, or `"PUT"` to upload}
 }
 \value{
-the presigned URL
+the presigned URLs, one per path
 }
 \description{
-URL that grants time limited access to a single file in a private bucket, without credentials.
+URLs that grant time limited access to single files in a private bucket, without credentials.
 Anyone with the URL can download the file (`method="GET"`) or, for `method="PUT"`, upload a file
-to that path until the URL expires, so treat the URL like a password. The URL is signed locally,
-creating it does not check that the file exists.
+to that path until the URL expires, so treat the URL like a password. The URLs are signed locally,
+creating them does not check that the files exist.
 Expects the R2 account id and the access key id and secret access key
 of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables. The URL stops working when the API token is revoked.
+environment variables. The URLs stop working when the API token is revoked.
 }

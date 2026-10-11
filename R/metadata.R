@@ -93,7 +93,7 @@ parquet_metadata <- function(x) {
     con <- dbplyr::remote_con(x)
   } else {
     if (!is.character(x)) stop("x has to be a path, a vector of paths or a lazy DuckDB table from parquet_tbl.")
-    con <- parquet_duckdb_connection()
+    con <- parquet_connection()
     path <- duckdb_parquet_paths(con,x)
   }
   duckdb_parquet_metadata(con,path)

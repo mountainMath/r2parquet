@@ -11,7 +11,8 @@ data_to_parquet(
   partition_by = NULL,
   row_group_size = 10000L,
   overwrite = TRUE,
-  metadata = NULL
+  metadata = NULL,
+  purge_cache = TRUE
 )
 }
 \arguments{
@@ -33,9 +34,13 @@ same path and other files are kept, e.g. to add partitions.}
 
 \item{metadata}{optional named list of metadata to write into the parquet footer, see description. The entry
 `geo` is reserved for the GeoParquet metadata.}
+
+\item{purge_cache}{if `TRUE`, the default, purge the changed files from the Cloudflare cache of custom domains
+of the bucket when writing to R2, like `upload_parquet`. Ignored for local paths.}
 }
 \value{
-(invisibly) `path` for local paths, the uploaded files as `r2://bucket/path` for R2
+(invisibly) `path`, normalized to `r2://bucket/path` for R2, ready to be passed to `parquet_tbl`,
+with the parquet files that were written, local paths or `r2://bucket/path`, in the `files` attribute
 }
 \description{
 Writes a data frame, an sf object or a lazy DuckDB table to a parquet file, or to a directory of
@@ -72,7 +77,7 @@ access key of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY
 environment variables, and needs the arrow package. A directory of partitioned files may be named like a
 parquet file, `parquet_tbl` tells files and directories apart. Stale files get removed before the new ones
 are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
-get purged from the Cloudflare cache like in `upload_parquet`.
+get purged from the Cloudflare cache like in `upload_parquet`, unless `purge_cache` is `FALSE`.
 
 `metadata` gets written into the footer of the parquet files, where other tools can read it too (DuckDB's
 `parquet_kv_metadata`, arrow's schema metadata), and `parquet_metadata` reads it back. `collect_parquet`

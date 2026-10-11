@@ -7,7 +7,8 @@
 parquet_tbl(
   path,
   engine = c("duckdb", "arrow", "polars"),
-  hive_partitioning = TRUE
+  hive_partitioning = TRUE,
+  con = NULL
 )
 }
 \arguments{
@@ -19,6 +20,11 @@ parquet files, or a vector of these. The arrow and polars engines can't mix path
 \item{hive_partitioning}{if `TRUE`, the default, partition columns get derived from `key=value` components of the
 file paths. This includes the directories above a single file, reading one file out of a partitioned
 directory, like `data/year=2021/data_0.parquet`, adds a `year` column.}
+
+\item{con}{DuckDB connection to create the table on, only for the duckdb engine. Defaults to
+`parquet_connection`, the connection shared by all calls. Tables can only be joined when they are on the
+same connection, so pass your own connection to join with data that lives there. The `httpfs` and `spatial`
+extensions get installed and loaded on it as needed, and the R2 credentials get registered as a secret.}
 }
 \value{
 a lazy `dplyr` table (DuckDB), an arrow `Dataset` or a polars `LazyFrame`, depending on `engine`
@@ -40,8 +46,9 @@ Local directories get read as all parquet files within them, URLs have to point 
 can't be listed over https.
 
 The `engine` determines what gets returned:
-* `"duckdb"`, the default, returns a lazy `dplyr` table on a DuckDB connection that is cached for the session,
-  so that tables from several calls can be joined. `dplyr` verbs get translated to SQL. If the table has
+* `"duckdb"`, the default, returns a lazy `dplyr` table on a DuckDB connection that is cached for the session
+  (`parquet_connection`), so that tables from several calls can be joined, or on the connection given as `con`.
+  `dplyr` verbs get translated to SQL. If the table has
   GEOMETRY columns, like GeoParquet files written by `data_to_parquet`, the `spatial` extension gets loaded
   so that spatial functions like `ST_Area` can be used in queries. Use `filter_spatial` to filter by location
   and `collect_parquet` to collect the result with its metadata attached, as an sf object if it has geometry,

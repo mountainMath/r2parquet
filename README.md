@@ -11,6 +11,7 @@ Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloud
 - **Reading public URLs and local files**: `parquet_tbl()`, no credentials needed. Returns a lazy DuckDB table by default, or an arrow `Dataset` or polars `LazyFrame` with `engine = "arrow"` or `"polars"`.
 - **Spatial queries**: `filter_spatial()` on any lazy DuckDB table, `collect_parquet()` collects as sf if the table has geometry.
 - **Metadata**: `parquet_metadata()` reads source, license, notes and column labels from the parquet footer, `collect_parquet()` attaches them to the collected data.
+- **Joining with other data**: all tables share one DuckDB connection, `parquet_connection()`, so they can be joined with each other and with data frames copied there via `dplyr::copy_to()`. `parquet_tbl(con = )` puts a table on a connection of your own instead.
 
 ## Uploading and managing data on R2
 
@@ -18,7 +19,7 @@ Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloud
 - **Files**: `upload_parquet()` uploads single parquet files or directories of (partitioned) parquet files, `remove_parquet()` removes them. Both purge the changed files from the Cloudflare cache of the bucket's custom domains.
 - **Writing**: `data_to_parquet()` writes data frames, sf objects and lazy DuckDB tables to parquet, optionally sorted (`sort_by`) and partitioned (`partition_by`), so remote queries only download the row groups they need. sf objects become GeoParquet 2.0 files sorted along a Hilbert curve. Given an `r2://bucket/path` destination it writes and uploads in one go, replacing earlier uploads including stale partitions. `metadata` like the source URL, license and column labels goes into the parquet footer.
 - **Reading private buckets**: `parquet_tbl("r2://bucket/path")` with any of the engines.
-- **Sharing private files**: `presigned_url()` creates time limited download (or upload) URLs for single files.
+- **Sharing private files**: `presigned_url()` creates time limited download (or upload) URLs for files in private buckets.
 
 ## Installation
 

@@ -19,7 +19,9 @@ test_that("sort_by and partition_by columns have to exist", {
 test_that("data frames get written as sorted parquet without extensions", {
   df <- data.frame(id=c("003","001","002"),value=c(3,1,2))
   path <- withr::local_tempfile(fileext=".parquet")
-  data_to_parquet(df,path,sort_by="id")
+  written <- data_to_parquet(df,path,sort_by="id")
+  expect_equal(c(written),path)
+  expect_equal(attr(written,"files"),path)
   con <- DBI::dbConnect(duckdb::duckdb())
   withr::defer(DBI::dbDisconnect(con,shutdown=TRUE))
   result <- DBI::dbGetQuery(con,paste0("SELECT * FROM read_parquet('",path,"')"))
@@ -29,8 +31,11 @@ test_that("data frames get written as sorted parquet without extensions", {
 test_that("partitioned data frames keep string partition values and the sort order", {
   df <- data.frame(group=rep(c("001","010"),each=5000),value=sample.int(10000))
   dir <- withr::local_tempdir()
-  data_to_parquet(df,file.path(dir,"data"),sort_by="value",partition_by="group")
+  written <- data_to_parquet(df,file.path(dir,"data"),sort_by="value",partition_by="group")
   expect_setequal(dir(file.path(dir,"data")),c("group=001","group=010"))
+  # the path comes back with the files written in the files attribute
+  expect_equal(c(written),file.path(dir,"data"))
+  expect_setequal(attr(written,"files"),file.path(dir,"data",c("group=001","group=010"),"data_0.parquet"))
   con <- DBI::dbConnect(duckdb::duckdb())
   withr::defer(DBI::dbDisconnect(con,shutdown=TRUE))
   for (group in c("001","010")) {

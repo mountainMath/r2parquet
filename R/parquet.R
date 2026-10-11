@@ -4,8 +4,21 @@
 # session cache for the duckdb connection
 parquet_cache <- new.env(parent=emptyenv())
 
-# cached in-memory DuckDB connection for parquet_tbl, shared by all tables so they can be joined
-parquet_duckdb_connection <- function(){
+#' DuckDB connection shared by the parquet functions
+#'
+#' @description
+#' The in-memory DuckDB connection that `parquet_tbl` (with the default engine), `parquet_metadata` and
+#' `data_to_parquet` use. It gets created on first use and is cached for the session, so that tables from
+#' different `parquet_tbl` calls can be joined with each other. Use it to bring other data onto the same
+#' connection, e.g. `dplyr::copy_to(parquet_connection(), df)` to join a data frame with a parquet table, or to
+#' change DuckDB settings via `DBI::dbExecute`, like `SET memory_limit = '4GB'` or `SET threads = 2`.
+#' Disconnecting it, e.g. to free memory, is fine, the next call creates a new connection, but tables from
+#' `parquet_tbl` created on the old connection stop working. `parquet_tbl` can also create its tables on a
+#' connection of your own via its `con` argument.
+#'
+#' @return a DuckDB connection
+#' @export
+parquet_connection <- function(){
   con <- parquet_cache$duckdb_connection
   if (is.null(con) || !DBI::dbIsValid(con)) {
     con <- DBI::dbConnect(duckdb::duckdb())
@@ -83,8 +96,9 @@ duckdb_parquet_paths <- function(con,path){
 #' can't be listed over https.
 #'
 #' The `engine` determines what gets returned:
-#' * `"duckdb"`, the default, returns a lazy `dplyr` table on a DuckDB connection that is cached for the session,
-#'   so that tables from several calls can be joined. `dplyr` verbs get translated to SQL. If the table has
+#' * `"duckdb"`, the default, returns a lazy `dplyr` table on a DuckDB connection that is cached for the session
+#'   (`parquet_connection`), so that tables from several calls can be joined, or on the connection given as `con`.
+#'   `dplyr` verbs get translated to SQL. If the table has
 #'   GEOMETRY columns, like GeoParquet files written by `data_to_parquet`, the `spatial` extension gets loaded
 #'   so that spatial functions like `ST_Area` can be used in queries. Use `filter_spatial` to filter by location
 #'   and `collect_parquet` to collect the result with its metadata attached, as an sf object if it has geometry,
@@ -102,17 +116,26 @@ duckdb_parquet_paths <- function(con,path){
 #' @param hive_partitioning if `TRUE`, the default, partition columns get derived from `key=value` components of the
 #' file paths. This includes the directories above a single file, reading one file out of a partitioned
 #' directory, like `data/year=2021/data_0.parquet`, adds a `year` column.
+#' @param con DuckDB connection to create the table on, only for the duckdb engine. Defaults to
+#' `parquet_connection`, the connection shared by all calls. Tables can only be joined when they are on the
+#' same connection, so pass your own connection to join with data that lives there. The `httpfs` and `spatial`
+#' extensions get installed and loaded on it as needed, and the R2 credentials get registered as a secret.
 #' @return a lazy `dplyr` table (DuckDB), an arrow `Dataset` or a polars `LazyFrame`, depending on `engine`
 #' @export
-parquet_tbl <- function(path,engine=c("duckdb","arrow","polars"),hive_partitioning=TRUE) {
+parquet_tbl <- function(path,engine=c("duckdb","arrow","polars"),hive_partitioning=TRUE,con=NULL) {
   engine <- match.arg(engine)
+  if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
   is_r2 <- startsWith(path,"r2://")
   is_url <- !is_r2 & grepl("^[a-z0-9]+://",path)
   if (engine!="duckdb" && any(is_r2) && !all(is_r2)) {
     stop("The ",engine," engine can't mix paths on R2 with other paths.")
   }
+  if (!is.null(con)) {
+    if (engine!="duckdb") stop("con is only used by the duckdb engine.")
+    if (!inherits(con,"duckdb_connection")) stop("con has to be a DuckDB connection.")
+  }
   if (engine=="duckdb") {
-    con <- parquet_duckdb_connection()
+    if (is.null(con)) con <- parquet_connection()
     path <- duckdb_parquet_paths(con,path)
     tbl <- duckdb_parquet_tbl(con,path,hive_partitioning=hive_partitioning)
     if (length(duckdb_geometry_columns(tbl))>0) {

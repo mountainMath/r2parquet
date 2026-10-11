@@ -44,4 +44,10 @@ test_that("presigned R2 URLs use the account endpoint and validate arguments", {
   expect_error(presigned_url("r2://bucket/dir/"),"path of a file")
   expect_error(presigned_url("bucket/file.parquet"),"r2://bucket/path")
   expect_error(presigned_url("r2://bucket/file.parquet",method="DELETE"))
+  expect_error(presigned_url(1),"r2://bucket/path")
+  # one URL per path, without names
+  urls <- presigned_url(c("r2://bucket/a.parquet","r2://other/b.parquet"),method="HEAD")
+  expect_null(names(urls))
+  expect_match(urls,"^https://abc\\.r2\\.cloudflarestorage\\.com/(bucket/a|other/b)\\.parquet\\?")
+  expect_equal(presigned_url(character()),character())
 })
