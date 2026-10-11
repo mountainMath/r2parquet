@@ -20,7 +20,9 @@ join with data that lives there. The `httpfs` and `spatial` extensions get insta
 needed, and the R2 credentials get registered as a secret.}
 
 \item{cache}{`NULL`, the default, reads the copies in the local cache directory where they exist and are
-current, with a warning for copies that are out of date, and the remote files otherwise. `TRUE` updates the
+current, with a warning for copies that are out of date, and the remote files otherwise. A copy only gets
+checked against the remote files the first time its path is read in the session, later calls reuse the
+result (see `clear_cache_checks`). `TRUE` updates the
 copies first via `cache_parquet`, downloading the files on first use, and reads them. `FALSE` reads the remote
 files directly. `"offline"` reads the copies without checking them against the remote files, whether they are
 current or not, and fails for paths that have no copy. The cache directory is the one in the

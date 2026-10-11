@@ -39,7 +39,7 @@ list_cache()
 
 Once a dataset is cached, `parquet_tbl()` reads the copy by default as long as it is current. The `cache` argument chooses how the cache gets used:
 
-* `cache = NULL`, the default, reads the local copy if it is current, and otherwise reads the remote file and warns that the copy is out of date. Paths that have no copy in the cache are read remotely without any check, so the default costs nothing for them.
+* `cache = NULL`, the default, reads the local copy if it is current, and otherwise reads the remote file and warns that the copy is out of date. Paths that have no copy in the cache are read remotely without any check. A copy is checked once per session, the first time its path is read, and later calls reuse the result to cut down on requests and increase performance. Remote data rarely changes, but if it does mid-session, `clear_cache_checks()` makes the next call check again.
 * `cache = TRUE` updates the copy if it is out of date, downloading it on first use, and reads it.
 * `cache = FALSE` always reads the remote file.
 * `cache = "offline"` reads the local copy as it is, without contacting the remote, and fails if there is none. This is for working without a network connection, and for looking at what changed: read the copy with `cache = "offline"` and the current remote file with `cache = FALSE`, compare, then update the copy with `cache = TRUE`.

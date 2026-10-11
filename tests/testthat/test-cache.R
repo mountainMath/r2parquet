@@ -118,35 +118,118 @@ test_that("cache=NULL reads current copies, warns about stale ones and leaves th
     local <- cache_parquet("r2://bucket/census/data")
     single <- cache_parquet("r2://bucket/census/single.parquet")
   })
+  # cache_parquet remembers that the copies are current, so the lookup needs no request
   listings <- 0
   expect_no_warning(expect_equal(lookup(c("r2://bucket/census/data","r2://bucket/census/single.parquet")),c(local,single)))
+  expect_equal(listings,0)
+  # forgetting the checks makes the lookup check once per path, repeated lookups reuse the result
+  clear_cache_checks()
+  expect_no_warning(expect_equal(lookup(c("r2://bucket/census/data","r2://bucket/census/single.parquet")),c(local,single)))
   expect_equal(listings,2)
+  expect_equal(lookup(c("r2://bucket/census/data","r2://bucket/census/single.parquet")),c(local,single))
   tbl <- parquet_tbl("r2://bucket/census/data")
   expect_equal(dplyr::pull(dplyr::count(tbl)),3)
   expect_equal(list_parquet(tbl)$path,file.path(local,c("year=2021","year=2022"),"data_0.parquet"))
-  # a changed file makes the copy stale: a warning, the remote path, nothing downloaded
+  expect_equal(listings,2)
+  # a changed file makes the copy stale: a warning, the remote path, nothing downloaded. The change goes unnoticed
+  # until the checks are forgotten, and a stale copy is only reported once
   downloads <- character()
   objects$etag[objects$key=="census/data/year=2021/data_0.parquet"] <- "changed"
+  expect_no_warning(expect_equal(lookup("r2://bucket/census/data"),local))
+  clear_cache_checks()
   expect_warning(expect_equal(lookup("r2://bucket/census/data"),"r2://bucket/census/data"),"out of date.*cache_parquet")
+  listings <- 0
+  expect_no_warning(expect_equal(lookup("r2://bucket/census/data"),"r2://bucket/census/data"))
+  expect_equal(listings,0)
   expect_no_warning(expect_equal(lookup("r2://bucket/census/single.parquet"),single))
   expect_length(downloads,0)
   expect_equal(list_parquet("r2://bucket/census/data")$cache,c("stale","current"))
+  # cache_parquet updates the copy and the remembered check
+  expect_message(cache_parquet("r2://bucket/census/data"),"Downloading 1 file")
+  listings <- 0
+  expect_no_warning(expect_equal(lookup("r2://bucket/census/data"),local))
+  expect_equal(listings,0)
   objects <- fixture$objects
   # so does a file that is gone remotely, or that was removed from the cache
   objects <- objects[objects$key!="census/data/year=2022/data_0.parquet",]
+  clear_cache_checks()
   expect_warning(lookup("r2://bucket/census/data"),"out of date")
   objects <- fixture$objects
   objects$etag[objects$key=="census/single.parquet"] <- "changed"
+  clear_cache_checks()
   expect_warning(expect_equal(lookup("r2://bucket/census/single.parquet"),"r2://bucket/census/single.parquet"),"out of date")
   objects <- fixture$objects
   suppressMessages(remove_from_cache("r2://bucket/census/data/year=2021/data_0.parquet"))
   expect_no_warning(expect_equal(lookup("r2://bucket/census/data"),"r2://bucket/census/data"))
   suppressMessages(cache_parquet("r2://bucket/census/data"))
-  # the remote can't be reached: the copies get used with a warning, paths without a copy stay remote
+  # the remote can't be reached: the copies get used with a warning, paths without a copy stay remote, and the
+  # failed check is not remembered
   local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix="")stop("Could not resolve host"))
+  expect_no_warning(expect_equal(lookup("r2://bucket/census/data"),local))
+  clear_cache_checks()
+  expect_warning(expect_equal(lookup("r2://bucket/census/data"),local),"Could not resolve host")
   expect_warning(expect_equal(lookup("r2://bucket/census/data"),local),"Could not resolve host")
   expect_no_warning(expect_equal(lookup("r2://bucket/census/other.parquet"),"r2://bucket/census/other.parquet"))
   expect_warning(expect_equal(dplyr::pull(dplyr::count(parquet_tbl("r2://bucket/census/data"))),3),"cached copy")
+})
+
+test_that("cache checks are remembered per copy and forgotten with the paths above and below", {
+  fixture <- cache_fixture()
+  objects <- fixture$objects
+  listings <- 0
+  local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix=""){
+                          listings <<- listings+1
+                          objects[startsWith(objects$key,prefix),]
+                        },
+                        r2_get_object=function(r2_bucket,r2_path,file){
+                          file.copy(file.path(fixture$dir,sub("^census/","",r2_path)),file,overwrite=TRUE)
+                        })
+  cache <- local_cache_dir()
+  withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret",R2PARQUET_CACHE_PATH=cache)
+  lookup <- r2parquet:::cache_lookup
+  checks <- r2parquet:::cache_checks
+  suppressMessages(local <- cache_parquet("r2://bucket/census/data"))
+  file <- file.path(local,"year=2021","data_0.parquet")
+  clear_cache_checks()
+  expect_length(ls(checks),0)
+  # a file or partition below a cached directory is checked on its own against the directory's manifest, the
+  # checks are keyed by the local paths
+  listings <- 0
+  expect_no_warning(expect_equal(lookup(c("r2://bucket/census/data","r2://bucket/census/data/year=2021/data_0.parquet",
+                                          "r2://bucket/census/data/year=2022")),
+                                 c(local,file,file.path(local,"year=2022"))))
+  expect_equal(listings,3)
+  expect_setequal(ls(checks),c(local,file,file.path(local,"year=2022")))
+  expect_true(checks[[local]])
+  objects$etag[objects$key=="census/data/year=2022/data_0.parquet"] <- "changed"
+  clear_cache_checks()
+  expect_warning(expect_equal(lookup("r2://bucket/census/data/year=2022"),"r2://bucket/census/data/year=2022"),"out of date")
+  expect_no_warning(expect_equal(lookup("r2://bucket/census/data/year=2021/data_0.parquet"),file))
+  objects <- fixture$objects
+  clear_cache_checks()
+  expect_equal(lookup(c("r2://bucket/census/data","r2://bucket/census/data/year=2021/data_0.parquet")),c(local,file))
+  # a different account or cache directory is a different copy and gets checked on its own
+  withr::with_envvar(c(R2_ACCOUNT_ID="other"),{
+    suppressMessages(other <- cache_parquet("r2://bucket/census/data"))
+    expect_equal(other,file.path(cache,"r2","other","bucket","census","data"))
+    rm(list=other,envir=checks)
+    listings <- 0
+    expect_equal(lookup("r2://bucket/census/data"),other)
+    expect_equal(listings,1)
+  })
+  expect_equal(lookup("r2://bucket/census/data"),local)
+  expect_equal(listings,1)
+  # updating a file forgets the checks of the directories above it, removing a directory those of the files below
+  expect_setequal(ls(checks),c(local,file,file.path(cache,"r2","other","bucket","census","data")))
+  suppressMessages(cache_parquet("r2://bucket/census/data/year=2021/data_0.parquet"))
+  expect_setequal(ls(checks),c(file,file.path(cache,"r2","other","bucket","census","data")))
+  listings <- 0
+  expect_equal(lookup("r2://bucket/census/data/year=2021/data_0.parquet"),file)
+  expect_equal(listings,0)
+  suppressMessages(remove_from_cache("r2://bucket/census/data"))
+  expect_equal(ls(checks),file.path(cache,"r2","other","bucket","census","data"))
+  expect_null(clear_cache_checks())
+  expect_length(ls(checks),0)
 })
 
 test_that("cache='offline' reads the copies without contacting the remote, current or not", {

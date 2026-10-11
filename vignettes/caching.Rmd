@@ -28,7 +28,7 @@ To cache a dataset set `cache = TRUE` in `parquet_tbl()`, or cache it explicitly
 census_cma_url <- "https://data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet"
 
 geos_cma <- parquet_tbl(census_cma_url, cache = TRUE)
-#> Downloading 1 file (12.9 MB) to /var/folders/z4/gcjq2cd93p3bs5bgp8j2vv240000gp/T//RtmpYwsuKG/file1026736e532e7/https/data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet.
+#> Downloading 1 file (12.9 MB) to /var/folders/z4/gcjq2cd93p3bs5bgp8j2vv240000gp/T//Rtmp68fVec/file1543d709bcfbc/https/data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet.
 ```
 
 This downloads the file if the cache has no current copy and opens the table on the local file. The copy is kept current by its etag: every call with `cache = TRUE` checks the remote file and downloads it again when it changed. We can inspect the cache to see what is available locally.
@@ -44,7 +44,7 @@ list_cache()
 
 Once a dataset is cached, `parquet_tbl()` reads the copy by default as long as it is current. The `cache` argument chooses how the cache gets used:
 
-* `cache = NULL`, the default, reads the local copy if it is current, and otherwise reads the remote file and warns that the copy is out of date. Paths that have no copy in the cache are read remotely without any check, so the default costs nothing for them.
+* `cache = NULL`, the default, reads the local copy if it is current, and otherwise reads the remote file and warns that the copy is out of date. Paths that have no copy in the cache are read remotely without any check. A copy is checked once per session, the first time its path is read, and later calls reuse the result to cut down on requests and increase performance. Remote data rarely changes, but if it does mid-session, `clear_cache_checks()` makes the next call check again.
 * `cache = TRUE` updates the copy if it is out of date, downloading it on first use, and reads it.
 * `cache = FALSE` always reads the remote file.
 * `cache = "offline"` reads the local copy as it is, without contacting the remote, and fails if there is none. This is for working without a network connection, and for looking at what changed: read the copy with `cache = "offline"` and the current remote file with `cache = FALSE`, compare, then update the copy with `cache = TRUE`.
@@ -59,7 +59,7 @@ geos_cma |>
   dplyr::select(CMAUID, CMANAME, CMATYPE, LANDAREA) |>
   head()
 #> # A query:  ?? x 4
-#> # Database: DuckDB 1.5.6 [jens@Darwin 27.0.0:R 4.6.1/:memory:]
+#> # Database: DuckDB 1.5.6 [root@Darwin 27.0.0:R 4.6.1/:memory:]
 #>   CMAUID CMANAME             CMATYPE LANDAREA
 #>   <chr>  <chr>               <chr>      <dbl>
 #> 1 001    St. John's          B          932. 

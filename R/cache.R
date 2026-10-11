@@ -15,6 +15,18 @@ cache_directory <- function(){
 }
 
 # the local path of a remote path in the cache, local paths are not cached and have no place there
+# the checks of the session: for each local path cache_lookup checked against the remote, whether the copy was
+# current, so a dataset gets checked once per session, remote data rarely changes. clear_cache_checks() resets it
+cache_checks <- new.env(parent=emptyenv())
+
+# drop the checks of a local path, of the files below it and of the directories above it, since any of these may
+# have changed when the path was updated or removed
+forget_checks <- function(local){
+  for (checked in ls(cache_checks)) {
+    if (checked==local || startsWith(checked,paste0(local,"/")) || startsWith(local,paste0(checked,"/"))) rm(list=checked,envir=cache_checks)
+  }
+}
+
 remote_cache_location <- function(path,cache_dir){
   if (!startsWith(path,"r2://") && !grepl("^https?://",path)) stop("Expected an r2://bucket/path or a URL, got ",path,".")
   cache_location(path,cache_dir)
@@ -188,14 +200,27 @@ current_files <- function(manifest_dir,remote){
   current
 }
 
+# the manifest to check a cached path against: the one in its manifest directory, or, for a file or partition of
+# a cached directory, the nearest one above it, which lists it by its path relative to that directory
+covering_manifest <- function(location,source){
+  manifest_dir <- manifest_directory(location,source)
+  prefix <- ""
+  while (!file.exists(file.path(manifest_dir,manifest_name)) && startsWith(dirname(manifest_dir),paste0(location$cache_dir,"/"))) {
+    prefix <- paste0(basename(manifest_dir),"/",prefix)
+    manifest_dir <- dirname(manifest_dir)
+  }
+  list(dir=manifest_dir,path=paste0(prefix,source$files$path))
+}
+
 # whether the local copy of the dataset is in line with the remote files without touching it: every remote
 # file has a current copy, and a directory holds no parquet files beyond the remote ones, since the table
 # reads every file below it
 cache_current <- function(location,source){
-  manifest_dir <- manifest_directory(location,source)
+  manifest <- covering_manifest(location,source)
   remote <- source$files
-  all(current_files(manifest_dir,remote)) &&
-    (source$is_file || length(setdiff(dir(location$local,"\\.parquet$",recursive=TRUE),remote$path))==0)
+  remote$path <- manifest$path
+  all(current_files(manifest$dir,remote)) &&
+    (source$is_file || length(setdiff(dir(location$local,"\\.parquet$",recursive=TRUE),source$files$path))==0)
 }
 
 # bring the local copy of the dataset in line with the remote files, returns the local path
@@ -297,7 +322,10 @@ cache_parquet <- function(path) {
       warning(paste0("Checking ",p," failed, using the cached copy in ",local,". ",conditionMessage(source)),call.=FALSE)
       return(local)
     }
-    sync_cache(location,source)
+    local <- sync_cache(location,source)
+    forget_checks(local)
+    cache_checks[[local]] <- TRUE
+    local
   },character(1),USE.NAMES=FALSE)
 }
 
@@ -320,8 +348,11 @@ cache_offline <- function(path){
 
 # the paths parquet_tbl(cache = NULL) reads: the copy in the cache where there is one and it is current, the
 # remote path otherwise. The remote only gets checked when there is a copy, so paths that were never cached
-# cost nothing, and a copy that is out of date is reported but left alone. A copy whose remote can't be
-# checked, e.g. offline, gets used with a warning like cache_parquet does.
+# cost nothing, and a copy that is out of date is reported but left alone. Each copy gets checked once per
+# session, later calls reuse the result from cache_checks until clear_cache_checks(), cache_parquet() or
+# remove_from_cache() drop it, so a stale copy is also only reported once. A copy whose remote can't be
+# checked, e.g. offline, gets used with a warning like cache_parquet does; that is not a verdict on the copy, so
+# it is not remembered and the next call checks again.
 cache_lookup <- function(path){
   cache_dir <- cache_directory()
   vapply(path,function(p){
@@ -331,16 +362,38 @@ cache_lookup <- function(path){
     if (is.null(location)) return(p)
     local <- cached_copy(location)
     if (is.null(local)) return(p)
-    source <- tryCatch(cache_source(location),error=function(e)e)
-    if (inherits(source,"error")) {
-      warning(paste0("Checking ",p," failed, using the cached copy in ",local,". ",conditionMessage(source)),call.=FALSE)
-      return(local)
+    current <- cache_checks[[local]]
+    if (is.null(current)) {
+      source <- tryCatch(cache_source(location),error=function(e)e)
+      if (inherits(source,"error")) {
+        warning(paste0("Checking ",p," failed, using the cached copy in ",local,". ",conditionMessage(source)),call.=FALSE)
+        return(local)
+      }
+      current <- cache_current(location,source)
+      cache_checks[[local]] <- current
+      if (!current) warning(paste0("The cached copy of ",p," is out of date, reading the remote files. ",
+                                   "Update it with cache_parquet() or parquet_tbl(cache = TRUE)."),call.=FALSE)
     }
-    if (cache_current(location,source)) return(local)
-    warning(paste0("The cached copy of ",p," is out of date, reading the remote files. ",
-                   "Update it with cache_parquet() or parquet_tbl(cache = TRUE)."),call.=FALSE)
-    p
+    if (current) local else p
   },character(1),USE.NAMES=FALSE)
+}
+
+#' forget the cache checks of the session
+#'
+#' @description
+#' `parquet_tbl` checks a cached copy against the remote files once per session, the first time it reads the
+#' path with the default `cache = NULL`, and reuses the result afterwards, so that reading a dataset repeatedly
+#' costs one request and not one per call. Remote data that changes during the session therefore goes
+#' unnoticed until the session is restarted or the checks are forgotten with this function, after which the next
+#' `parquet_tbl` call on each path checks the remote again. `cache_parquet` and `parquet_tbl(cache = TRUE)`
+#' always check, and update the remembered result along with the copy, and `remove_from_cache` forgets the
+#' checks of the paths it removes.
+#'
+#' @return (invisibly) `NULL`
+#' @export
+clear_cache_checks <- function(){
+  rm(list=ls(cache_checks),envir=cache_checks)
+  invisible(NULL)
 }
 
 # the remote paths that local paths in the cache stand for, the reverse of cache_location
@@ -466,6 +519,7 @@ remove_from_cache <- function(path) {
     if (!file.exists(l)) next
     unlink(l,recursive=TRUE)
     prune_manifests(l,cache_dir)
+    forget_checks(l)
   }
   message(paste0("Removed ",length(removed)," file",if (length(removed)!=1) "s"," from the cache."))
   invisible(removed)
