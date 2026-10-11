@@ -116,8 +116,19 @@ data_mask <- db_table |>
 data_mask |>
   st_set_agr("constant") |>
   st_intersection(mask |> st_transform(st_crs(data_mask))) |>
-  ggplot() +
-  geom_sf()
+  left_join(geo_attributes, by="DBUID") |>
+  mutate(density=Population/(LANDAREA*100)) |>
+  mutate(density=if_else(is.finite(density),density,0)) |>
+  mutate(bands=cut(density,breaks=c(-Inf,0,10,20,50,100,200,500,1000,Inf),
+                   labels=c("0","0-10","10-20","20-50","50-100","100-200",
+                            "200-500","500-1000",">1000"))) |>
+  ggplot(aes(fill=bands)) +
+  geom_sf(colour=NA) +
+  scale_fill_viridis_d(option = "magma") +
+  labs(title="Population density in central Metro Vancouver",
+       fill="Pop/ha",
+       caption="StatCan Census 2021") +
+  coord_sf(datum=NA)
 ```
 
-The `filter_spatial` function returns every feather that intersects the mask, clipping the returned data with `st_intersection` makes for a prettier plot.
+The `filter_spatial` function returns every feature that intersects the mask, clipping the returned data with `st_intersection` makes for a prettier plot.
