@@ -92,7 +92,7 @@ data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_s
 local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,remove_stale=TRUE,metadata=NULL,compression="zstd") {
   if (row_group_size<2048) warning("DuckDB writes row groups of at least 2048 rows, row_group_size has no effect below that.",call.=FALSE)
   if (inherits(data,"tbl_lazy")) {
-    if (!inherits(data,"tbl_duckdb_connection")) stop("Lazy tables have to be DuckDB tables.")
+    if (!methods::is(dbplyr::remote_con(data),"duckdb_connection")) stop("Lazy tables have to be DuckDB tables.")
     con <- dbplyr::remote_con(data)
     geometry_columns <- names(duckdb_geometry_columns(data))
     geometry_column <- if ("geometry" %in% geometry_columns) "geometry" else if (length(geometry_columns)>0) geometry_columns[1]

@@ -149,7 +149,8 @@ test_that("single files of any type go up with the content type for their extens
   },r2_purge_cache_after_change=function(r2_bucket,r2_paths)purged[[length(purged)+1]] <<- r2_paths,
   parquet_footers=fake_footers())
   dir <- withr::local_tempdir()
-  writeLines('{"files":[]}',file.path(dir,"index.json"))
+  # written as bytes, writeLines would end the line with \r\n on Windows and the body is compared below
+  writeBin(charToRaw('{"files":[]}\n'),file.path(dir,"index.json"))
   writeLines("a,b",file.path(dir,"table.csv"))
   writeLines("notes",file.path(dir,"README"))
   writeLines("{}",file.path(dir,"_manifest.json"))

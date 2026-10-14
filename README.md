@@ -45,7 +45,7 @@ See [Setting up R2](https://mountainmath.github.io/r2parquet/articles/setting_up
 ## Documentation
 
 Function reference and articles are on the package website: <https://mountainmath.github.io/r2parquet/>.
-See [Accessing public buckets](https://mountainmath.github.io/r2parquet/articles/accessing_public_buckets.html) for an example of querying a large public GeoParquet file.
+See [Accessing public buckets](https://mountainmath.github.io/r2parquet/articles/accessing_public_buckets.html) for an example of querying a large public GeoParquet file, and [Metadata and manifests](https://mountainmath.github.io/r2parquet/articles/metadata.html) for how datasets are laid out and described.
 
 ## Example
 

@@ -31,7 +31,7 @@ As an example consider the geographic attributes file for the 2021 census. StatC
 path <- file.path(params$download_path, "2021_92-151_X.csv")
 ```
 
-The file has close to half a million rows, one per dissemination block, and takes 300 MB as CSV. Rather than reading it into R, we let DuckDB read it lazily, `data_to_parquet()` then writes lazy DuckDB tables with a single DuckDB `COPY` straight from the CSV to parquet, and uploads the parquet file, without the data ever being read into an R data frame.
+The file has close to half a million rows, one per dissemination block, and takes 300 MB as CSV. Rather than reading it into R, we let DuckDB read it lazily, `data_to_parquet()` then writes lazy DuckDB tables with a single DuckDB `COPY` straight from the CSV to parquet, and uploads the parquet file, without the data ever being read into an R data frame. The upload itself sends each file in a single request and reads it into memory for that, so files have to fit into memory and stay below R2's 5 GB limit for single requests, larger data gets split with `partition_by` (see the [Metadata and manifests](metadata.html) article for what a partitioned dataset looks like).
 
 Trial and error determined that the CSV is Windows-1252 encoded, which DuckDB reads via its `encodings` extension. We read all columns as text, otherwise DuckDB would turn codes like `SACCODE` `"001"` into numbers, and convert the numeric columns explicitly instead. The column names are bilingual, like `DBUID_IDIDU`, we keep the English part.
 
@@ -195,7 +195,7 @@ Datasets often come with files that are not parquet, like a JSON index that a we
 
 ## Manifests
 
-Directory uploads put a `_manifest.json` next to the data, which lists the parquet files below the directory with their size, etag and modification time, and the metadata from their footers: entries that all files share, like the `columns` descriptions of a partitioned dataset, at the dataset level and the rest with the file. The package uses it to cache directories from public URLs, where listing is not possible, and clients that are not R can read what a dataset holds from it without opening the files. The format is documented in `?write_manifest`, which adds manifests to directories that were uploaded by other means; it reads the metadata from the footers on R2, one request per file.
+Directory uploads put a `_manifest.json` next to the data, which lists the parquet files below the directory with their size, etag and modification time, and the metadata from their footers: entries that all files share, like the `columns` descriptions of a partitioned dataset, at the dataset level and the rest with the file. The package uses it to cache directories from public URLs, where listing is not possible, and clients that are not R can read what a dataset holds from it without opening the files. `parquet_metadata()` reads it for paths on R2 and at URLs, one request for a whole dataset instead of a footer read per file, `parquet_metadata(from_files = TRUE)` reads the footers themselves. The format is documented in `?write_manifest`, which adds manifests to directories that were uploaded by other means; it reads the metadata from the footers on R2, one request per file. The [Metadata and manifests](metadata.html) article walks through the pieces.
 
 ## Cleanup
 

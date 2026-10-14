@@ -119,3 +119,44 @@ test_that("directories at URLs get read through their manifest", {
   expect_error(parquet_tbl(paste0(base,"/missing.parquet")),"404")
   expect_error(parquet_tbl(paste0(base,"/missing/")),"no manifest")
 })
+
+test_that("whole numbers in comparisons are rendered as integers", {
+  dir <- withr::local_tempdir()
+  path <- file.path(dir,"numbers.parquet")
+  data <- data.frame(i=1:5,d=c(1,1.5,2,2.5,3),day=as.Date("2024-01-01")+0:4)
+  data_to_parquet(data,path)
+  tbl <- parquet_tbl(path)
+  expect_s4_class(dbplyr::remote_con(tbl),"r2parquet_connection")
+  where <- function(t)sub(".*WHERE ","",gsub("\\s+"," ",as.character(dbplyr::remote_query(t))))
+  assign("integer_literal_noted",FALSE,envir=r2parquet:::parquet_cache)
+  expect_message(sql <- where(dplyr::filter(tbl,i==2)),"rendered as the integer 2L")
+  expect_equal(sql,"(i = 2)")
+  # the message is shown once per session
+  expect_silent(expect_equal(where(dplyr::filter(tbl,i!=2,i<3,i<=3,i>1,i>=1)),"(i <> 2) AND (i < 3) AND (i <= 3) AND (i > 1) AND (i >= 1)"))
+  expect_equal(where(dplyr::filter(tbl,i %in% c(1,2))),"(i IN (1, 2))")
+  expect_equal(where(dplyr::filter(tbl,dplyr::between(i,1,3))),"(i BETWEEN 1 AND 3)")
+  # fractions, numbers outside the integer range, dates and arithmetic stay as they are
+  expect_equal(where(dplyr::filter(tbl,d==1.5)),"(d = 1.5)")
+  expect_equal(where(dplyr::filter(tbl,i==3e9)),"(i = 3000000000.0)")
+  expect_match(where(dplyr::filter(tbl,day==as.Date("2024-01-02"))),"TRY_CAST('2024-01-02' AS DATE)",fixed=TRUE)
+  expect_equal(where(dplyr::filter(dplyr::mutate(tbl,y=i*1000),y>2)),"(y > 2)")
+  expect_match(gsub("\\s+"," ",dbplyr::remote_query(dplyr::mutate(tbl,y=i*1000))),"i \\* 1000.0",fixed=FALSE)
+  # and the results are right either way
+  expect_equal(dplyr::collect(dplyr::filter(tbl,i==2))$d,1.5)
+  expect_equal(dplyr::collect(dplyr::filter(tbl,d==2))$i,3L)
+  expect_equal(dplyr::collect(dplyr::filter(tbl,d==1.5))$i,2L)
+  expect_equal(dplyr::collect(dplyr::filter(tbl,day==as.Date("2024-01-02")))$i,2L)
+  expect_equal(dplyr::collect(dplyr::filter(tbl,i %in% c(1,2)))$i,1:2)
+  # a user's own connection keeps DuckDB's translation, so its tables stay joinable with the user's others
+  con <- DBI::dbConnect(duckdb::duckdb())
+  withr::defer(DBI::dbDisconnect(con,shutdown=TRUE))
+  own <- parquet_tbl(path,con=con)
+  expect_false(methods::is(dbplyr::remote_con(own),"r2parquet_connection"))
+  expect_equal(where(dplyr::filter(own,i==2)),"(i = 2.0)")
+  # the session connection's tables join with data copied there
+  copied <- dplyr::copy_to(parquet_connection(),data.frame(i=2L,label="two"),"labels",overwrite=TRUE)
+  expect_equal(dplyr::collect(dplyr::inner_join(tbl,copied,by="i"))$label,"two")
+  # a lazy table still goes into data_to_parquet
+  expect_silent(data_to_parquet(dplyr::filter(tbl,i>2L),file.path(dir,"subset.parquet")))
+  expect_equal(nrow(dplyr::collect(parquet_tbl(file.path(dir,"subset.parquet")))),3L)
+})

@@ -1,0 +1,458 @@
+---
+title: "Metadata and manifests"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Metadata and manifests}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+<!-- Generated from vignettes.orig/metadata.Rmd -- do not edit. -->
+<!-- Rebuild with: Rscript vignettes.orig/precompute.R -->
+
+
+
+
+``` r
+library(r2parquet)
+library(dplyr)
+```
+
+The package focuses on parquet because it is uniquely suited to hold large static dataasets that can be read strategically instead of downloading the entire file, although how effective it is at that at least partially depends on how well the choices made in ordering, partitioning and row groups when uploading the file suit the use case of the person consuming the data.
+
+Next to the data a parquet file carries a schema, statistics that let readers skip the parts they don't need, and free-form key-value metadata. `r2parquet` uses that metadata add important context, where the data comes from, under which licence, and what its columns mean, and it copies the description into a manifest next to the files on R2, where clients can read it without opening a single parquet file. This article walks through where these pieces live, for a single file, a directory holding several datasets and a partitioned dataset, using the public bucket behind `https://data.mountainmath.xyz`.
+
+## What is in a parquet file
+
+A parquet file stores its rows in *row groups*, and within a row group each column separately. For every column of every row group the file records statistics, the minimum and maximum say, so a reader that filters on a column only downloads the row groups whose range matches. `data_to_parquet()` sorts the rows by the `sort_by` columns so that these ranges are narrow, and `row_group_size` sets how many rows a row group holds, the trade-off being between selective filters and the size of the file metadata.
+
+That metadata sits in the *footer* at the end of the file: the schema, the statistics and the location of every column chunk, and *key-value metadata*, arbitrary strings that tools can use as they like. Reading the footer is all `parquet_tbl()` does when it opens a remote file, a request for the last few kilobytes.
+
+Take the file with the 2021 census dissemination block boundaries in the public bucket, the one the [Accessing public buckets](accessing_public_buckets.html) article queries.
+
+
+``` r
+db_url <- "https://data.mountainmath.xyz/census/2021/ldb_000b21f_e.parquet"
+
+db_table <- parquet_tbl(db_url)
+```
+
+DuckDB exposes the footer directly, here the number of rows and row groups of the 330 MB file, which is all that has been read so far.
+
+
+``` r
+con <- parquet_connection()
+
+DBI::dbGetQuery(con, paste0(
+  "SELECT num_rows, num_row_groups FROM parquet_file_metadata(",
+  DBI::dbQuoteString(con, db_url), ")"))
+#>   num_rows num_row_groups
+#> 1   498547            244
+```
+
+The key-value metadata holds whatever `data_to_parquet(metadata = )` was given when the file was written, single values as they are and lists as JSON, plus for GeoParquet files the `geo` entry with the GeoParquet metadata.
+
+
+``` r
+DBI::dbGetQuery(con, paste0(
+  "SELECT decode(key) AS key, left(decode(value), 60) AS value FROM parquet_kv_metadata(",
+  DBI::dbQuoteString(con, db_url), ")"))
+#>               key                                                        value
+#> 1           title          2021 Census – Boundary files - Dissemination blocks
+#> 2      source_url https://www12.statcan.gc.ca/census-recensement/alternative_a
+#> 3 reference_guide https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/
+#> 4         licence                               Statistics Canada Open Licence
+#> 5     licence_url   https://www.statcan.gc.ca/en/terms-conditions/open-licence
+#> 6     attribution                      Statistics Canada Product ldb_000b21f_e
+#> 7             geo {"version":"2.0.0","primary_column":"geometry","columns":{"g
+```
+
+`parquet_metadata()` reads these entries back as a list, parsing the JSON ones and leaving out `geo`: the crs of a geometry column lives in the column's type, which is where `collect_parquet()` takes it from. `from_files = TRUE` makes it read the footer of the file, we will see below what it reads otherwise.
+
+
+``` r
+parquet_metadata(db_url, from_files = TRUE)
+#> $title
+#> [1] "2021 Census – Boundary files - Dissemination blocks"
+#> 
+#> $source_url
+#> [1] "https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=ldb_000b21f_e.zip&k=%20%20%20248570&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/ldb_000b21f_e.zip"
+#> 
+#> $reference_guide
+#> [1] "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21"
+#> 
+#> $licence
+#> [1] "Statistics Canada Open Licence"
+#> 
+#> $licence_url
+#> [1] "https://www.statcan.gc.ca/en/terms-conditions/open-licence"
+#> 
+#> $attribution
+#> [1] "Statistics Canada Product ldb_000b21f_e"
+```
+
+The entries are free-form, the ones in this bucket describe provenance and licence. A `columns` entry, a list with one entry per column holding a `label` and a `description`, is the one entry `collect_parquet()` treats specially, the labels get attached to the collected columns as `label` attributes. Column labels can be seen in action in the partitioned dataset below.
+
+Metadata in the footer is part of the file, so changing it means writing the file again.
+
+## A directory with several datasets
+
+Directories on R2 can be listed with the credentials of the bucket, but not over https, so a public bucket needs some other way of telling a client what a directory holds. That is the *manifest*, a `_manifest.json` file next to the data, which `upload_parquet()` and `data_to_parquet()` write for the directories they upload and `write_manifest()` adds to directories that were uploaded by other means. A manifest lists every parquet file below its directory with its size, etag and modification time, and copies the metadata from the files' footers, so clients get all of it with a single request.
+
+The `census/2021` directory of the public bucket holds several datasets, single files like the boundary files and the geographic attribute file, and partitioned datasets that are directories of files, and one manifest listing all of them. We show it with the file entries cut down to three, a single file and the first file of each of the two partitioned datasets.
+
+
+``` r
+census_url <- "https://data.mountainmath.xyz/census/2021/"
+
+manifest <- jsonlite::fromJSON(paste0(census_url, "_manifest.json"), simplifyVector = FALSE)
+
+length(manifest$files)
+#> [1] 31
+
+paths <- sapply(manifest$files, function(f) f$path)
+manifest$files <- manifest$files[match(c("ldb_000b21f_e.parquet", "lada000b21f_e/PRUID=10/data_0.parquet",
+                                         "profile_ADA/PRUID=10/data_0.parquet"), paths)]
+
+jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE)
+#> {
+#>   "directory": true,
+#>   "metadata": {
+#>     "licence": "Statistics Canada Open Licence",
+#>     "licence_url": "https://www.statcan.gc.ca/en/terms-conditions/open-licence"
+#>   },
+#>   "files": [
+#>     {
+#>       "path": "ldb_000b21f_e.parquet",
+#>       "size": 330173363,
+#>       "etag": "8e517ba1e007ab6056ef345b63c1b64e",
+#>       "modified": "2026-10-11T04:35:00Z",
+#>       "metadata": {
+#>         "title": "2021 Census – Boundary files - Dissemination blocks",
+#>         "source_url": "https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=ldb_000b21f_e.zip&k=%20%20%20248570&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/ldb_000b21f_e.zip",
+#>         "reference_guide": "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21",
+#>         "attribution": "Statistics Canada Product ldb_000b21f_e"
+#>       }
+#>     },
+#>     {
+#>       "path": "lada000b21f_e/PRUID=10/data_0.parquet",
+#>       "size": 11807693,
+#>       "etag": "ad07369f30f847a6d07c9d41006b13a0",
+#>       "modified": "2026-10-14T06:44:03Z",
+#>       "metadata": {
+#>         "columns": {
+#>           "ADAUID": {
+#>             "label": "Aggregate dissemination area unique identifier"
+#>           },
+#>           "DGUID": {
+#>             "label": "Dissemination geography unique identifier"
+#>           },
+#>           "LANDAREA": {
+#>             "label": "Land area in square kilometres"
+#>           },
+#>           "PRUID": {
+#>             "label": "Province or territory unique identifier"
+#>           }
+#>         },
+#>         "attribution": "Statistics Canada Product lada000b21f_e",
+#>         "reference_guide": "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21",
+#>         "source_url": "https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=lada000b21f_e.zip&k=%20%20%20%2096469&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lada000b21f_e.zip",
+#>         "title": "2021 Census – Boundary files - Aggregate dissemination areas"
+#>       }
+#>     },
+#>     {
+#>       "path": "profile_ADA/PRUID=10/data_0.parquet",
+#>       "size": 853137,
+#>       "etag": "86d38f938e6a0857883978c97f53ac16",
+#>       "modified": "2026-10-14T06:45:11Z",
+#>       "metadata": {
+#>         "notes": "Symbols: x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>         "attribution": "Statistics Canada Product 98-401-X2021012",
+#>         "reference_guide": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/about-apropos.cfm?Lang=E",
+#>         "source_url": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/download-telecharger/comp/GetFile.cfm?Lang=E&FILETYPE=CSV&GEONO=012",
+#>         "title": "2021 Census Profile – Aggregate dissemination areas",
+#>         "columns": {
+#>           "geo_uid": {
+#>             "label": "Aggregate dissemination area unique identifier"
+#>           },
+#>           "PRUID": {
+#>             "label": "Province or territory unique identifier"
+#>           },
+#>           "characteristic_id": {
+#>             "label": "Characteristic identifier, see profile_characteristics.parquet"
+#>           },
+#>           "total": {
+#>             "label": "Count, total"
+#>           },
+#>           "men": {
+#>             "label": "Count, men+"
+#>           },
+#>           "women": {
+#>             "label": "Count, women+"
+#>           },
+#>           "rate_total": {
+#>             "label": "Rate, total"
+#>           },
+#>           "rate_men": {
+#>             "label": "Rate, men+"
+#>           },
+#>           "rate_women": {
+#>             "label": "Rate, women+"
+#>           },
+#>           "symbol_total": {
+#>             "label": "Symbol for the total count"
+#>           },
+#>           "symbol_men": {
+#>             "label": "Symbol for the men+ count"
+#>           },
+#>           "symbol_women": {
+#>             "label": "Symbol for the women+ count"
+#>           },
+#>           "symbol_rate_total": {
+#>             "label": "Symbol for the total rate"
+#>           },
+#>           "symbol_rate_men": {
+#>             "label": "Symbol for the men+ rate"
+#>           },
+#>           "symbol_rate_women": {
+#>             "label": "Symbol for the women+ rate"
+#>           }
+#>         }
+#>       }
+#>     }
+#>   ]
+#> }
+```
+
+The manifest's own `metadata` holds the entries all files agree on, the licence here, which is what a client can take as the metadata of the directory, and each file lists the entries that differ, its title, source and attribution, and for the files that have them the column descriptions. `directory` says that the manifest lists everything below its directory, as the manifests on R2 do; the local cache writes manifests with `directory: false` for directories in which only single files were cached. The format is documented in `?write_manifest`.
+
+`list_parquet()` lists a directory at a URL from its manifest, with the files' size and etag, here shown with the paths relative to the directory.
+
+
+``` r
+list_parquet(census_url) |>
+  mutate(path = sub(census_url, "", path, fixed = TRUE)) |>
+  select(path, size, modified)
+#> # A tibble: 31 × 3
+#>    path                                  size     modified           
+#>    <chr>                                 <chr>    <dttm>             
+#>  1 2021_92-151_X.parquet                 10.2 MB  2026-10-11 04:36:20
+#>  2 lada000b21f_e/PRUID=10/data_0.parquet 11.8 MB  2026-10-14 06:44:03
+#>  3 lada000b21f_e/PRUID=11/data_0.parquet 449.7 kB 2026-10-14 06:44:03
+#>  4 lada000b21f_e/PRUID=12/data_0.parquet 3.4 MB   2026-10-14 06:44:03
+#>  5 lada000b21f_e/PRUID=13/data_0.parquet 1.8 MB   2026-10-14 06:44:03
+#>  6 lada000b21f_e/PRUID=24/data_0.parquet 25.3 MB  2026-10-14 06:44:03
+#>  7 lada000b21f_e/PRUID=35/data_0.parquet 40.4 MB  2026-10-14 06:44:03
+#>  8 lada000b21f_e/PRUID=46/data_0.parquet 2.9 MB   2026-10-14 06:44:03
+#>  9 lada000b21f_e/PRUID=47/data_0.parquet 1.2 MB   2026-10-14 06:44:03
+#> 10 lada000b21f_e/PRUID=48/data_0.parquet 2.3 MB   2026-10-14 06:44:03
+#> # ℹ 21 more rows
+```
+
+`parquet_metadata()` reads the manifest for paths on R2 and at URLs, instead of the footers: for a file it looks for the manifest of the file's directory, or of the nearest directory above it that has one, and takes the file's entry, a single request that is the same for every file of a dataset. The result is the same as reading the footer above, as long as the manifest is current.
+
+
+``` r
+parquet_metadata(db_url)
+#> $licence
+#> [1] "Statistics Canada Open Licence"
+#> 
+#> $licence_url
+#> [1] "https://www.statcan.gc.ca/en/terms-conditions/open-licence"
+#> 
+#> $title
+#> [1] "2021 Census – Boundary files - Dissemination blocks"
+#> 
+#> $source_url
+#> [1] "https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=ldb_000b21f_e.zip&k=%20%20%20248570&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/ldb_000b21f_e.zip"
+#> 
+#> $reference_guide
+#> [1] "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21"
+#> 
+#> $attribution
+#> [1] "Statistics Canada Product ldb_000b21f_e"
+```
+
+The manifest is current as long as the files only change through `upload_parquet()`, `data_to_parquet()` and `remove_parquet()`, which keep the manifests of the directories they touch and of the directories above up to date. Files changed with other tools are not reflected until `write_manifest()` rebuilds the manifest from a listing; `from_files = TRUE` bypasses the manifest and reads the footers.
+
+Manifests are per directory and cover everything below, so a manifest in a higher level directory covers all the datasets below it, as `census/2021` does here, and `write_manifest("r2://bucket")` covers the whole bucket. Every upload and removal below a manifest patches it, so the higher the manifest, the more changes it sees.
+
+## A partitioned dataset
+
+A dataset can also be a directory of files, hive partitioned by the values of one or more columns, which is how `data_to_parquet(partition_by = )` writes it. The 2021 census profile for aggregate dissemination areas in the public bucket is such a dataset: one row per area and characteristic, partitioned by province, with the characteristics described in a small file next to it.
+
+Each partition is a directory named after the column and its value, holding the parquet file for that value. The partition column is not stored in the files, readers recover it from the directory names, typed by their values, so `PRUID` comes back as a number below. The dataset's manifest lists the partition files.
+
+
+``` r
+profile_url <- "https://data.mountainmath.xyz/census/2021/profile_ADA/"
+
+list_parquet(profile_url) |>
+  mutate(path = sub(profile_url, "", path, fixed = TRUE)) |>
+  select(path, size, modified)
+#> # A tibble: 13 × 3
+#>    path                    size     modified           
+#>    <chr>                   <chr>    <dttm>             
+#>  1 PRUID=10/data_0.parquet 853.1 kB 2026-10-14 06:45:11
+#>  2 PRUID=11/data_0.parquet 294.3 kB 2026-10-14 06:45:11
+#>  3 PRUID=12/data_0.parquet 1.5 MB   2026-10-14 06:45:11
+#>  4 PRUID=13/data_0.parquet 1.3 MB   2026-10-14 06:45:11
+#>  5 PRUID=24/data_0.parquet 14.8 MB  2026-10-14 06:45:11
+#>  6 PRUID=35/data_0.parquet 23 MB    2026-10-14 06:45:11
+#>  7 PRUID=46/data_0.parquet 2.4 MB   2026-10-14 06:45:11
+#>  8 PRUID=47/data_0.parquet 2.7 MB   2026-10-14 06:45:11
+#>  9 PRUID=48/data_0.parquet 5.8 MB   2026-10-14 06:45:11
+#> 10 PRUID=59/data_0.parquet 9.8 MB   2026-10-14 06:45:11
+#> 11 PRUID=60/data_0.parquet 240.4 kB 2026-10-14 06:45:11
+#> 12 PRUID=61/data_0.parquet 302.5 kB 2026-10-14 06:45:11
+#> 13 PRUID=62/data_0.parquet 266 kB   2026-10-14 06:45:11
+```
+
+The files were written together, so they share their metadata, `columns` included, and the manifest carries it once, at the dataset level, while the file entries only list the files; `columns` is never repeated per file. We show the first two entries.
+
+
+``` r
+manifest <- jsonlite::fromJSON(paste0(profile_url, "_manifest.json"), simplifyVector = FALSE)
+manifest$files <- manifest$files[1:2]
+
+jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE)
+#> {
+#>   "directory": true,
+#>   "metadata": {
+#>     "notes": "Symbols: x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>     "attribution": "Statistics Canada Product 98-401-X2021012",
+#>     "licence_url": "https://www.statcan.gc.ca/en/terms-conditions/open-licence",
+#>     "licence": "Statistics Canada Open Licence",
+#>     "reference_guide": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/about-apropos.cfm?Lang=E",
+#>     "source_url": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/download-telecharger/comp/GetFile.cfm?Lang=E&FILETYPE=CSV&GEONO=012",
+#>     "title": "2021 Census Profile – Aggregate dissemination areas",
+#>     "columns": {
+#>       "geo_uid": {
+#>         "label": "Aggregate dissemination area unique identifier"
+#>       },
+#>       "PRUID": {
+#>         "label": "Province or territory unique identifier"
+#>       },
+#>       "characteristic_id": {
+#>         "label": "Characteristic identifier, see profile_characteristics.parquet"
+#>       },
+#>       "total": {
+#>         "label": "Count, total"
+#>       },
+#>       "men": {
+#>         "label": "Count, men+"
+#>       },
+#>       "women": {
+#>         "label": "Count, women+"
+#>       },
+#>       "rate_total": {
+#>         "label": "Rate, total"
+#>       },
+#>       "rate_men": {
+#>         "label": "Rate, men+"
+#>       },
+#>       "rate_women": {
+#>         "label": "Rate, women+"
+#>       },
+#>       "symbol_total": {
+#>         "label": "Symbol for the total count"
+#>       },
+#>       "symbol_men": {
+#>         "label": "Symbol for the men+ count"
+#>       },
+#>       "symbol_women": {
+#>         "label": "Symbol for the women+ count"
+#>       },
+#>       "symbol_rate_total": {
+#>         "label": "Symbol for the total rate"
+#>       },
+#>       "symbol_rate_men": {
+#>         "label": "Symbol for the men+ rate"
+#>       },
+#>       "symbol_rate_women": {
+#>         "label": "Symbol for the women+ rate"
+#>       }
+#>     }
+#>   },
+#>   "files": [
+#>     {
+#>       "path": "PRUID=10/data_0.parquet",
+#>       "size": 853137,
+#>       "etag": "86d38f938e6a0857883978c97f53ac16",
+#>       "modified": "2026-10-14T06:45:11Z"
+#>     },
+#>     {
+#>       "path": "PRUID=11/data_0.parquet",
+#>       "size": 294295,
+#>       "etag": "7bbb47dae846612dd89dfc7175fcf23f",
+#>       "modified": "2026-10-14T06:45:11Z"
+#>     }
+#>   ]
+#> }
+```
+
+`parquet_metadata()` on the directory returns that shared metadata, from the manifest.
+
+
+``` r
+str(parquet_metadata(profile_url), max.level = 1)
+#> List of 8
+#>  $ notes          : chr "Symbols: x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be pu"| __truncated__
+#>  $ attribution    : chr "Statistics Canada Product 98-401-X2021012"
+#>  $ licence_url    : chr "https://www.statcan.gc.ca/en/terms-conditions/open-licence"
+#>  $ licence        : chr "Statistics Canada Open Licence"
+#>  $ reference_guide: chr "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/about-apropos.cfm?Lang=E"
+#>  $ source_url     : chr "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/download-telecharger/comp/GetFile.cfm?La"| __truncated__
+#>  $ title          : chr "2021 Census Profile – Aggregate dissemination areas"
+#>  $ columns        :List of 15
+```
+
+`parquet_tbl()` reads the directory as one table, with `PRUID` coming from the paths, and a filter on it only opens the files of the matching partitions. Within a partition the rows are sorted by `characteristic_id`, so a filter on it only downloads the row groups holding that characteristic. The literal is written as `1L`, an integer like the column: a plain `1` is a double in R, which would make DuckDB cast the column instead of using its statistics and download every row group, so the package renders whole numbers in comparisons as integers, with a message the first time, see `?parquet_tbl`.
+
+
+``` r
+parquet_tbl(profile_url) |>
+  filter(PRUID == "59", characteristic_id == 1L) |>
+  summarise(Population = sum(total, na.rm = TRUE), Areas = n(), .by = PRUID) |>
+  collect()
+#> # A tibble: 1 × 3
+#>   PRUID Population Areas
+#>   <dbl>      <dbl> <dbl>
+#> 1    59    5000879  1008
+```
+
+`collect_parquet()` attaches the metadata to the result and the column labels to the columns, and `parquet_metadata()` on a lazy table reads the manifest of its source. Here we join the characteristic names from the file next to the dataset, both tables sit on the same DuckDB connection.
+
+
+``` r
+characteristics <- parquet_tbl("https://data.mountainmath.xyz/census/2021/profile_characteristics.parquet")
+
+area <- parquet_tbl(profile_url) |>
+  filter(PRUID == "59", geo_uid == "59150002", characteristic_id <= 8L) |>
+  inner_join(characteristics, by = "characteristic_id") |>
+  select(geo_uid, characteristic_id, name, total) |>
+  collect_parquet()
+
+area
+#> # A tibble: 8 × 4
+#>   geo_uid  characteristic_id name                                          total
+#>   <chr>                <int> <chr>                                         <dbl>
+#> 1 59150002                 1 Population, 2021                             4256  
+#> 2 59150002                 2 Population, 2016                             3680  
+#> 3 59150002                 3 Population percentage change, 2016 to 2021     15.7
+#> 4 59150002                 4 Total private dwellings                      2036  
+#> 5 59150002                 5 Private dwellings occupied by usual residen… 1724  
+#> 6 59150002                 6 Population density per square kilometre        84.9
+#> 7 59150002                 7 Land area in square kilometres                 50.1
+#> 8 59150002                 8 Total - Age groups of the population - 100%… 4260
+
+attr(area$total, "label")
+#> [1] "Count, total"
+parquet_metadata(area)$notes
+#> [1] "Symbols: x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised"
+```
+
+Writing a partitioned dataset to R2 with `data_to_parquet(partition_by = )` writes the files and the manifest in one step, and removes the partitions of an earlier write that the new one no longer produces, so the manifest never lists partitions that are gone. Uploading a single partition into the directory later, with `data_to_parquet()` or `upload_parquet()`, patches the manifest with the new file instead of rebuilding it, and so does every upload and removal for the manifests of the directories above, which is how the `census/2021` manifest keeps listing the partition files.
+
+## The local cache
+
+`cache_parquet()` and `parquet_tbl(cache = TRUE)` mirror remote files and directories into a local cache directory, in the same layout as on R2, and keep local manifests of the same format next to the copies, with the remote etags they were downloaded with. That is how the package knows whether a copy is current without comparing files, and how `list_cache()` knows what the cache holds. The [Caching](caching.html) article covers the cache.

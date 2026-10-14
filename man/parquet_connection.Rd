@@ -18,4 +18,8 @@ change DuckDB settings via `DBI::dbExecute`, like `SET memory_limit = '4GB'` or 
 Disconnecting it, e.g. to free memory, is fine, the next call creates a new connection, but tables from
 `parquet_tbl` created on the old connection stop working. `parquet_tbl` can also create its tables on a
 connection of your own via its `con` argument.
+
+The connection is DuckDB's connection class extended with the package's SQL translation, which renders
+whole numbers in comparisons as integers, see `parquet_tbl`; everything else works as on any DuckDB
+connection.
 }

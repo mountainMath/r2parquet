@@ -36,9 +36,16 @@ Lazy table for parquet files at public URLs, like files in public R2 buckets or 
 R2 buckets, given as `r2://bucket/path`, or at local paths. No data is downloaded until the query is
 executed, e.g. via `dplyr::collect()`, and only the parts of the files needed to answer the query get read.
 Filters on partition columns restrict which files are read, other filters and the selection of columns
-restrict which parts of the files are downloaded. When filtering on integer columns use integer values like
-`2021L`, comparing to a plain number like `2021` is a floating point comparison that downloads considerably
-more data.
+restrict which parts of the files are downloaded.
+
+Whole numbers in comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, `%in%`, `between`) are rendered as
+integers: a plain number like `2021` is a double in R, which `dplyr` renders as `2021.0`, and DuckDB
+resolves that against an integer column by casting the column, which defeats the statistics it uses to
+skip row groups, so the filter downloads the whole column instead of the matching row groups. The package
+renders `2021` as the integer `2021`, with a message the first time in a session, and comparisons with
+double columns are unaffected. Write integers as `2021L` to avoid the message. Arithmetic is not
+rewritten, `x * 1000` stays a double multiplication. Tables on a connection of your own passed as `con`
+keep DuckDB's own translation, so write integers as `2021L` there.
 
 Directories on R2 are often named like a parquet file,
 e.g. `r2://bucket/data.parquet`, these get resolved to all parquet files within them.

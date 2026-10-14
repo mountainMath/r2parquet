@@ -175,3 +175,24 @@ test_that("remote metadata comes from the nearest manifest, or from the footers 
   attr(tbl,"r2parquet_source") <- "r2://bucket/plain/a.parquet"
   expect_equal(parquet_metadata(tbl),list(source="local"))
 })
+
+test_that("footer reads stay out of RStudio's Connections pane", {
+  events <- character()
+  enable <- getOption("duckdb.enable_rstudio_connection_pane")
+  withr::local_options(duckdb.force_rstudio_connection_pane=TRUE,
+                       connectionObserver=list(connectionOpened=function(type,host,...)events <<- c(events,paste("opened",host)),
+                                               connectionClosed=function(type,host)events <<- c(events,paste("closed",host)),
+                                               connectionUpdated=function(...)NULL))
+  dir <- withr::local_tempdir()
+  data_to_parquet(data.frame(a=1),file.path(dir,"a.parquet"),metadata=list(source="s"))
+  events <- character()
+  expect_equal(r2parquet:::parquet_footers(file.path(dir,"a.parquet")),stats::setNames(list(list(source="s")),file.path(dir,"a.parquet")))
+  expect_equal(events,character())
+  # the options are back to what they were
+  expect_equal(getOption("duckdb.force_rstudio_connection_pane"),TRUE)
+  expect_equal(getOption("duckdb.enable_rstudio_connection_pane"),enable)
+  # the session connection does register
+  con <- DBI::dbConnect(duckdb::duckdb())
+  DBI::dbDisconnect(con,shutdown=TRUE)
+  expect_equal(events,c("opened :memory:","closed :memory:"))
+})

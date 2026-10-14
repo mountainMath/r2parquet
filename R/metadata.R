@@ -65,12 +65,13 @@ read_parquet_footers <- function(con,path){
 
 # the footer metadata of parquet files, local paths or r2://bucket/key, as a list per file named by the path,
 # empty for files without. Reads on a connection of its own so that DuckDB's parquet metadata cache can't hand
-# back the footer of an earlier version of a file; a remote footer costs a request or two per file
+# back the footer of an earlier version of a file; a remote footer costs a request or two per file. The
+# connection stays out of RStudio's Connections pane, see duckdb_connect_quietly()
 parquet_footers <- function(path){
   metadata <- stats::setNames(rep(list(list()),length(path)),path)
   if (length(path)==0) return(metadata)
-  con <- DBI::dbConnect(duckdb::duckdb())
-  on.exit(DBI::dbDisconnect(con,shutdown=TRUE))
+  con <- duckdb_connect_quietly()
+  on.exit(attr(con,"disconnect")())
   if (any(startsWith(path,"r2://"))) {
     load_extension(con,"httpfs")
     duckdb_r2_secret(con)

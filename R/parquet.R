@@ -3,6 +3,54 @@
 # session cache for the duckdb connection
 parquet_cache <- new.env(parent=emptyenv())
 
+# The package's connection class: duckdb's connection, inheriting all its DBI and dbplyr methods, with a
+# dbplyr translation of its own (sql_translation.r2parquet_connection) that renders whole numbers in
+# comparisons as integers. dbplyr renders every R double with a decimal point, `x == 1` as `x = 1.0`, and
+# DuckDB (1.5.6) resolves that against an INTEGER column by casting the column, inside the scan filter, where
+# the row group statistics no longer apply, so such a filter downloads every row group. Against a DOUBLE column
+# an integer literal is cast on the literal side, so the rewrite is harmless there. Only comparisons are
+# rewritten: in arithmetic `x * 1000.0` keeps integer columns from overflowing, which DuckDB reports as an
+# error instead of promoting.
+methods::setClass("r2parquet_connection",contains="duckdb_connection")
+
+# a connection as the package's connection class, the same underlying connection. Only the session connection
+# gets wrapped: dbplyr tells tables apart by the identity of their connection object, so a wrapped copy of a
+# connection passed as parquet_tbl(con=) could not be joined with tables the user made on that connection
+r2parquet_connection <- function(con){
+  if (methods::is(con,"r2parquet_connection")) con else methods::new("r2parquet_connection",con)
+}
+
+# whole number doubles within the integer range, as plain vectors (dates are doubles too, they keep their
+# class), become integers, with a message once per session; everything else is returned as is
+integer_literal <- function(x){
+  if (!is.double(x) || is.object(x) || length(x)==0 || !all(is.finite(x) & x==trunc(x) & abs(x)<2^31)) return(x)
+  if (!isTRUE(parquet_cache$integer_literal_noted)) {
+    parquet_cache$integer_literal_noted <- TRUE
+    message("Comparing with the whole number ",format(x[1]),", rendered as the integer ",format(x[1]),"L so that DuckDB can ",
+            "skip row groups by the statistics of integer columns. Write integers as ",format(x[1]),"L to avoid this message, ",
+            "it is shown once per session.")
+  }
+  as.integer(x)
+}
+
+#' @exportS3Method dbplyr::sql_translation
+#' @importClassesFrom duckdb duckdb_connection
+sql_translation.r2parquet_connection <- function(con){
+  translation <- NextMethod()
+  scalar <- translation$scalar
+  comparison <- function(operator){
+    infix <- dbplyr::sql_infix(operator)
+    function(x,y)infix(integer_literal(x),integer_literal(y))
+  }
+  parent_in <- scalar$`%in%`
+  parent_between <- scalar$between
+  translation$scalar <- dbplyr::sql_translator(.parent=scalar,
+    `==`=comparison("="),`!=`=comparison("<>"),`<`=comparison("<"),`<=`=comparison("<="),`>`=comparison(">"),`>=`=comparison(">="),
+    `%in%`=function(x,table)parent_in(x,integer_literal(table)),
+    between=function(x,left,right)parent_between(x,integer_literal(left),integer_literal(right)))
+  translation
+}
+
 #' DuckDB connection shared by the parquet functions
 #'
 #' @description
@@ -15,15 +63,37 @@ parquet_cache <- new.env(parent=emptyenv())
 #' `parquet_tbl` created on the old connection stop working. `parquet_tbl` can also create its tables on a
 #' connection of your own via its `con` argument.
 #'
+#' The connection is DuckDB's connection class extended with the package's SQL translation, which renders
+#' whole numbers in comparisons as integers, see `parquet_tbl`; everything else works as on any DuckDB
+#' connection.
+#'
 #' @return a DuckDB connection
 #' @export
 parquet_connection <- function(){
   con <- parquet_cache$duckdb_connection
   if (is.null(con) || !DBI::dbIsValid(con)) {
-    con <- DBI::dbConnect(duckdb::duckdb())
+    con <- r2parquet_connection(DBI::dbConnect(duckdb::duckdb()))
     # avoids downloading the parquet file footers again for every query
     DBI::dbExecute(con,"SET parquet_metadata_cache = true")
     parquet_cache$duckdb_connection <- con
+  }
+  con
+}
+
+# a DuckDB connection for the package's internal use, kept out of RStudio's Connections pane: duckdb registers
+# every in-memory connection there as "DuckDB" at ":memory:" (when duckdb.enable_rstudio_connection_pane is on)
+# and closing one removes the first entry with that host, not necessarily its own, so the short-lived
+# connections of parquet_footers() would leave the pane calling closed connections, including the user's
+# own. Only the session connection of parquet_connection() shows up in the pane. The returned function
+# disconnects, with the registration suppressed the same way
+duckdb_connect_quietly <- function(){
+  pane <- options(duckdb.enable_rstudio_connection_pane=FALSE,duckdb.force_rstudio_connection_pane=FALSE)
+  on.exit(options(pane))
+  con <- DBI::dbConnect(duckdb::duckdb())
+  attr(con,"disconnect") <- function(){
+    pane <- options(duckdb.enable_rstudio_connection_pane=FALSE,duckdb.force_rstudio_connection_pane=FALSE)
+    on.exit(options(pane))
+    DBI::dbDisconnect(con,shutdown=TRUE)
   }
   con
 }
@@ -98,9 +168,16 @@ duckdb_parquet_paths <- function(con,path){
 #' R2 buckets, given as `r2://bucket/path`, or at local paths. No data is downloaded until the query is
 #' executed, e.g. via `dplyr::collect()`, and only the parts of the files needed to answer the query get read.
 #' Filters on partition columns restrict which files are read, other filters and the selection of columns
-#' restrict which parts of the files are downloaded. When filtering on integer columns use integer values like
-#' `2021L`, comparing to a plain number like `2021` is a floating point comparison that downloads considerably
-#' more data.
+#' restrict which parts of the files are downloaded.
+#'
+#' Whole numbers in comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, `%in%`, `between`) are rendered as
+#' integers: a plain number like `2021` is a double in R, which `dplyr` renders as `2021.0`, and DuckDB
+#' resolves that against an integer column by casting the column, which defeats the statistics it uses to
+#' skip row groups, so the filter downloads the whole column instead of the matching row groups. The package
+#' renders `2021` as the integer `2021`, with a message the first time in a session, and comparisons with
+#' double columns are unaffected. Write integers as `2021L` to avoid the message. Arithmetic is not
+#' rewritten, `x * 1000` stays a double multiplication. Tables on a connection of your own passed as `con`
+#' keep DuckDB's own translation, so write integers as `2021L` there.
 #'
 #' Directories on R2 are often named like a parquet file,
 #' e.g. `r2://bucket/data.parquet`, these get resolved to all parquet files within them.
@@ -153,7 +230,7 @@ parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL) {
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
   if (is.null(con)) {
     con <- parquet_connection()
-  } else if (!inherits(con,"duckdb_connection")) {
+  } else if (!methods::is(con,"duckdb_connection")) {
     stop("con has to be a DuckDB connection.")
   }
   if (is.null(cache)) {
