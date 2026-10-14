@@ -2,12 +2,12 @@
 % Please edit documentation in R/r2.R
 \name{remove_parquet}
 \alias{remove_parquet}
-\title{remove parquet files from Cloudflare R2}
+\title{remove files from Cloudflare R2}
 \usage{
 remove_parquet(path, purge_cache = TRUE)
 }
 \arguments{
-\item{path}{parquet file, or directory with (partitioned) parquet files, on R2 as `r2://bucket/path`, or a
+\item{path}{file, or directory with (partitioned) parquet files, on R2 as `r2://bucket/path`, or a
 vector of these}
 
 \item{purge_cache}{if `TRUE`, the default, purge the removed files from the Cloudflare cache of custom domains of the bucket}
@@ -16,11 +16,14 @@ vector of these}
 (invisibly) the removed files as `r2://bucket/path`
 }
 \description{
-Removes parquet files, or all parquet files in directories of (partitioned) parquet files, together with the
-manifests (`_manifest.json`, see `upload_parquet`) below the directories. Other files in the directories are
-left in place. The existing manifests of the directories above the removed files and directories get
-updated, since a manifest lists all parquet files below its directory, so removing a file or a partition
-from a dataset keeps the dataset's manifest current. Removed files can't be recovered.
+Removes files, or all parquet files in directories of (partitioned) parquet files, together with the
+manifests (`_manifest.json`, see `write_manifest`) below the directories. The path of a file removes that
+file whatever its type, like a JSON index uploaded with `upload_parquet`, or a manifest, which takes the
+directory's manifest away until `write_manifest` or the next upload writes it again; a directory only loses
+its parquet files and manifests, other files in it are left in place. The existing manifests of the
+directories above the removed files and directories get updated, since a manifest lists all parquet files
+below its directory, so removing a file or a partition from a dataset keeps the dataset's manifest current.
+Removed files can't be recovered.
 Expects the R2 account id and the access key id and secret access key
 of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
 environment variables.

@@ -25,8 +25,9 @@ test_that("parquet files can be uploaded, queried and removed", {
   expect_equal(c(stale),dir_path)
   expect_length(attr(stale,"files"),2)
   other_path <- paste0(dir_path,"/other.parquet")
-  data_to_parquet(df[1:5,],other_path)
-  expect_message(uploaded <- data_to_parquet(df,dir_path,partition_by="high_sid"),"Removing 2 stale parquet files")
+  data_to_parquet(df[1:5,],other_path,metadata=list(source="r2parquet tests",subset="first five"))
+  expect_message(uploaded <- data_to_parquet(df,dir_path,partition_by="high_sid",metadata=list(source="r2parquet tests",columns=list(NAME="County name"))),
+                 "Removing 2 stale parquet files")
   uploaded <- attr(uploaded,"files")
   expect_length(uploaded,2)
   expect_equal(dplyr::pull(dplyr::count(parquet_tbl(other_path))),5)
@@ -41,7 +42,14 @@ test_that("parquet files can be uploaded, queried and removed", {
   expect_true(all(grepl("^[0-9a-f]{32}$",files$etag)))
   # the directory has a manifest listing its files, and gets cached from it
   manifest_path <- paste0(dir_path,"/_manifest.json")
-  expect_true(r2parquet:::r2_object_exists(bucket,sub(paste0("^r2://",bucket,"/"),"",manifest_path)))
+  read_manifest <- function(path)jsonlite::fromJSON(httr::content(httr::GET(presigned_url(path)),"text",encoding="UTF-8"),simplifyVector=FALSE)
+  manifest <- read_manifest(manifest_path)
+  expect_equal(names(manifest),c("directory","metadata","files"))
+  # the footer metadata the files share sits at the dataset level, the rest with the file
+  expect_equal(manifest$metadata,list(source="r2parquet tests"))
+  expect_equal(vapply(manifest$files,`[[`,"",i="path"),c("high_sid=0/data_0.parquet","high_sid=1/data_0.parquet","other.parquet"))
+  expect_equal(manifest$files[[3]]$metadata,list(subset="first five"))
+  expect_equal(manifest$files[[1]]$metadata,list(columns=list(NAME=list(label="County name"))))
   expect_equal(files$cache,rep("not cached",3))
   expect_message(cached <- cache_parquet(dir_path),"Downloading 3 files")
   expect_length(dir(cached,"\\.parquet$",recursive=TRUE),3)
@@ -49,7 +57,10 @@ test_that("parquet files can be uploaded, queried and removed", {
   expect_setequal(list_cache()$path,files$path)
   expect_equal(list_cache(other_path)$etag,files$etag[files$path==other_path])
   remove_parquet(other_path,purge_cache=FALSE)
-  # the removed file leaves the manifest and the cache, the remaining files are current
+  # the removed file leaves the manifest and the cache, the remaining files are current, the column descriptions move up
+  manifest <- read_manifest(manifest_path)
+  expect_equal(manifest$metadata,list(source="r2parquet tests",columns=list(NAME=list(label="County name"))))
+  expect_length(manifest$files,2)
   expect_no_message(cached <- parquet_tbl(dir_path,cache=TRUE))
   expect_length(list_parquet(cached)$path,2)
   expect_equal(dplyr::pull(dplyr::count(cached)),nrow(df))
@@ -61,6 +72,29 @@ test_that("parquet files can be uploaded, queried and removed", {
   # stale group= partitions would be read too and double the row count
   expect_equal(dplyr::pull(dplyr::count(tbl)),nrow(df))
   expect_equal(dplyr::pull(dplyr::count(dplyr::filter(tbl,high_sid==1L))),sum(df$SID74>5))
+
+  # a directory upload with remove_stale mirrors the local directory, other files go up with their content type
+  local_dir <- withr::local_tempdir()
+  data_to_parquet(df[1:5,],file.path(local_dir,"a.parquet"))
+  data_to_parquet(df[6:10,],file.path(local_dir,"b.parquet"))
+  mirror_path <- paste0(prefix,"/mirror")
+  upload_parquet(local_dir,mirror_path,purge_cache=FALSE)
+  expect_setequal(list_parquet(mirror_path)$file,c("a.parquet","b.parquet"))
+  unlink(file.path(local_dir,"b.parquet"))
+  expect_message(upload_parquet(local_dir,mirror_path,purge_cache=FALSE,remove_stale=TRUE),"Removing 1 stale parquet file")
+  expect_equal(list_parquet(mirror_path)$file,"a.parquet")
+  expect_equal(vapply(read_manifest(paste0(mirror_path,"/_manifest.json"))$files,`[[`,"",i="path"),"a.parquet")
+  index <- file.path(local_dir,"index.json")
+  jsonlite::write_json(list(files="a.parquet"),index)
+  index_path <- paste0(mirror_path,"/index.json")
+  expect_equal(upload_parquet(index,paste0(mirror_path,"/"),purge_cache=FALSE),index_path)
+  response <- httr::GET(presigned_url(index_path))
+  expect_equal(httr::status_code(response),200)
+  expect_equal(httr::headers(response)[["content-type"]],"application/json")
+  expect_equal(jsonlite::fromJSON(httr::content(response,"text",encoding="UTF-8"))$files,"a.parquet")
+  expect_message(expect_equal(remove_parquet(index_path,purge_cache=FALSE),index_path),"Removed 1 file")
+  expect_equal(httr::status_code(httr::GET(presigned_url(index_path))),404)
+  expect_error(remove_parquet(index_path),"does not exist")
 
   # presigned urls work without credentials, also for listing and caching
   url <- presigned_url(r2_path,expires=60)
@@ -79,10 +113,20 @@ test_that("parquet files can be uploaded, queried and removed", {
   response <- httr::PUT(presigned_url(put_path,method="PUT"),body=httr::content(response,"raw"))
   expect_equal(httr::status_code(response),200)
   expect_equal(dplyr::pull(dplyr::count(parquet_tbl(put_path))),nrow(data))
+  # a manifest for the whole prefix reads the footers on R2, the files with footer metadata keep it
+  expect_equal(write_manifest(prefix,purge_cache=FALSE),paste0(prefix,"/_manifest.json"))
+  manifest <- read_manifest(paste0(prefix,"/_manifest.json"))
+  expect_equal(length(manifest$metadata),0)
+  paths <- vapply(manifest$files,`[[`,"",i="path")
+  expect_setequal(paths,c("nc.parquet","presigned put.parquet","mirror/a.parquet",sub(paste0(dir_path,"/"),"partitioned.parquet/",uploaded)))
+  expect_equal(manifest$files[[match("partitioned.parquet/high_sid=0/data_0.parquet",paths)]]$metadata,
+               list(source="r2parquet tests",columns=list(NAME=list(label="County name"))))
+  expect_null(manifest$files[[match("nc.parquet",paths)]]$metadata)
 
   # several paths at once, a file inside the directory only gets removed once
-  expect_message(removed <- remove_parquet(c(put_path,prefix),purge_cache=FALSE),"Removed 4 files")
-  expect_setequal(removed,c(r2_path,put_path,uploaded))
+  expect_message(removed <- remove_parquet(c(put_path,prefix),purge_cache=FALSE),"Removed 5 files")
+  expect_false(r2parquet:::r2_object_exists(bucket,sub(paste0("^r2://",bucket,"/"),"",paste0(prefix,"/_manifest.json"))))
+  expect_setequal(removed,c(r2_path,put_path,uploaded,paste0(mirror_path,"/a.parquet")))
   expect_equal(nrow(list_parquet(prefix)),0)
   expect_false(r2parquet:::r2_object_exists(bucket,sub(paste0("^r2://",bucket,"/"),"",manifest_path)))
   expect_error(remove_parquet(prefix,purge_cache=FALSE),"does not exist")

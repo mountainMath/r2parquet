@@ -2,12 +2,12 @@
 % Please edit documentation in R/r2.R
 \name{upload_parquet}
 \alias{upload_parquet}
-\title{transfer parquet files to Cloudflare R2}
+\title{transfer files to Cloudflare R2}
 \usage{
-upload_parquet(path, destination, purge_cache = TRUE, manifest = TRUE)
+upload_parquet(path, destination, purge_cache = TRUE, remove_stale = FALSE)
 }
 \arguments{
-\item{path}{path to local parquet file or directory with (partitioned) parquet files}
+\item{path}{path to a local file, or to a directory with (partitioned) parquet files}
 
 \item{destination}{destination on R2 as `r2://bucket/path`. If `path` is a file and `destination` ends with a slash (`/`)
 or is just the bucket, the basename of `path` gets appended. If `path` is a directory, `destination` is the directory
@@ -15,28 +15,38 @@ under which the content of the directory gets placed.}
 
 \item{purge_cache}{if `TRUE`, the default, purge the uploaded files from the Cloudflare cache of custom domains of the bucket}
 
-\item{manifest}{if `TRUE`, the default, write the manifest of the destination directory when `path` is a directory.
-An existing manifest gets updated either way, a stale manifest would be worse than none}
+\item{remove_stale}{if `TRUE`, and `path` is a directory, remove the parquet files below `destination` on R2 that
+are not in the directory, so that the destination mirrors the directory after the upload, e.g. when a dataset
+got rebuilt without a partition or file. The default `FALSE` leaves them in place. The files are removed before
+the upload, other files in the directory and files above `destination` are never touched}
 }
 \value{
 (invisibly) the uploaded files as `r2://bucket/path`
 }
 \description{
-Uploads a single parquet file, or all parquet files in a directory of (partitioned) parquet files,
-keeping the directory structure. The bucket has to exist, use `create_r2_bucket` to create it.
+Uploads a single file, or all parquet files in a directory of (partitioned) parquet files, keeping the
+directory structure. The bucket has to exist, use `create_r2_bucket` to create it.
 Expects the R2 account id and the access key id and secret access key
 of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
 environment variables.
+
+A single file can be of any type, like a JSON index or a README that gets published next to a dataset. It
+goes up with the content type for its extension (`application/json` for `.json`, `application/geo+json` for
+`.geojson`, `text/csv` for `.csv`, and so on, as `mime::guess_type` guesses it), so that browsers and other
+clients handle it correctly; parquet files and files with unknown extensions are sent as
+`application/octet-stream`. `remove_parquet` removes such files again. `_manifest.json` files are reserved
+for the manifests described below and can't be uploaded, use `write_manifest` to write them.
 
 If the bucket is served via a custom domain, the uploaded files get purged from the Cloudflare cache
 so that the new versions are served right away. This needs the value of an R2 API token with Zone Cache Purge
 permission in the `R2_API_TOKEN` environment variable, see `create_r2_bucket`, and is skipped if it is not set.
 
 Directory uploads write a manifest, a `_manifest.json` file in the destination directory listing the parquet
-files below it with their size, etag and modification time, unless `manifest` is `FALSE`. The manifest lets
-`cache_parquet` and `parquet_tbl(cache = TRUE)` cache the directory from a public URL, where the files can't be
-listed. Since a manifest lists all parquet files below its directory, uploads also update the existing
-manifests of the directories above the destination, so that uploading a single file or a new partition into
-a dataset keeps the dataset's manifest current. `write_manifest` writes manifests for directories uploaded
-earlier.
+files below it with their size, etag and modification time and the metadata in their footers, see
+`write_manifest` for the format. The manifest lets `cache_parquet` and `parquet_tbl(cache = TRUE)` cache the
+directory from a public URL, where the files can't be listed, and lets other clients read the dataset's
+metadata without parquet footers. Since a manifest lists all parquet files below its directory, uploads also
+update the existing manifests of the directories above the destination, so that uploading a single file or a
+new partition into a dataset keeps the dataset's manifest current. The metadata of the uploaded parquet
+files is read from the local files, the manifests keep what they record for files that did not change.
 }

@@ -75,12 +75,13 @@ test_that("remove_parquet removes manifests with directories and updates them fo
   purged <- list()
   local_mocked_bindings(r2_request=function(verb,r2_bucket,r2_path="",query=list(),headers=list(),body=raw(),config=NULL){
     if (verb=="PUT") puts[[length(puts)+1]] <<- list(key=r2_path,files=jsonlite::fromJSON(rawToChar(body))$files$path)
-    fake_response(200)
+    fake_response(if (verb=="GET" && !(r2_path %in% objects$key)) 404 else 200)
   },r2_list_objects=function(r2_bucket,prefix="")objects[startsWith(objects$key,prefix),],
   r2_delete_objects=function(r2_bucket,r2_paths){
     deleted[[length(deleted)+1]] <<- r2_paths
     objects <<- objects[!objects$key %in% r2_paths,]
-  },r2_purge_cache_after_change=function(r2_bucket,r2_paths)purged[[length(purged)+1]] <<- r2_paths)
+  },r2_purge_cache_after_change=function(r2_bucket,r2_paths)purged[[length(purged)+1]] <<- r2_paths,
+  parquet_footers=fake_footers())
   # a directory takes its manifests with it, a single file gets its directory's manifest rewritten
   removed <- remove_parquet(c("r2://bucket/data","r2://bucket/nested/x.parquet","r2://bucket/plain/y.parquet"))
   expect_equal(removed,c("r2://bucket/data/a.parquet","r2://bucket/data/b.parquet","r2://bucket/data/sub/c.parquet",
@@ -110,17 +111,18 @@ test_that("remove_parquet keeps the manifests above removed files and partitions
                               "data/_manifest.json","other.parquet","_manifest.json"),size=1,modified=now,etag="e")
   puts <- list()
   purged <- list()
-  heads <- character()
+  gets <- character()
   local_mocked_bindings(r2_request=function(verb,r2_bucket,r2_path="",query=list(),headers=list(),body=raw(),config=NULL){
     if (verb=="PUT") puts[[r2_path]] <<- jsonlite::fromJSON(rawToChar(body))$files$path
-    if (verb=="HEAD") heads <<- c(heads,r2_path)
-    fake_response(if (verb=="HEAD" && !(r2_path %in% objects$key)) 404 else 200)
+    if (verb=="GET") gets <<- c(gets,r2_path)
+    fake_response(if (verb=="GET" && !(r2_path %in% objects$key)) 404 else 200)
   },r2_list_objects=function(r2_bucket,prefix="")objects[startsWith(objects$key,prefix),],
   r2_delete_objects=function(r2_bucket,r2_paths)objects <<- objects[!objects$key %in% r2_paths,],
-  r2_purge_cache_after_change=function(r2_bucket,r2_paths)purged[[length(purged)+1]] <<- r2_paths)
+  r2_purge_cache_after_change=function(r2_bucket,r2_paths)purged[[length(purged)+1]] <<- r2_paths,
+  parquet_footers=fake_footers())
   # a file out of a partition: the partition directory has no manifest, the dataset and the bucket root do
   remove_parquet("r2://bucket/data/year=2021/data_0.parquet")
-  expect_equal(heads,c("data/year=2021/_manifest.json","data/_manifest.json","_manifest.json"))
+  expect_equal(gets,c("data/year=2021/_manifest.json","data/_manifest.json","_manifest.json"))
   expect_equal(puts,list("data/_manifest.json"=c("year=2022/data_0.parquet","year=2023/data_0.parquet"),
                          "_manifest.json"=c("data/year=2022/data_0.parquet","data/year=2023/data_0.parquet","other.parquet")))
   expect_equal(purged,list(c("data/year=2021/data_0.parquet","data/_manifest.json","_manifest.json")))

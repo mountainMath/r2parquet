@@ -187,6 +187,16 @@ ggplot(data) +
 
 The metadata is accessible from the lazy table `con` as well as from the collected `data`, and is used here for the caption.
 
+## Other files
+
+Rebuilding a dataset locally and uploading the directory again with `upload_parquet()` leaves files on R2 that the rebuild no longer produces, a partition or a per-region file that was dropped, and the manifest keeps listing them. `upload_parquet(remove_stale = TRUE)` removes the parquet files below the destination that are not in the local directory first, so that the destination mirrors the directory. It is off by default since it deletes files.
+
+Datasets often come with files that are not parquet, like a JSON index that a web client reads first, or a README. `upload_parquet()` uploads single files of any type with the content type for their extension, `application/json` for a `.json` file say, so browsers and other clients handle them correctly, and purges them from the Cloudflare cache like it does for parquet files. `remove_parquet()` removes them when given their path, while removing a directory only touches its parquet files and manifests.
+
+## Manifests
+
+Directory uploads put a `_manifest.json` next to the data, which lists the parquet files below the directory with their size, etag and modification time, and the metadata from their footers: entries that all files share, like the `columns` descriptions of a partitioned dataset, at the dataset level and the rest with the file. The package uses it to cache directories from public URLs, where listing is not possible, and clients that are not R can read what a dataset holds from it without opening the files. The format is documented in `?write_manifest`, which adds manifests to directories that were uploaded by other means; it reads the metadata from the footers on R2, one request per file.
+
 ## Cleanup
 
 To leave things as we found them initially we remove the files we uploaded here from the test bucket.

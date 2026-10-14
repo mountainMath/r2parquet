@@ -54,7 +54,7 @@ geos_cma |>
   head()
 ```
 
-Directories of (partitioned) parquet files on R2 get cached the same way, as `r2://bucket/path`. Directories at public URLs can't be listed over https, so they need a `_manifest.json` next to the files, which `upload_parquet()` and `data_to_parquet()` write for directories uploaded to R2 and `write_manifest()` adds to existing ones.
+Directories of (partitioned) parquet files on R2 get cached the same way, as `r2://bucket/path`. Directories at public URLs can't be listed over https, so they need a `_manifest.json` next to the files, which `upload_parquet()` and `data_to_parquet()` write for directories uploaded to R2 and `write_manifest()` adds to existing ones. It lists the files with their size, etag (the content MD5 for files the package uploaded) and modification time, plus the metadata from the parquet footers, the format is documented in `?write_manifest`.
 
 Listing remote parquet files also states whether the cache holds a current copy.
 

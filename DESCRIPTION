@@ -23,6 +23,7 @@ Imports:
     duckdb,
     httr,
     jsonlite,
+    mime,
     sf,
     stats,
     tools,

@@ -1,8 +1,10 @@
 # Local copies of parquet files on R2 or at URLs, kept current by comparing etags, and the manifests that
 # list the files of a dataset with their etags. Manifests are JSON files named _manifest.json with one entry per
-# parquet file, paths relative to the manifest's directory. upload_parquet writes them next to the data on R2
-# so that directories can be cached from public URLs, where listing is not possible, and the cache keeps one
-# per directory to know which files it holds.
+# parquet file, paths relative to the manifest's directory, plus the footer metadata of the files: the entries
+# all files share as the manifest's metadata, the rest per file. upload_parquet writes them next to the data on
+# R2 so that directories can be cached from public URLs, where listing is not possible, and so that clients
+# other than this package can read the dataset's metadata without parquet footers, and the cache keeps one per
+# directory to know which files it holds. The format is documented in write_manifest.
 
 manifest_name <- "_manifest.json"
 
@@ -39,30 +41,67 @@ clean_etag <- function(etag){
   gsub("\"","",etag,fixed=TRUE)
 }
 
-# the files of a manifest as a data frame, modification time in UTC
-manifest_files <- function(path=character(),size=NA_real_,etag=NA_character_,modified=NA_real_){
+# the files of a manifest as a data frame, modification time in UTC, metadata a list with the footer metadata of
+# each file (the whole of it, the common entries included), empty lists where it is not known
+manifest_files <- function(path=character(),size=NA_real_,etag=NA_character_,modified=NA_real_,metadata=NULL){
   if (inherits(modified,"POSIXt")) modified <- as.numeric(modified)
   if (is.character(modified)) modified <- as.numeric(as.POSIXct(modified,format="%Y-%m-%dT%H:%M:%OS",tz="UTC"))
   n <- length(path)
-  data.frame(path=as.character(path),size=rep_len(as.numeric(size),n),etag=rep_len(as.character(etag),n),
-             modified=.POSIXct(rep_len(as.numeric(modified),n),tz="UTC"))
+  files <- data.frame(path=as.character(path),size=rep_len(as.numeric(size),n),etag=rep_len(as.character(etag),n),
+                      modified=.POSIXct(rep_len(as.numeric(modified),n),tz="UTC"))
+  files$metadata <- if (is.null(metadata)) rep(list(list()),n) else unname(metadata)
+  files
+}
+
+# the metadata entries all files share, with identical values, what parquet_metadata returns for the directory
+common_metadata <- function(metadata){
+  if (length(metadata)==0) return(list())
+  common <- metadata[[1]]
+  for (entry in metadata[-1]) {
+    common <- common[vapply(names(common),function(key)identical(common[[key]],entry[[key]]),logical(1))]
+    if (length(common)==0) break
+  }
+  common
 }
 
 # JSON text of a manifest, directory says whether it lists all parquet files below its directory, as the
-# manifests on R2 and those of cached directories do, or only the cached files in the directory
+# manifests on R2 and those of cached directories do, or only the cached files in the directory. The metadata
+# the files share goes into the manifest's metadata, entries that differ between files or that only some files
+# have into the files' metadata, except for the column descriptions, which are too large to repeat per file
 manifest_json <- function(files,directory=TRUE){
-  entries <- data.frame(path=files$path,size=files$size,etag=files$etag,
-                        modified=format(files$modified,"%Y-%m-%dT%H:%M:%SZ",tz="UTC"))
-  jsonlite::toJSON(list(directory=directory,files=entries),dataframe="rows",auto_unbox=TRUE,pretty=TRUE,na="null")
+  metadata <- if (is.null(files$metadata)) rep(list(list()),nrow(files)) else files$metadata
+  common <- common_metadata(metadata)
+  if (length(common)==0) common <- structure(list(),names=character())
+  modified <- format(files$modified,"%Y-%m-%dT%H:%M:%SZ",tz="UTC")
+  entries <- lapply(seq_len(nrow(files)),function(i){
+    own <- metadata[[i]][setdiff(names(metadata[[i]]),names(common))]
+    c(list(path=files$path[i],size=files$size[i],etag=files$etag[i],modified=modified[i]),
+      if (length(own)>0) list(metadata=own))
+  })
+  jsonlite::toJSON(list(directory=directory,metadata=common,files=entries),auto_unbox=TRUE,pretty=TRUE,na="null",null="null",digits=NA)
 }
 
-# the files listed in manifest JSON text, with the directory flag as attribute, an error if it is not a manifest
+# the files listed in manifest JSON text, with the directory flag and whether the manifest carries metadata as
+# attributes (manifests written before the metadata was added don't), an error if it is not a manifest. The
+# metadata of each file is the manifest's metadata with the file's own entries added
 parse_manifest <- function(text){
-  manifest <- tryCatch(jsonlite::fromJSON(text,simplifyVector=TRUE),error=function(e)NULL)
+  manifest <- tryCatch(jsonlite::fromJSON(text,simplifyDataFrame=FALSE,simplifyMatrix=FALSE),error=function(e)NULL)
   if (!is.list(manifest) || !("files" %in% names(manifest))) stop("Not a manifest.")
-  files <- manifest$files
-  files <- if (length(files)==0) manifest_files() else manifest_files(files$path,files$size,files$etag,files$modified)
-  structure(files,directory=isTRUE(manifest$directory))
+  has_metadata <- is.list(manifest$metadata)
+  common <- if (has_metadata) manifest$metadata else list()
+  entries <- manifest$files
+  if (length(entries)==0) return(structure(manifest_files(),directory=isTRUE(manifest$directory),has_metadata=has_metadata))
+  field <- function(name,default){
+    coerce <- if (is.numeric(default)) as.numeric else as.character
+    vapply(entries,function(entry)if (is.null(entry[[name]])) default else coerce(entry[[name]]),default)
+  }
+  metadata <- lapply(entries,function(entry){
+    own <- if (is.list(entry$metadata)) entry$metadata else list()
+    common[names(own)] <- own
+    common
+  })
+  files <- manifest_files(field("path",NA_character_),field("size",NA_real_),field("etag",NA_character_),field("modified",NA_character_),metadata)
+  structure(files,directory=isTRUE(manifest$directory),has_metadata=has_metadata)
 }
 
 # the files listed in the manifest at a local path, none if there is no manifest

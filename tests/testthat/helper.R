@@ -35,3 +35,16 @@ fake_response <- function(status,content="",url="https://example.com"){
 cloudflare_response <- function(result=NULL,errors=NULL,status=if (is.null(errors)) 200L else 400L){
   fake_response(status,list(success=is.null(errors),errors=if (is.null(errors)) list() else errors,result=result))
 }
+
+# a stand-in for parquet_footers, since the parquet files in mocked uploads are not real: the metadata per file,
+# looked up by path or basename, and the paths asked for recorded in the calls argument if it is an environment
+fake_footers <- function(footers=list(),calls=NULL){
+  function(path){
+    if (is.environment(calls)) calls$paths <- c(calls$paths,path)
+    stats::setNames(lapply(path,function(p){
+      hit <- footers[[p]]
+      if (is.null(hit)) hit <- footers[[basename(p)]]
+      if (is.null(hit)) list() else hit
+    }),path)
+  }
+}

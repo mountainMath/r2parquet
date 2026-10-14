@@ -28,7 +28,7 @@ To cache a dataset set `cache = TRUE` in `parquet_tbl()`, or cache it explicitly
 census_cma_url <- "https://data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet"
 
 geos_cma <- parquet_tbl(census_cma_url, cache = TRUE)
-#> Downloading 1 file (12.9 MB) to /var/folders/z4/gcjq2cd93p3bs5bgp8j2vv240000gp/T//Rtmp68fVec/file1543d709bcfbc/https/data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet.
+#> Downloading 1 file (12.9 MB) to /var/folders/z4/gcjq2cd93p3bs5bgp8j2vv240000gp/T//RtmpwKHttF/file13cd478648bf8/https/data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet.
 ```
 
 This downloads the file if the cache has no current copy and opens the table on the local file. The copy is kept current by its etag: every call with `cache = TRUE` checks the remote file and downloads it again when it changed. We can inspect the cache to see what is available locally.
@@ -59,7 +59,7 @@ geos_cma |>
   dplyr::select(CMAUID, CMANAME, CMATYPE, LANDAREA) |>
   head()
 #> # A query:  ?? x 4
-#> # Database: DuckDB 1.5.6 [root@Darwin 27.0.0:R 4.6.1/:memory:]
+#> # Database: DuckDB 1.5.6 [jens@Darwin 27.0.0:R 4.6.1/:memory:]
 #>   CMAUID CMANAME             CMATYPE LANDAREA
 #>   <chr>  <chr>               <chr>      <dbl>
 #> 1 001    St. John's          B          932. 
@@ -70,7 +70,7 @@ geos_cma |>
 #> 6 110    Summerside          D          125.
 ```
 
-Directories of (partitioned) parquet files on R2 get cached the same way, as `r2://bucket/path`. Directories at public URLs can't be listed over https, so they need a `_manifest.json` next to the files, which `upload_parquet()` and `data_to_parquet()` write for directories uploaded to R2 and `write_manifest()` adds to existing ones.
+Directories of (partitioned) parquet files on R2 get cached the same way, as `r2://bucket/path`. Directories at public URLs can't be listed over https, so they need a `_manifest.json` next to the files, which `upload_parquet()` and `data_to_parquet()` write for directories uploaded to R2 and `write_manifest()` adds to existing ones. It lists the files with their size, etag (the content MD5 for files the package uploaded) and modification time, plus the metadata from the parquet footers, the format is documented in `?write_manifest`.
 
 Listing remote parquet files also states whether the cache holds a current copy.
 
