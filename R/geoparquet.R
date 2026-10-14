@@ -85,8 +85,7 @@ make_valid_geometries <- function(geometry){
 #' @export
 filter_spatial <- function(tbl,y,geometry_column=NULL,exact=TRUE) {
   con <- dbplyr::remote_con(tbl)
-  DBI::dbExecute(con,"INSTALL spatial")
-  DBI::dbExecute(con,"LOAD spatial")
+  load_extension(con,"spatial")
   geometry_column <- duckdb_geometry_column(tbl,geometry_column)
   if (inherits(y,"bbox")) y <- sf::st_as_sfc(y)
   y <- sf::st_geometry(y)

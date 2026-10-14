@@ -6,15 +6,15 @@ test_that("missing credentials are reported by name", {
 })
 
 test_that("directory paths get globbed without contacting R2", {
-  expect_equal(r2parquet:::r2_parquet_glob("bucket","data/"),"data/**/*.parquet")
-  expect_equal(r2parquet:::r2_parquet_glob("bucket","/data"),"data/**/*.parquet")
+  expect_equal(r2parquet:::r2_parquet_glob("bucket","data",is_directory=TRUE),"data/**/*.parquet")
+  expect_equal(r2parquet:::r2_parquet_glob("bucket","data"),"data/**/*.parquet")
   expect_equal(r2parquet:::r2_parquet_glob("bucket",""),"**/*.parquet")
 })
 
 test_that("r2 paths get split into bucket and path", {
-  expect_equal(r2parquet:::r2_split_path("r2://bucket/data/file.parquet"),list(bucket="bucket",path="data/file.parquet"))
-  expect_equal(r2parquet:::r2_split_path("r2://bucket"),list(bucket="bucket",path=""))
-  expect_equal(r2parquet:::r2_split_path("r2://bucket//data/"),list(bucket="bucket",path="data/"))
+  expect_equal(r2parquet:::r2_split_path("r2://bucket/data/file.parquet"),list(bucket="bucket",path="data/file.parquet",directory=FALSE))
+  expect_equal(r2parquet:::r2_split_path("r2://bucket"),list(bucket="bucket",path="",directory=FALSE))
+  expect_equal(r2parquet:::r2_split_path("r2://bucket//data/"),list(bucket="bucket",path="data",directory=TRUE))
   expect_error(r2parquet:::r2_split_path("r2:///data"),"r2://bucket/path")
   expect_error(r2parquet:::r2_split_path(c("r2://bucket/a.parquet","r2://bucket/b.parquet")),"single R2 path")
 })

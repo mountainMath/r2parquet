@@ -100,8 +100,7 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
   } else if (inherits(data,"sf")) {
     if ("geometry" %in% setdiff(names(data),attr(data,"sf_column"))) stop("Data has a non-geometry column named geometry.")
     con <- parquet_connection()
-    DBI::dbExecute(con,"INSTALL spatial")
-    DBI::dbExecute(con,"LOAD spatial")
+    load_extension(con,"spatial")
     geometry_column <- "geometry"
     if (attr(data,"sf_column")!=geometry_column) {
       message("Renaming geometry column ",attr(data,"sf_column")," to the GeoParquet standard name geometry.")
@@ -146,8 +145,7 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
                                                        DBI::dbQuoteString(con,unname(metadata)),collapse=", "),"}"))
   }
   if (!is.null(geometry_column)) {
-    DBI::dbExecute(con,"INSTALL spatial")
-    DBI::dbExecute(con,"LOAD spatial")
+    load_extension(con,"spatial")
     geometry <- DBI::dbQuoteIdentifier(con,geometry_column)
     # extent of the Hilbert curve
     stats <- DBI::dbGetQuery(con,paste0("SELECT ST_XMin(extent) AS xmin, ST_YMin(extent) AS ymin, ",
@@ -187,8 +185,9 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
 
 # write data to parquet in a temporary directory and upload it to R2
 r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,remove_stale=TRUE,metadata=NULL,compression="zstd",purge_cache=TRUE) {
-  r2_bucket <- r2_split_path(path)$bucket
-  r2_path <- sub("/+$","",r2_split_path(path)$path)
+  p <- r2_split_path(path)
+  r2_bucket <- p$bucket
+  r2_path <- p$path
   r2_url <- paste0("r2://",r2_bucket,"/",r2_path)
   partitioned <- length(partition_by)>0
   if (r2_path=="") stop("Please specify the path in the bucket.")
@@ -208,8 +207,7 @@ r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_grou
     files[is_partition_file(substring(files,nchar(r2_path)+2))]
   }
   files <- attr(local_path,"files")
-  message("Uploading ",format(structure(sum(file.size(files)),class="object_size"),units="auto",standard="SI"),
-          " in ",length(files)," parquet file",if (length(files)>1) "s"," to ",r2_url,".")
+  message("Uploading ",format_size(sum(file.size(files)))," in ",length(files)," parquet file",if (length(files)>1) "s"," to ",r2_url,".")
   uploaded <- r2_upload(local_path,r2_bucket,r2_path,stale=stale)
   if (purge_cache) r2_purge_cache_after_change(r2_bucket,union(uploaded$stale,c(uploaded$files,uploaded$manifests)))
   invisible(structure(r2_url,files=paste0("r2://",r2_bucket,"/",uploaded$files)))

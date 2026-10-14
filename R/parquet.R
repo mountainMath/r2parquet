@@ -39,6 +39,13 @@ duckdb_r2_secret <- function(con){
                             ", REGION 'auto')"))
 }
 
+# install and load a DuckDB extension, the R package turns autoinstall off, so extensions get installed
+# explicitly, and spatial functions do not autoload
+load_extension <- function(con,name){
+  DBI::dbExecute(con,paste0("INSTALL ",name))
+  DBI::dbExecute(con,paste0("LOAD ",name))
+}
+
 # lazy table for parquet files readable by duckdb, filters and column selections get pushed down to the parquet scan
 duckdb_parquet_tbl <- function(con,urls,hive_partitioning=TRUE){
   urls <- paste0(DBI::dbQuoteString(con,urls),collapse=", ")
@@ -58,7 +65,7 @@ local_parquet_glob <- function(path){
 r2_parquet_url <- function(path){
   vapply(path,function(p){
     p <- r2_split_path(p)
-    paste0("r2://",p$bucket,"/",r2_parquet_glob(p$bucket,p$path))
+    paste0("r2://",p$bucket,"/",r2_parquet_glob(p$bucket,p$path,p$directory))
   },character(1),USE.NAMES=FALSE)
 }
 
@@ -78,10 +85,7 @@ duckdb_parquet_paths <- function(con,path){
   is_url_dir <- is_url & grepl("^https?://",path) & grepl("/$",sub("[?#].*$","",path))
   path[is_r2] <- r2_parquet_url(path[is_r2])
   path[!is_r2 & !is_url] <- local_parquet_glob(path[!is_r2 & !is_url])
-  if (any(is_r2 | is_url)) {
-    DBI::dbExecute(con,"INSTALL httpfs")
-    DBI::dbExecute(con,"LOAD httpfs")
-  }
+  if (any(is_r2 | is_url)) load_extension(con,"httpfs")
   if (any(is_r2)) duckdb_r2_secret(con)
   if (!any(is_url_dir)) return(path)
   as.character(unlist(lapply(seq_along(path),function(i)if (is_url_dir[i]) url_directory_files(path[i]) else path[i])))
@@ -174,10 +178,7 @@ parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL) {
     files <- duckdb_parquet_paths(con,path)
     tbl <- duckdb_parquet_tbl(con,files,hive_partitioning=hive_partitioning)
   }
-  if (length(duckdb_geometry_columns(tbl))>0) {
-    DBI::dbExecute(con,"INSTALL spatial")
-    DBI::dbExecute(con,"LOAD spatial")
-  }
+  if (length(duckdb_geometry_columns(tbl))>0) load_extension(con,"spatial")
   # for parquet_metadata, list_parquet and collect_parquet, dbplyr keeps attributes through its verbs: the
   # files the table reads, and the paths they were resolved from
   attr(tbl,"r2parquet_paths") <- files

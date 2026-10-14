@@ -305,29 +305,6 @@ r2_ancestors <- function(r2_path){
   ancestors
 }
 
-# the footer metadata of parquet files, local paths or r2://bucket/key, as a list per file named by the path,
-# without the GeoParquet entry. Reads on a connection of its own so that DuckDB's parquet metadata cache can't
-# hand back the footer of an earlier version of a file; a remote footer costs a request or two per file
-parquet_footers <- function(path){
-  metadata <- stats::setNames(rep(list(list()),length(path)),path)
-  if (length(path)==0) return(metadata)
-  con <- DBI::dbConnect(duckdb::duckdb())
-  on.exit(DBI::dbDisconnect(con,shutdown=TRUE))
-  if (any(startsWith(path,"r2://"))) {
-    DBI::dbExecute(con,"INSTALL httpfs")
-    DBI::dbExecute(con,"LOAD httpfs")
-    duckdb_r2_secret(con)
-  }
-  files <- paste0("[",paste0(DBI::dbQuoteString(con,path),collapse=", "),"]")
-  kv <- DBI::dbGetQuery(con,paste0("SELECT file_name, decode(key) AS k, decode(value) AS v FROM parquet_kv_metadata(",files,")"))
-  kv <- kv[kv$k!="geo",]
-  for (file in unique(kv$file_name)) {
-    entries <- kv[kv$file_name==file,]
-    metadata[[file]] <- lapply(stats::setNames(entries$v,entries$k),parse_metadata_value)
-  }
-  metadata
-}
-
 # the parsed manifest at a key with the etag of the object as an attribute, NULL if there is none, and an empty
 # one without metadata, which makes the caller rebuild it from a listing, if it can't be parsed
 r2_get_manifest <- function(r2_bucket,key){
@@ -460,12 +437,13 @@ r2_stale_mirror <- function(objects,r2_paths){
 # the uploaded parquet files, with their metadata from the local footers. stale, if given, picks the keys to
 # remove before the upload from the listing of the destination and the keys of the upload, like
 # r2_stale_mirror does, and the manifests get updated for the removals too. Returns the uploaded keys, the
-# removed keys and the keys of the manifests that changed.
-r2_upload <- function(path,r2_bucket,r2_path,stale=NULL){
+# removed keys and the keys of the manifests that changed. A single file goes into r2_path if that is a
+# directory (given with a trailing slash), otherwise r2_path is the file's key.
+r2_upload <- function(path,r2_bucket,r2_path,stale=NULL,directory=FALSE){
   if (dir.exists(path)) {
     files <- dir(path,"\\.parquet$",recursive=TRUE)
     if (length(files)==0) stop(paste0("No parquet files found in ",path,"."))
-    r2_dir <- sub("/+$","",r2_path)
+    r2_dir <- r2_path
     if (r2_dir=="") {
       stop(paste0("Please specify the directory in R2 bucket ",r2_bucket," to upload the directory into, ",
                   "write_manifest writes a manifest for the whole bucket."))
@@ -474,8 +452,8 @@ r2_upload <- function(path,r2_bucket,r2_path,stale=NULL){
     files <- file.path(path,files)
     create <- TRUE
   } else if (file.exists(path)) {
-    if (r2_path=="" || endsWith(r2_path,"/")) {
-      r2_path=paste0(r2_path,basename(path))
+    if (r2_path=="" || directory) {
+      r2_path=paste0(r2_path,if (r2_path!="") "/",basename(path))
     }
     if (basename(r2_path)==manifest_name) {
       stop(paste0(manifest_name," files are the manifests of directories of parquet files, use write_manifest to write them."))
@@ -544,13 +522,20 @@ r2_objects <- function(r2_bucket,r2_path){
   objects[objects$key==r2_path | startsWith(objects$key,paste0(r2_path,"/")),]
 }
 
+# the object at an R2 path if it is a file, or else the parquet files below the directory at the path, with
+# whether the path is a file; nothing for a path that does not exist
+r2_dataset_objects <- function(r2_bucket,r2_path){
+  objects <- r2_objects(r2_bucket,r2_path)
+  is_file <- r2_path %in% objects$key
+  objects <- if (is_file) objects[objects$key==r2_path,] else objects[grepl("\\.parquet$",objects$key),]
+  list(is_file=is_file,objects=objects)
+}
+
 # the parquet file at an R2 path, or the parquet files below the directory at the path, with size and
 # modification time, nothing for a path that does not exist
 r2_parquet_files <- function(path){
   path <- r2_split_path(path)
-  r2_path <- sub("/+$","",path$path)
-  objects <- r2_objects(path$bucket,r2_path)
-  objects <- if (r2_path %in% objects$key) objects[objects$key==r2_path,] else objects[grepl("\\.parquet$",objects$key),]
+  objects <- r2_dataset_objects(path$bucket,path$path)$objects
   parquet_files(paste0("r2://",path$bucket,"/",objects$key),objects$size,objects$modified,objects$etag)
 }
 
@@ -656,7 +641,8 @@ create_r2_bucket <- function(r2_bucket,public=FALSE,custom_domain=NULL) {
 upload_parquet <- function(path,destination,purge_cache=TRUE,remove_stale=FALSE) {
   destination <- r2_split_path(destination)
   r2_bucket <- destination$bucket
-  uploaded <- r2_upload(path,r2_bucket,destination$path,stale=if (remove_stale && dir.exists(path)) r2_stale_mirror)
+  uploaded <- r2_upload(path,r2_bucket,destination$path,stale=if (remove_stale && dir.exists(path)) r2_stale_mirror,
+                        directory=destination$directory)
   if (purge_cache) r2_purge_cache_after_change(r2_bucket,c(uploaded$files,uploaded$stale,uploaded$manifests))
   invisible(paste0("r2://",r2_bucket,"/",uploaded$files))
 }
@@ -707,7 +693,7 @@ write_manifest <- function(path,purge_cache=TRUE) {
   if (!is.character(path) || length(path)==0) stop("path has to be one or more R2 paths of the form r2://bucket/path.")
   manifests <- vapply(path,function(p){
     p <- r2_split_path(p)
-    r2_dir <- sub("/+$","",p$path)
+    r2_dir <- p$path
     objects <- r2_objects(p$bucket,r2_dir)
     if (r2_dir %in% objects$key) stop(paste0("r2://",p$bucket,"/",r2_dir," is a file, manifests describe directories."))
     if (!any(grepl("\\.parquet$",objects$key))) stop(paste0("No parquet files found in ",r2_dir," in R2 bucket ",p$bucket,"."))
@@ -750,7 +736,7 @@ remove_parquet <- function(path,purge_cache=TRUE) {
   resolved <- lapply(path,function(p){
     p <- r2_split_path(p)
     r2_bucket <- p$bucket
-    r2_path <- sub("/+$","",p$path)
+    r2_path <- p$path
     if (r2_path=="") stop("Please specify the path of the parquet file or directory to remove in R2 bucket ",r2_bucket,".")
     objects <- r2_objects(r2_bucket,r2_path)
     manifests <- character()
@@ -815,7 +801,7 @@ presigned_url <- function(path,expires=3600,method=c("GET","HEAD","PUT")) {
   endpoint <- r2_endpoint()
   vapply(path,function(p){
     p <- r2_split_path(p)
-    if (p$path=="" || endsWith(p$path,"/")) stop("The path has to be the path of a file, got r2://",p$bucket,"/",p$path,".")
+    if (p$path=="" || p$directory) stop("The path has to be the path of a file, got r2://",p$bucket,"/",p$path,".")
     sigv4_presigned_url(method,endpoint,r2_canonical_path(p$bucket,p$path),expires,
                         access_key=credentials[["R2_ACCESS_KEY_ID"]],
                         secret=credentials[["R2_SECRET_ACCESS_KEY"]],region="auto")
@@ -823,18 +809,19 @@ presigned_url <- function(path,expires=3600,method=c("GET","HEAD","PUT")) {
 }
 
 # split r2://bucket/path into bucket and path
+# bucket and path of r2://bucket/path, the path without leading or trailing slashes, and whether the path was
+# given as a directory with a trailing slash
 r2_split_path <- function(path){
   if (!is.character(path) || length(path)!=1) stop("Expected a single R2 path, got ",length(path),".")
   parts <- regmatches(path,regexec("^r2://([^/]+)/?(.*)$",path))[[1]]
   if (length(parts)!=3) stop("R2 paths have to be of the form r2://bucket/path, got ",path,".")
-  list(bucket=parts[2],path=sub("^/+","",parts[3]))
+  r2_path <- sub("^/+","",parts[3])
+  list(bucket=parts[2],path=sub("/+$","",r2_path),directory=endsWith(r2_path,"/"))
 }
 
 # path or glob pattern matching the parquet file or all parquet files in the directory
 # directories of parquet files are commonly named like a parquet file, so paths ending in .parquet get checked
-r2_parquet_glob <- function(r2_bucket,r2_path){
-  is_directory <- endsWith(r2_path,"/")
-  r2_path <- sub("/+$","",sub("^/+","",r2_path))
+r2_parquet_glob <- function(r2_bucket,r2_path,is_directory=FALSE){
   if (is_directory || !grepl("\\.parquet$",r2_path) || !r2_object_exists(r2_bucket,r2_path)) {
     r2_path <- paste0(r2_path,if (r2_path!="") "/","**/*.parquet")
   }

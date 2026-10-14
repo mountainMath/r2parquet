@@ -31,7 +31,7 @@ forget_checks <- function(local){
 }
 
 remote_cache_location <- function(path,cache_dir){
-  if (!startsWith(path,"r2://") && !grepl("^https?://",path)) stop("Expected an r2://bucket/path or a URL, got ",path,".")
+  if (!is_remote(path)) stop("Expected an r2://bucket/path or a URL, got ",path,".")
   cache_location(path,cache_dir)
 }
 
@@ -156,7 +156,7 @@ r2_get_object <- function(r2_bucket,r2_path,file){
 cache_location <- function(path,cache_dir){
   if (startsWith(path,"r2://")) {
     p <- r2_split_path(path)
-    r2_path <- sub("/+$","",p$path)
+    r2_path <- p$path
     if (r2_path=="") stop("Please specify the path of the parquet file or directory to cache in R2 bucket ",p$bucket,".")
     account <- r2_credentials("R2_ACCOUNT_ID")[["R2_ACCOUNT_ID"]]
     return(list(local=file.path(cache_dir,"r2",account,p$bucket,r2_path),bucket=p$bucket,path=r2_path,url=NULL,cache_dir=cache_dir))
@@ -173,9 +173,9 @@ cache_location <- function(path,cache_dir){
 
 # the remote files of the dataset with their etags, relative to the manifest directory, and a function to download one
 r2_cache_source <- function(location){
-  objects <- r2_objects(location$bucket,location$path)
-  is_file <- location$path %in% objects$key
-  if (!is_file) objects <- objects[grepl("\\.parquet$",objects$key),]
+  dataset <- r2_dataset_objects(location$bucket,location$path)
+  is_file <- dataset$is_file
+  objects <- dataset$objects
   if (nrow(objects)==0) stop("File or directory ",location$path," does not exist in R2 bucket ",location$bucket,".")
   files <- manifest_files(if (is_file) basename(location$path) else substring(objects$key,nchar(location$path)+2),
                           objects$size,objects$etag,objects$modified)
@@ -232,9 +232,31 @@ cache_download <- function(source,file,target){
   if (!file.rename(tmp,target)) stop(paste0("Could not move the download of ",file$key," to ",target,"."))
 }
 
+# whether paths are on R2 or at URLs, which is what the cache mirrors, as opposed to local paths
+is_remote <- function(path){
+  startsWith(path,"r2://") | grepl("^https?://",path)
+}
+
 # the directory holding the manifest of a cached path, a file is listed in the manifest of its directory
 manifest_directory <- function(location,source){
   if (source$is_file) dirname(location$local) else location$local
+}
+
+# the directories above a path in the cache, nearest first, up to the top-level directories of the cache (the
+# cache directory itself holds no manifests), with the path relative to each, as that directory's manifest
+# would list it
+cache_ancestors <- function(path,cache_dir){
+  directory <- dirname(path)
+  relative <- basename(path)
+  directories <- character()
+  relatives <- character()
+  while (startsWith(directory,paste0(cache_dir,"/"))) {
+    directories <- c(directories,directory)
+    relatives <- c(relatives,relative)
+    relative <- paste0(basename(directory),"/",relative)
+    directory <- dirname(directory)
+  }
+  list(directory=directories,relative=relatives)
 }
 
 # which of the remote files have a current copy: the etag the manifest recorded is the remote one and the
@@ -250,15 +272,22 @@ current_files <- function(manifest_dir,remote){
 }
 
 # the manifest to check a cached path against: the one in its manifest directory, or, for a file or partition of
-# a cached directory, the nearest one above it, which lists it by its path relative to that directory
+# a cached directory, the nearest one above it, which lists it by its path relative to that directory, with
+# the prefix that makes the paths relative to that directory, and whether that manifest exists
 covering_manifest <- function(location,source){
   manifest_dir <- manifest_directory(location,source)
   prefix <- ""
-  while (!file.exists(file.path(manifest_dir,manifest_name)) && startsWith(dirname(manifest_dir),paste0(location$cache_dir,"/"))) {
-    prefix <- paste0(basename(manifest_dir),"/",prefix)
-    manifest_dir <- dirname(manifest_dir)
+  exists <- file.exists(file.path(manifest_dir,manifest_name))
+  if (!exists) {
+    ancestors <- cache_ancestors(manifest_dir,location$cache_dir)
+    found <- which(file.exists(file.path(ancestors$directory,manifest_name)))
+    if (length(found)>0) {
+      exists <- TRUE
+      manifest_dir <- ancestors$directory[found[1]]
+      prefix <- paste0(ancestors$relative[found[1]],"/")
+    }
   }
-  list(dir=manifest_dir,prefix=prefix,path=paste0(prefix,source$files$path))
+  list(dir=manifest_dir,prefix=prefix,path=paste0(prefix,source$files$path),exists=exists)
 }
 
 # whether the local copy of the dataset is in line with the remote files without touching it: every remote
@@ -281,7 +310,7 @@ sync_cache <- function(location,source){
   local <- location$local
   manifest <- covering_manifest(location,source)
   known <- read_local_manifest(file.path(manifest$dir,manifest_name))
-  if (manifest$prefix!="" && (nrow(known)==0 || (!source$is_file && !isTRUE(attr(known,"directory"))))) {
+  if (manifest$prefix!="" && (!manifest$exists || (!source$is_file && !isTRUE(attr(known,"directory"))))) {
     manifest <- list(dir=manifest_directory(location,source),prefix="",path=source$files$path)
     known <- read_local_manifest(file.path(manifest$dir,manifest_name))
   }
@@ -294,8 +323,7 @@ sync_cache <- function(location,source){
   current <- current_files(manifest_dir,remote)
   if (any(!current)) {
     size <- sum(remote$size[!current],na.rm=TRUE)
-    message("Downloading ",sum(!current)," file",if (sum(!current)>1) "s",
-            if (size>0) paste0(" (",format(structure(size,class="object_size"),units="auto",standard="SI"),")"),
+    message("Downloading ",sum(!current)," file",if (sum(!current)>1) "s",if (size>0) paste0(" (",format_size(size),")"),
             " to ",local,".")
     for (i in which(!current)) cache_download(source,remote[i,],targets[i])
   }
@@ -332,21 +360,18 @@ sorted_files <- function(files){
 # the manifests of the directories above record below it, so that the manifests above agree with the nearest
 # one, which is the one the checks use
 patch_ancestor_manifests <- function(manifest_dir,synced,is_file,files,cache_dir){
-  directory <- dirname(manifest_dir)
-  prefix <- paste0(basename(manifest_dir),"/")
-  while (startsWith(directory,paste0(cache_dir,"/"))) {
-    manifest_file <- file.path(directory,manifest_name)
-    if (file.exists(manifest_file)) {
-      known <- read_local_manifest(manifest_file)
-      below <- paste0(prefix,synced)
-      keep <- if (is_file) known$path!=below else !startsWith(known$path,below)
-      fresh <- files[,manifest_columns]
-      fresh$path <- paste0(prefix,files$path)
-      writeLines(manifest_json(sorted_files(rbind(known[keep,manifest_columns],fresh)),isTRUE(attr(known,"directory"))),
-                 manifest_file,useBytes=TRUE)
-    }
-    prefix <- paste0(basename(directory),"/",prefix)
-    directory <- dirname(directory)
+  ancestors <- cache_ancestors(manifest_dir,cache_dir)
+  for (i in seq_along(ancestors$directory)) {
+    manifest_file <- file.path(ancestors$directory[i],manifest_name)
+    if (!file.exists(manifest_file)) next
+    known <- read_local_manifest(manifest_file)
+    prefix <- paste0(ancestors$relative[i],"/")
+    below <- paste0(prefix,synced)
+    keep <- if (is_file) known$path!=below else !startsWith(known$path,below)
+    fresh <- files[,manifest_columns]
+    fresh$path <- paste0(prefix,files$path)
+    writeLines(manifest_json(sorted_files(rbind(known[keep,manifest_columns],fresh)),isTRUE(attr(known,"directory"))),
+               manifest_file,useBytes=TRUE)
   }
 }
 
@@ -355,14 +380,11 @@ patch_ancestor_manifests <- function(manifest_dir,synced,is_file,files,cache_dir
 cached_copy <- function(location){
   local <- location$local
   if (isTRUE(attr(read_local_manifest(file.path(local,manifest_name)),"directory"))) return(local)
-  directory <- dirname(local)
-  relative <- basename(local)
-  while (startsWith(directory,paste0(location$cache_dir,"/"))) {
-    known <- read_local_manifest(file.path(directory,manifest_name))
-    if (relative %in% known$path && file.exists(local)) return(local)
+  ancestors <- cache_ancestors(local,location$cache_dir)
+  for (i in seq_along(ancestors$directory)) {
+    known <- read_local_manifest(file.path(ancestors$directory[i],manifest_name))
+    if (ancestors$relative[i] %in% known$path && file.exists(local)) return(local)
     if (isTRUE(attr(known,"directory")) && dir.exists(local)) return(local)
-    relative <- paste0(basename(directory),"/",relative)
-    directory <- dirname(directory)
   }
   NULL
 }
@@ -432,7 +454,7 @@ cache_source <- function(location){
 cache_offline <- function(path){
   cache_dir <- cache_directory()
   vapply(path,function(p){
-    if (!startsWith(p,"r2://") && !grepl("^https?://",p)) return(p)
+    if (!is_remote(p)) return(p)
     local <- cached_copy(cache_location(p,cache_dir))
     if (is.null(local)) stop(paste0("No copy of ",p," in the cache. Cache it with cache_parquet() or parquet_tbl(cache = TRUE) first."))
     local
@@ -449,7 +471,7 @@ cache_offline <- function(path){
 cache_lookup <- function(path){
   cache_dir <- cache_directory()
   vapply(path,function(p){
-    if (!startsWith(p,"r2://") && !grepl("^https?://",p)) return(p)
+    if (!is_remote(p)) return(p)
     # a path that can't be located in the cache, like r2:// without credentials, is left to the remote read
     location <- tryCatch(cache_location(p,cache_dir),error=function(e)NULL)
     if (is.null(location)) return(p)
@@ -522,7 +544,7 @@ cache_contents <- function(cache_dir){
 # whether remote files have a copy in the cache, and whether it is current, by the etags the manifests recorded
 cache_status <- function(path,etag){
   status <- rep(NA_character_,length(path))
-  remote <- startsWith(path,"r2://") | grepl("^https?://",path)
+  remote <- is_remote(path)
   if (!any(remote)) return(status)
   cache_dir <- cache_directory()
   local <- vapply(path[remote],function(p)tryCatch(cache_location(p,cache_dir)$local,error=function(e)NA_character_),"",USE.NAMES=FALSE)
@@ -539,9 +561,10 @@ cache_status <- function(path,etag){
 # after removing a path from the cache, drop it from the manifests of the directories above it, a directory manifest
 # that lost entries no longer covers its directory, and remove directories that are left empty
 prune_manifests <- function(local,cache_dir){
-  directory <- dirname(local)
-  relative <- basename(local)
-  while (startsWith(directory,paste0(cache_dir,"/"))) {
+  ancestors <- cache_ancestors(local,cache_dir)
+  for (i in seq_along(ancestors$directory)) {
+    directory <- ancestors$directory[i]
+    relative <- ancestors$relative[i]
     manifest_file <- file.path(directory,manifest_name)
     if (file.exists(manifest_file)) {
       known <- read_local_manifest(manifest_file)
@@ -553,8 +576,6 @@ prune_manifests <- function(local,cache_dir){
       }
     }
     if (length(dir(directory,all.files=TRUE,no..=TRUE))==0) unlink(directory,recursive=TRUE)
-    relative <- paste0(basename(directory),"/",relative)
-    directory <- dirname(directory)
   }
 }
 

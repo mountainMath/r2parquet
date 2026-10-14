@@ -50,21 +50,52 @@ parse_metadata_value <- function(value){
   value
 }
 
-# metadata from the footers of parquet files, resolved paths or globs on a connection that can read them
-duckdb_parquet_metadata <- function(con,path){
+# the footer metadata of parquet files, paths or globs, on a connection that can read them: a list per file,
+# named by the file and in file order, without the GeoParquet entry
+read_parquet_footers <- function(con,path){
   files <- paste0(DBI::dbQuoteString(con,path),collapse=", ")
   if (length(path)>1) files <- paste0("[",files,"]")
-  kv <- DBI::dbGetQuery(con,paste0("SELECT file_name, decode(key) AS k, decode(value) AS v FROM parquet_kv_metadata(",files,") ORDER BY file_name"))
+  kv <- DBI::dbGetQuery(con,paste0("SELECT file_name, decode(key) AS k, decode(value) AS v FROM parquet_kv_metadata(",files,
+                                   ") ORDER BY file_name"))
   kv <- kv[kv$k!="geo",]
-  if (nrow(kv)==0) return(list())
-  values <- unique(kv[c("k","v")])
-  conflicts <- unique(values$k[duplicated(values$k)])
-  first <- kv[!duplicated(kv$k),]
+  lapply(split(kv,factor(kv$file_name,levels=unique(kv$file_name))),function(entries){
+    lapply(stats::setNames(entries$v,entries$k),parse_metadata_value)
+  })
+}
+
+# the footer metadata of parquet files, local paths or r2://bucket/key, as a list per file named by the path,
+# empty for files without. Reads on a connection of its own so that DuckDB's parquet metadata cache can't hand
+# back the footer of an earlier version of a file; a remote footer costs a request or two per file
+parquet_footers <- function(path){
+  metadata <- stats::setNames(rep(list(list()),length(path)),path)
+  if (length(path)==0) return(metadata)
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con,shutdown=TRUE))
+  if (any(startsWith(path,"r2://"))) {
+    load_extension(con,"httpfs")
+    duckdb_r2_secret(con)
+  }
+  footers <- read_parquet_footers(con,path)
+  metadata[names(footers)] <- footers
+  metadata
+}
+
+# the metadata of a set of parquet files, the values of the first file where the files disagree, with a warning
+duckdb_parquet_metadata <- function(con,path){
+  footers <- read_parquet_footers(con,path)
+  if (length(footers)==0) return(list())
+  metadata <- footers[[1]]
+  conflicts <- character()
+  for (footer in footers[-1]) {
+    conflicts <- c(conflicts,names(footer)[vapply(names(footer),function(key)!is.null(metadata[[key]]) && !identical(metadata[[key]],footer[[key]]),logical(1))])
+    metadata <- c(metadata,footer[setdiff(names(footer),names(metadata))])
+  }
+  conflicts <- unique(conflicts)
   if (length(conflicts)>0) {
     warning("The files disagree on the metadata entr",if (length(conflicts)>1) "ies " else "y ",paste0(conflicts,collapse=", "),
-            ", using the values of ",first$file_name[1],".",call.=FALSE)
+            ", using the values of ",names(footers)[1],".",call.=FALSE)
   }
-  lapply(stats::setNames(first$v,first$k),parse_metadata_value)
+  metadata
 }
 
 # attach metadata to collected data, the whole list as the metadata attribute and column labels as label attributes
