@@ -35,6 +35,16 @@ test_that("metadata round trips through the parquet footer", {
   expect_equal(kv$v[kv$k=="notes"],'["first","second"]')
 })
 
+test_that("strings that look like JSON come back as strings", {
+  path <- withr::local_tempfile(fileext=".parquet")
+  metadata <- list(array="[1]",object='{"a": 1}',quoted='"x"',spaced=" [1]",plain="a [1]")
+  data_to_parquet(data.frame(a=1),path,metadata=metadata)
+  expect_equal(parquet_metadata(path),metadata)
+  # structured entries still get parsed
+  data_to_parquet(data.frame(a=1),path,metadata=list(notes=list(a=1L,b="[1]")))
+  expect_equal(parquet_metadata(path)$notes,list(a=1L,b="[1]"))
+})
+
 test_that("column labels get picked up from label attributes", {
   df <- data.frame(id=1:3,value=c(3,1,2))
   attr(df$value,"label") <- "The value"

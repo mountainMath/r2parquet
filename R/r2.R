@@ -240,7 +240,7 @@ r2_purge_cache <- function(r2_bucket,r2_paths){
   r2_stop_for_status(response)
   domains <- Filter(function(d)isTRUE(d$enabled),httr::content(response)$result$domains)
   for (domain in domains) {
-    urls <- paste0("https://",domain$domain,"/",vapply(r2_paths,utils::URLencode,"",USE.NAMES=FALSE))
+    urls <- paste0("https://",domain$domain,"/",url_path_encode(r2_paths))
     # the purge API accepts a limited number of urls per request
     for (batch in split(urls,ceiling(seq_along(urls)/30))) {
       response <- cloudflare_api("POST",paste0("/zones/",domain$zoneId,"/purge_cache"),body=list(files=as.list(batch)))
@@ -262,7 +262,8 @@ r2_purge_cache_after_change <- function(r2_bucket,r2_paths){
 # upload a local file as an object in a single PUT request with a signed payload, so the file gets read into
 # memory (the S3 API allows up to 5GB per PUT, httr's streaming upload_file leaks file connections)
 r2_put_object <- function(r2_bucket,r2_path,file){
-  r2_put_body(r2_bucket,r2_path,readBin(file,raw(),file.size(file)),r2_content_type(r2_path),what=file)
+  response <- r2_put_body(r2_bucket,r2_path,readBin(file,raw(),file.size(file)),r2_content_type(r2_path),what=file)
+  clean_etag(httr::headers(response)$etag)
 }
 
 # content type of an object from its extension, parquet files and unknown extensions as binary data
@@ -270,12 +271,15 @@ r2_content_type <- function(r2_path){
   ifelse(grepl("\\.parquet$",r2_path),"application/octet-stream",mime::guess_type(r2_path,empty="application/octet-stream"))
 }
 
-# upload a raw vector or string as an object
-r2_put_body <- function(r2_bucket,r2_path,body,content_type,what="the file"){
+# upload a raw vector or string as an object, with further request headers such as the conditions
+# If-Match and If-None-Match, in which case a 412 (precondition failed) response is returned for the caller
+# to handle; any other failure stops
+r2_put_body <- function(r2_bucket,r2_path,body,content_type,what="the file",headers=list()){
   if (!is.raw(body)) body <- charToRaw(enc2utf8(as.character(body)))
-  response <- r2_request("PUT",r2_bucket,r2_path,body=body,headers=list("content-type"=content_type))
-  if (httr::status_code(response)>=400) {
-    stop(paste0("Uploading ",what," to r2://",r2_bucket,"/",r2_path," failed with status ",httr::status_code(response),". ",
+  response <- r2_request("PUT",r2_bucket,r2_path,body=body,headers=c(list("content-type"=content_type),headers))
+  status <- httr::status_code(response)
+  if (status>=400 && !(status==412 && length(headers)>0)) {
+    stop(paste0("Uploading ",what," to r2://",r2_bucket,"/",r2_path," failed with status ",status,". ",
                 httr::content(response,"text",encoding="UTF-8")))
   }
   invisible(response)
@@ -324,72 +328,149 @@ parquet_footers <- function(path){
   metadata
 }
 
-# the parsed manifest at a key, NULL if there is none, and an empty one without metadata if it can't be parsed
+# the parsed manifest at a key with the etag of the object as an attribute, NULL if there is none, and an empty
+# one without metadata, which makes the caller rebuild it from a listing, if it can't be parsed
 r2_get_manifest <- function(r2_bucket,key){
   response <- r2_request("GET",r2_bucket,key)
   status <- httr::status_code(response)
   if (status==404) return(NULL)
   if (status>=400) stop(paste0("Reading r2://",r2_bucket,"/",key," failed with status ",status,"."))
-  tryCatch(parse_manifest(httr::content(response,"text",encoding="UTF-8")),
-           error=function(e)structure(manifest_files(),directory=TRUE,has_metadata=FALSE))
+  manifest <- tryCatch(parse_manifest(httr::content(response,"text",encoding="UTF-8")),error=function(e){
+    warning(paste0("r2://",r2_bucket,"/",key," is not a valid manifest and gets rewritten."),call.=FALSE)
+    structure(manifest_files(),directory=TRUE,has_metadata=FALSE)
+  })
+  etag <- clean_etag(httr::headers(response)$etag)
+  attr(manifest,"etag") <- if (length(etag)==1 && nzchar(etag)) etag
+  manifest
 }
 
-# write the manifest listing the parquet files below a directory with their footer metadata, or remove it if no
-# parquet files are left. Without create only an existing manifest gets updated, so the manifest gets read first,
-# since listing the directory, or the whole bucket for "", costs more. The metadata of files that were just
-# uploaded is passed in as uploaded, a list named by key, read from the local files; files the existing manifest
-# lists with the same etag keep the metadata recorded there; the footers of the remaining files get read from R2.
-# Returns the key of the manifest if it changed.
-r2_update_manifest <- function(r2_bucket,r2_dir,create=FALSE,uploaded=list()){
+# manifest entries for local parquet files that are about to be uploaded, keyed by their destination keys,
+# with the etag R2 assigns to single request uploads (the MD5 of the file) and the metadata of their footers,
+# read before anything goes up
+r2_upload_entries <- function(files,keys){
+  entries <- manifest_files(keys,file.size(files),vapply(files,digest::digest,"",algo="md5",file=TRUE),Sys.time(),
+                            unname(parquet_footers(files)))
+  names(entries)[names(entries)=="path"] <- "key"
+  entries
+}
+
+# whether keys are below a directory, "" being the bucket itself, and their paths relative to it
+r2_below <- function(keys,r2_dir)r2_dir=="" | startsWith(keys,paste0(r2_dir,"/"))
+r2_relative <- function(keys,r2_dir)substring(keys,nchar(r2_dir)+1+(r2_dir!=""))
+
+# manifest entries for the parquet files below a directory in a listing, except the keys in exclude, with the
+# metadata of files that known, an existing manifest with metadata, lists with the same etag carried over and
+# the footers of the others read from R2, one range request per file
+r2_manifest_from_listing <- function(r2_bucket,r2_dir,objects,known=manifest_files(),exclude=character()){
+  keys <- objects$key[grepl("\\.parquet$",objects$key) & r2_below(objects$key,r2_dir) & !(objects$key %in% exclude)]
+  files <- objects[match(keys,objects$key),]
+  paths <- r2_relative(keys,r2_dir)
+  j <- match(paths,known$path)
+  carry <- !is.na(j) & known$etag[j]==files$etag
+  carry[is.na(carry)] <- FALSE
+  metadata <- rep(list(NULL),length(keys))
+  metadata[carry] <- known$metadata[j[carry]]
+  if (any(!carry)) metadata[!carry] <- unname(parquet_footers(paste0("r2://",r2_bucket,"/",keys[!carry])))
+  manifest_files(paths,files$size,files$etag,files$modified,metadata)
+}
+
+# bring the manifest of a directory up to date after parquet files below it were uploaded (uploaded, entries
+# from r2_upload_entries) or removed (removed, keys), and write it with a conditional PUT, so that a manifest
+# someone else wrote in the meantime is not overwritten: the existing manifest gets read and, when it carries
+# metadata, patched with the uploaded entries and without the removed keys, which costs nothing beyond the two
+# requests, whatever the directory holds. It gets rebuilt from a listing instead with create, the repair path
+# of write_manifest and of directory uploads, and when the existing manifest has no metadata (written before the
+# metadata was added, or not parseable), see r2_manifest_from_listing; objects is a listing that covers
+# everything below the directory if the caller has one, otherwise the directory gets listed. Without create a
+# directory without a manifest is left alone, so that the directories above an upload, the bucket root in
+# particular, don't get one. A manifest left without files gets deleted. If the manifest changed on R2 between
+# the read and the write (412) the update starts over. Returns the key of the manifest if it was written or
+# deleted.
+r2_update_manifest <- function(r2_bucket,r2_dir,create=FALSE,objects=NULL,uploaded=r2_upload_entries(character(),character()),
+                               removed=character()){
   key <- r2_manifest_key(r2_dir)
-  existing <- r2_get_manifest(r2_bucket,key)
-  if (!create && is.null(existing)) return(NULL)
-  objects <- r2_objects(r2_bucket,r2_dir)
-  exists <- key %in% objects$key
-  if (!create && !exists) return(NULL)
-  files <- objects[grepl("\\.parquet$",objects$key),]
-  if (nrow(files)==0) {
-    if (exists) r2_delete_objects(r2_bucket,key)
-    return(if (exists) key)
-  }
-  paths <- substring(files$key,nchar(r2_dir)+1+(r2_dir!=""))
-  known <- if (isTRUE(attr(existing,"has_metadata"))) existing else manifest_files()
-  metadata <- rep(list(NULL),nrow(files))
-  for (i in seq_len(nrow(files))) {
-    j <- match(paths[i],known$path)
-    if (files$key[i] %in% names(uploaded)) {
-      metadata[i] <- list(uploaded[[files$key[i]]])
-    } else if (!is.na(j) && identical(known$etag[j],files$etag[i])) {
-      metadata[i] <- list(known$metadata[[j]])
+  uploaded <- uploaded[r2_below(uploaded$key,r2_dir),]
+  uploaded$path <- r2_relative(uploaded$key,r2_dir)
+  removed <- removed[r2_below(removed,r2_dir)]
+  columns <- names(manifest_files())
+  for (attempt in 1:3) {
+    existing <- r2_get_manifest(r2_bucket,key)
+    if (!create && is.null(existing)) return(NULL)
+    known <- if (isTRUE(attr(existing,"has_metadata"))) existing else manifest_files()
+    if (create || !isTRUE(attr(existing,"has_metadata"))) {
+      if (is.null(objects)) objects <- r2_objects(r2_bucket,r2_dir)
+      files <- r2_manifest_from_listing(r2_bucket,r2_dir,objects,known=known,exclude=c(removed,uploaded$key))
+    } else {
+      files <- existing[!(existing$path %in% c(r2_relative(removed,r2_dir),uploaded$path)),]
     }
+    files <- rbind(files[,columns],uploaded[,columns])
+    files <- files[order(files$path,method="radix"),]
+    if (nrow(files)==0) {
+      if (!is.null(existing)) r2_delete_objects(r2_bucket,key)
+      return(if (!is.null(existing)) key)
+    }
+    condition <- if (is.null(existing)) {
+      list("if-none-match"="*")
+    } else if (!is.null(attr(existing,"etag"))) {
+      list("if-match"=paste0("\"",attr(existing,"etag"),"\""))
+    }
+    response <- r2_put_body(r2_bucket,key,manifest_json(files),"application/json",what="the manifest",headers=condition)
+    if (httr::status_code(response)!=412) return(key)
   }
-  unknown <- vapply(metadata,is.null,logical(1))
-  if (any(unknown)) metadata[unknown] <- unname(parquet_footers(paste0("r2://",r2_bucket,"/",files$key[unknown])))
-  files <- manifest_files(paths,files$size,files$etag,files$modified,metadata)
-  r2_put_body(r2_bucket,key,manifest_json(files),"application/json",what="the manifest")
-  key
+  stop(paste0("r2://",r2_bucket,"/",key," kept changing while it was being updated."))
 }
 
-# update the manifests of the directories among r2_dirs that have one, returns the keys of the manifests that changed
-r2_update_manifests <- function(r2_bucket,r2_dirs,uploaded=list()){
+# update the manifests of several directories, the ones that have a manifest and the ones in create, for
+# uploaded entries and removed keys, with objects a listing covering everything below the directory listed,
+# which saves the directories at or below it their own listing when they need one. A failed update only warns,
+# since the data has already changed, naming the manifests that are now out of date, write_manifest rewrites
+# them. Returns the keys of the manifests that changed
+r2_update_manifests <- function(r2_bucket,r2_dirs,create=character(),objects=NULL,listed=NULL,
+                                uploaded=r2_upload_entries(character(),character()),removed=character()){
   manifests <- character()
-  for (r2_dir in unique(r2_dirs)) manifests <- c(manifests,r2_update_manifest(r2_bucket,r2_dir,uploaded=uploaded))
+  failed <- character()
+  for (r2_dir in unique(r2_dirs)) {
+    covered <- !is.null(objects) && (r2_dir==listed || r2_below(r2_dir,listed))
+    manifest <- tryCatch(r2_update_manifest(r2_bucket,r2_dir,create=r2_dir %in% create,objects=if (covered) objects,
+                                            uploaded=uploaded,removed=removed),
+                         error=function(e){
+                           failed <<- c(failed,paste0("r2://",r2_bucket,"/",r2_manifest_key(r2_dir),": ",conditionMessage(e)))
+                           NULL
+                         })
+    manifests <- c(manifests,manifest)
+  }
+  if (length(failed)>0) {
+    warning(paste0(length(failed)," manifest",if (length(failed)>1) "s"," could not be updated and ",
+                   if (length(failed)>1) "are" else "is"," out of date, write_manifest rewrites ",
+                   if (length(failed)>1) "them" else "it",":\n",paste0(failed,collapse="\n")),call.=FALSE)
+  }
   manifests
 }
 
-# upload a local file or a directory of parquet files, maintaining the manifests: directory uploads write the
-# manifest of the directory, and the manifests of the directories above get updated where they exist, since a
-# manifest lists all parquet files below its directory, with the metadata of the uploaded files from their
-# footers. A single file of any type goes up with the content type for its extension, a parquet file updates the
-# manifests above it. With remove_stale, parquet files below the destination directory that are not part of the
-# upload get removed first. Returns the uploaded keys, the removed keys and the keys of the manifests that changed.
-r2_upload <- function(path,r2_bucket,r2_path,remove_stale=FALSE){
-  stale <- character()
+# the keys to remove before an upload so that the destination mirrors the uploaded directory: every parquet
+# file below it that is not in the upload. For the stale argument of r2_upload
+r2_stale_mirror <- function(objects,r2_paths){
+  setdiff(objects$key[grepl("\\.parquet$",objects$key)],r2_paths)
+}
+
+# upload a local file or a directory of parquet files, maintaining the manifests. A directory goes up with
+# its parquet files, keeping the structure, and gets its manifest written, a single file of any type goes up
+# with the content type for its extension. Since a manifest lists all parquet files below its directory, the
+# existing manifests of the directories above the destination, and of the directories below it, get updated for
+# the uploaded parquet files, with their metadata from the local footers. stale, if given, picks the keys to
+# remove before the upload from the listing of the destination and the keys of the upload, like
+# r2_stale_mirror does, and the manifests get updated for the removals too. Returns the uploaded keys, the
+# removed keys and the keys of the manifests that changed.
+r2_upload <- function(path,r2_bucket,r2_path,stale=NULL){
   if (dir.exists(path)) {
     files <- dir(path,"\\.parquet$",recursive=TRUE)
     if (length(files)==0) stop(paste0("No parquet files found in ",path,"."))
     r2_dir <- sub("/+$","",r2_path)
-    r2_paths <- paste0(r2_dir,if (r2_dir!="") "/",files)
+    if (r2_dir=="") {
+      stop(paste0("Please specify the directory in R2 bucket ",r2_bucket," to upload the directory into, ",
+                  "write_manifest writes a manifest for the whole bucket."))
+    }
+    r2_paths <- paste0(r2_dir,"/",files)
     files <- file.path(path,files)
     create <- TRUE
   } else if (file.exists(path)) {
@@ -408,24 +489,28 @@ r2_upload <- function(path,r2_bucket,r2_path,remove_stale=FALSE){
   }
   # the footers get read before anything goes up, so a file that is not parquet stops the upload
   parquet <- grepl("\\.parquet$",r2_paths)
-  uploaded <- stats::setNames(parquet_footers(files[parquet]),r2_paths[parquet])
-  if (remove_stale && create) {
-    objects <- r2_objects(r2_bucket,r2_dir)
-    stale <- setdiff(objects$key[grepl("\\.parquet$",objects$key)],r2_paths)
-    if (length(stale)>0) {
-      message("Removing ",length(stale)," stale parquet file",if (length(stale)>1) "s"," from r2://",r2_bucket,"/",r2_dir,".")
-      r2_delete_objects(r2_bucket,stale)
-    }
+  uploaded <- r2_upload_entries(files[parquet],r2_paths[parquet])
+  # one listing serves the stale files, the manifest of the destination and the manifests below it
+  listed <- if (create) r2_dir else r2_path
+  objects <- if (create || !is.null(stale)) r2_objects(r2_bucket,listed)
+  removed <- as.character(if (!is.null(stale)) stale(objects,r2_paths))
+  if (length(removed)>0) {
+    message("Removing ",length(removed)," stale parquet file",if (length(removed)>1) "s"," from r2://",r2_bucket,"/",listed,".")
+    r2_delete_objects(r2_bucket,removed)
   }
   for (i in seq_along(files)) {
-    r2_put_object(r2_bucket,r2_paths[i],files[i])
+    etag <- r2_put_object(r2_bucket,r2_paths[i],files[i])
+    if (parquet[i] && length(etag)==1) uploaded$etag[uploaded$key==r2_paths[i]] <- etag
   }
   manifests <- character()
-  if (any(parquet)) {
-    manifests <- c(r2_update_manifest(r2_bucket,r2_dir,create=create,uploaded=uploaded),
-                   r2_update_manifests(r2_bucket,r2_ancestors(r2_dir),uploaded=uploaded))
+  if (any(parquet) || length(removed)>0) {
+    # the manifests below the destination show in its listing, the ones above get looked up
+    below <- if (is.null(objects)) character() else r2_dirname(objects$key[basename(objects$key)==manifest_name])
+    r2_dirs <- c(if (create) r2_dir,setdiff(below,if (create) r2_dir),r2_ancestors(listed))
+    manifests <- r2_update_manifests(r2_bucket,r2_dirs,create=if (create) r2_dir,objects=objects,listed=listed,
+                                     uploaded=uploaded,removed=removed)
   }
-  list(files=r2_paths,stale=stale,manifests=manifests)
+  list(files=r2_paths,stale=removed,manifests=manifests)
 }
 
 # objects in the bucket whose key starts with prefix, with size in bytes, modification time and etag, via the
@@ -542,26 +627,36 @@ create_r2_bucket <- function(r2_bucket,public=FALSE,custom_domain=NULL) {
 #' files below it with their size, etag and modification time and the metadata in their footers, see
 #' `write_manifest` for the format. The manifest lets `cache_parquet` and `parquet_tbl(cache = TRUE)` cache the
 #' directory from a public URL, where the files can't be listed, and lets other clients read the dataset's
-#' metadata without parquet footers. Since a manifest lists all parquet files below its directory, uploads also
-#' update the existing manifests of the directories above the destination, so that uploading a single file or a
-#' new partition into a dataset keeps the dataset's manifest current. The metadata of the uploaded parquet
-#' files is read from the local files, the manifests keep what they record for files that did not change.
+#' metadata without parquet footers. The manifest of the destination is built from a listing of the directory, so it
+#' also repairs a manifest that fell behind. Since a manifest lists all parquet files below its directory, uploads
+#' also update the existing manifests of the directories above the destination, and directory uploads those of the
+#' directories below it, so that uploading a single file or a new partition into a dataset keeps the dataset's
+#' manifest current. These manifests get patched from what they record, without listing their directories: the
+#' uploaded and removed files are swapped in and out, everything else stays as recorded, and the metadata of the
+#' uploaded parquet files is read from the local files. `write_manifest` rebuilds a manifest from a listing when
+#' files were changed by other means. Manifests are written conditionally, so that an upload running at the same
+#' time can't overwrite an update, and the update starts over from the current manifest when that happens; the
+#' upload warns, after the files are up, when a manifest could not be updated this way. Uploading a single file
+#' never creates a manifest, and a directory can't be uploaded to the root of the bucket, since its manifest would
+#' list the whole bucket and `remove_stale` would empty it: upload it into a directory, `write_manifest` writes a
+#' manifest of a whole bucket on request.
 #'
 #' @param path path to a local file, or to a directory with (partitioned) parquet files
 #' @param destination destination on R2 as `r2://bucket/path`. If `path` is a file and `destination` ends with a slash (`/`)
 #' or is just the bucket, the basename of `path` gets appended. If `path` is a directory, `destination` is the directory
-#' under which the content of the directory gets placed.
+#' under which the content of the directory gets placed, and has to be a directory in the bucket, not the bucket itself.
 #' @param purge_cache if `TRUE`, the default, purge the uploaded files from the Cloudflare cache of custom domains of the bucket
 #' @param remove_stale if `TRUE`, and `path` is a directory, remove the parquet files below `destination` on R2 that
 #' are not in the directory, so that the destination mirrors the directory after the upload, e.g. when a dataset
 #' got rebuilt without a partition or file. The default `FALSE` leaves them in place. The files are removed before
-#' the upload, other files in the directory and files above `destination` are never touched
+#' the upload, other files in the directory and files above `destination` are never touched; manifests of
+#' directories below `destination` lose the removed files, and go when nothing is left
 #' @return (invisibly) the uploaded files as `r2://bucket/path`
 #' @export
 upload_parquet <- function(path,destination,purge_cache=TRUE,remove_stale=FALSE) {
   destination <- r2_split_path(destination)
   r2_bucket <- destination$bucket
-  uploaded <- r2_upload(path,r2_bucket,destination$path,remove_stale=remove_stale)
+  uploaded <- r2_upload(path,r2_bucket,destination$path,stale=if (remove_stale && dir.exists(path)) r2_stale_mirror)
   if (purge_cache) r2_purge_cache_after_change(r2_bucket,c(uploaded$files,uploaded$stale,uploaded$manifests))
   invisible(paste0("r2://",r2_bucket,"/",uploaded$files))
 }
@@ -572,15 +667,19 @@ upload_parquet <- function(path,destination,purge_cache=TRUE,remove_stale=FALSE)
 #' Writes a `_manifest.json` file into directories on R2, listing the parquet files below the directory with
 #' their size, etag and modification time and the metadata in their footers. `upload_parquet` and
 #' `data_to_parquet` write manifests for the directories they upload, this writes them for directories uploaded
-#' before. Manifests let `cache_parquet` and `parquet_tbl(cache = TRUE)` cache a directory from its public URL,
-#' since directories can't be listed over https, and let clients other than R read what a dataset holds.
-#' Expects the same credentials as `upload_parquet`, and purges the manifest from the Cloudflare cache of the
-#' bucket's custom domains like `upload_parquet` does.
+#' before, and rebuilds the manifest of a directory from a listing when it fell behind, e.g. after files were
+#' changed with other tools, after an upload or removal warned that a manifest could not be updated, or after a
+#' manifest was removed. Manifests let `cache_parquet` and `parquet_tbl(cache = TRUE)` cache a directory from its
+#' public URL, since directories can't be listed over https, and let clients other than R read what a dataset
+#' holds. Expects the same credentials as `upload_parquet`, and purges the manifest from the Cloudflare cache of
+#' the bucket's custom domains like `upload_parquet` does. `write_manifest("r2://bucket")` writes a manifest of the
+#' whole bucket at its root, which uploads and removals anywhere in the bucket then keep current.
 #'
 #' The metadata comes from the parquet footers, as `parquet_metadata` reads it. Files that an existing manifest
 #' lists with the same etag keep the metadata recorded there, the footers of all other files get read from R2,
 #' which costs a request or two per file, so writing the manifest of a large directory for the first time takes
-#' a moment.
+#' a moment. The manifest is written conditionally, like `upload_parquet` writes them, and the call fails if it
+#' keeps changing underneath, e.g. because of uploads running at the same time.
 #'
 #' @section Manifest format:
 #' A manifest is a JSON object with three members:
@@ -612,7 +711,7 @@ write_manifest <- function(path,purge_cache=TRUE) {
     objects <- r2_objects(p$bucket,r2_dir)
     if (r2_dir %in% objects$key) stop(paste0("r2://",p$bucket,"/",r2_dir," is a file, manifests describe directories."))
     if (!any(grepl("\\.parquet$",objects$key))) stop(paste0("No parquet files found in ",r2_dir," in R2 bucket ",p$bucket,"."))
-    key <- r2_update_manifest(p$bucket,r2_dir,create=TRUE)
+    key <- r2_update_manifest(p$bucket,r2_dir,create=TRUE,objects=objects)
     if (purge_cache) r2_purge_cache_after_change(p$bucket,key)
     paste0("r2://",p$bucket,"/",key)
   },character(1),USE.NAMES=FALSE)
@@ -627,8 +726,11 @@ write_manifest <- function(path,purge_cache=TRUE) {
 #' file whatever its type, like a JSON index uploaded with `upload_parquet`, or a manifest, which takes the
 #' directory's manifest away until `write_manifest` or the next upload writes it again; a directory only loses
 #' its parquet files and manifests, other files in it are left in place. The existing manifests of the
-#' directories above the removed files and directories get updated, since a manifest lists all parquet files
-#' below its directory, so removing a file or a partition from a dataset keeps the dataset's manifest current.
+#' directories above removed parquet files and directories get updated, since a manifest lists all parquet files
+#' below its directory, so removing a file or a partition from a dataset keeps the dataset's manifest current:
+#' the removed files are dropped from what the manifests record, without listing their directories, and a
+#' manifest left without files is removed. The manifests are written conditionally, like `upload_parquet`
+#' writes them, and a manifest that could not be updated is reported with a warning after the files are gone.
 #' Removed files can't be recovered.
 #' Expects the R2 account id and the access key id and secret access key
 #' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
@@ -652,14 +754,17 @@ remove_parquet <- function(path,purge_cache=TRUE) {
     if (r2_path=="") stop("Please specify the path of the parquet file or directory to remove in R2 bucket ",r2_bucket,".")
     objects <- r2_objects(r2_bucket,r2_path)
     manifests <- character()
-    # the manifests above the removed path list its files, the ones below a directory go with it
-    directories <- r2_ancestors(r2_path)
+    directories <- character()
     if (r2_path %in% objects$key) {
       r2_paths <- r2_path
+      # the manifests above a parquet file list it, those of other files don't
+      if (grepl("\\.parquet$",r2_path)) directories <- r2_ancestors(r2_path)
     } else if (nrow(objects)>0) {
       r2_paths <- objects$key[grepl("\\.parquet$",objects$key)]
       if (length(r2_paths)==0) stop(paste0("No parquet files found in ",r2_path," in R2 bucket ",r2_bucket,"."))
+      # the manifests above the directory list its files, the ones below go with it
       manifests <- objects$key[basename(objects$key)==manifest_name]
+      directories <- r2_ancestors(r2_path)
     } else {
       stop(paste0("File or directory ",r2_path," does not exist in R2 bucket ",r2_bucket,"."))
     }
@@ -674,7 +779,7 @@ remove_parquet <- function(path,purge_cache=TRUE) {
     r2_delete_objects(r2_bucket,c(r2_paths,manifests))
     # manifests of the directories above the removed paths, unless they went with a removed directory
     directories <- setdiff(unlist(lapply(in_bucket,`[[`,"directories")),r2_dirname(manifests))
-    manifests <- c(manifests,r2_update_manifests(r2_bucket,directories))
+    manifests <- c(manifests,r2_update_manifests(r2_bucket,directories,removed=r2_paths))
     if (purge_cache) r2_purge_cache_after_change(r2_bucket,c(r2_paths,manifests))
     message(paste0("Removed ",length(r2_paths)," file",if (length(r2_paths)>1) "s" else ""," from R2 bucket ",r2_bucket,"."))
     removed <- c(removed,paste0("r2://",r2_bucket,"/",r2_paths))

@@ -62,10 +62,20 @@ r2_parquet_url <- function(path){
   },character(1),USE.NAMES=FALSE)
 }
 
-# paths resolved to files or glob patterns DuckDB can read, with the httpfs extension and R2 credentials in place
+# the URLs of the parquet files a directory at a URL holds, from the manifest next to them since directories
+# can't be listed over https, NULL without a manifest if that is tolerated
+url_directory_files <- function(url,missing_ok=FALSE){
+  base <- paste0(sub("/+$","",sub("[?#].*$","",url)),"/")
+  if (!missing_ok) return(url_cache_source(list(url=base))$files$key)
+  tryCatch(url_cache_source(list(url=base))$files$key,error=function(e)NULL)
+}
+
+# paths resolved to files or glob patterns DuckDB can read, with the httpfs extension and R2 credentials in place;
+# directory URLs, ending in a slash, resolve to the files their manifest lists
 duckdb_parquet_paths <- function(con,path){
   is_r2 <- startsWith(path,"r2://")
   is_url <- !is_r2 & grepl("^[a-z0-9]+://",path)
+  is_url_dir <- is_url & grepl("^https?://",path) & grepl("/$",sub("[?#].*$","",path))
   path[is_r2] <- r2_parquet_url(path[is_r2])
   path[!is_r2 & !is_url] <- local_parquet_glob(path[!is_r2 & !is_url])
   if (any(is_r2 | is_url)) {
@@ -73,7 +83,8 @@ duckdb_parquet_paths <- function(con,path){
     DBI::dbExecute(con,"LOAD httpfs")
   }
   if (any(is_r2)) duckdb_r2_secret(con)
-  path
+  if (!any(is_url_dir)) return(path)
+  as.character(unlist(lapply(seq_along(path),function(i)if (is_url_dir[i]) url_directory_files(path[i]) else path[i])))
 }
 
 #' lazy table to query parquet files at URLs, on R2 or at local paths
@@ -91,8 +102,11 @@ duckdb_parquet_paths <- function(con,path){
 #' and secret access key of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and
 #' `R2_SECRET_ACCESS_KEY` environment variables. Directories on R2 are often named like a parquet file,
 #' e.g. `r2://bucket/data.parquet`, these get resolved to all parquet files within them.
-#' Local directories get read as all parquet files within them, URLs have to point to files since directories
-#' can't be listed over https.
+#' Local directories get read as all parquet files within them. Directories can't be listed over https, so a
+#' directory at a URL gets read through the manifest next to its files (`_manifest.json`, which
+#' `upload_parquet`, `data_to_parquet` and `write_manifest` write), which lists the files to read. A URL
+#' ending in a slash is read as a directory; a URL without one is read as a file first and, if there is no
+#' file at it, as a directory, so a directory named like a parquet file works either way.
 #'
 #' The table is a lazy `dplyr` table on a DuckDB connection that is cached for the session (`parquet_connection`),
 #' so that tables from several calls can be joined, or on the connection given as `con`. `dplyr` verbs get
@@ -148,14 +162,26 @@ parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL) {
   } else if (!isFALSE(cache)) {
     stop('cache has to be NULL, TRUE, FALSE or "offline".')
   }
-  path <- duckdb_parquet_paths(con,path)
-  tbl <- duckdb_parquet_tbl(con,path,hive_partitioning=hive_partitioning)
+  files <- duckdb_parquet_paths(con,path)
+  tbl <- tryCatch(duckdb_parquet_tbl(con,files,hive_partitioning=hive_partitioning),error=function(e)e)
+  if (inherits(tbl,"error")) {
+    # a directory at a URL given without the trailing slash can't be told from a file without a request, so
+    # the manifests get tried once reading fails
+    is_file_url <- grepl("^https?://",path) & !grepl("/$",sub("[?#].*$","",path))
+    is_directory <- is_file_url & vapply(path,function(p)is_file_url[match(p,path)] && !is.null(url_directory_files(p,missing_ok=TRUE)),logical(1))
+    if (!any(is_directory)) stop(tbl)
+    path[is_directory] <- paste0(sub("[?#].*$","",path[is_directory]),"/")
+    files <- duckdb_parquet_paths(con,path)
+    tbl <- duckdb_parquet_tbl(con,files,hive_partitioning=hive_partitioning)
+  }
   if (length(duckdb_geometry_columns(tbl))>0) {
     DBI::dbExecute(con,"INSTALL spatial")
     DBI::dbExecute(con,"LOAD spatial")
   }
-  # for parquet_metadata, list_parquet and collect_parquet, dbplyr keeps attributes through its verbs
-  attr(tbl,"r2parquet_paths") <- path
+  # for parquet_metadata, list_parquet and collect_parquet, dbplyr keeps attributes through its verbs: the
+  # files the table reads, and the paths they were resolved from
+  attr(tbl,"r2parquet_paths") <- files
+  attr(tbl,"r2parquet_source") <- path
   tbl
 }
 
@@ -228,8 +254,8 @@ list_parquet.character <- function(x) {
 list_parquet.tbl_lazy <- function(x) {
   path <- attr(x,"r2parquet_paths")
   if (is.null(path)) stop("The table was not created by parquet_tbl, pass the path of the parquet files instead.")
-  # parquet_tbl resolves directories to globs for all parquet files in them
-  list_parquet(sub("/\\*\\*/\\*\\.parquet$","",path))
+  # the paths parquet_tbl resolved to the files, local and R2 directories as globs for all parquet files in them
+  list_parquet(attr(x,"r2parquet_source") %||% sub("/\\*\\*/\\*\\.parquet$","",path))
 }
 
 #' @rdname list_parquet

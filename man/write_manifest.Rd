@@ -18,15 +18,19 @@ write_manifest(path, purge_cache = TRUE)
 Writes a `_manifest.json` file into directories on R2, listing the parquet files below the directory with
 their size, etag and modification time and the metadata in their footers. `upload_parquet` and
 `data_to_parquet` write manifests for the directories they upload, this writes them for directories uploaded
-before. Manifests let `cache_parquet` and `parquet_tbl(cache = TRUE)` cache a directory from its public URL,
-since directories can't be listed over https, and let clients other than R read what a dataset holds.
-Expects the same credentials as `upload_parquet`, and purges the manifest from the Cloudflare cache of the
-bucket's custom domains like `upload_parquet` does.
+before, and rebuilds the manifest of a directory from a listing when it fell behind, e.g. after files were
+changed with other tools, after an upload or removal warned that a manifest could not be updated, or after a
+manifest was removed. Manifests let `cache_parquet` and `parquet_tbl(cache = TRUE)` cache a directory from its
+public URL, since directories can't be listed over https, and let clients other than R read what a dataset
+holds. Expects the same credentials as `upload_parquet`, and purges the manifest from the Cloudflare cache of
+the bucket's custom domains like `upload_parquet` does. `write_manifest("r2://bucket")` writes a manifest of the
+whole bucket at its root, which uploads and removals anywhere in the bucket then keep current.
 
 The metadata comes from the parquet footers, as `parquet_metadata` reads it. Files that an existing manifest
 lists with the same etag keep the metadata recorded there, the footers of all other files get read from R2,
 which costs a request or two per file, so writing the manifest of a large directory for the first time takes
-a moment.
+a moment. The manifest is written conditionally, like `upload_parquet` writes them, and the call fails if it
+keeps changing underneath, e.g. because of uploads running at the same time.
 }
 \section{Manifest format}{
 

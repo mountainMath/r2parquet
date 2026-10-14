@@ -444,3 +444,82 @@ test_that("list_cache and remove_from_cache work on the cache directory and keep
   expect_error(remove_from_cache(fixture$dir),"r2://bucket/path or a URL")
   expect_error(remove_from_cache(character()),"character vector")
 })
+
+test_that("files and directories cached within a cached directory share its manifest", {
+  fixture <- cache_fixture()
+  objects <- fixture$objects
+  local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix="")objects[startsWith(objects$key,prefix),],
+                        r2_get_object=function(r2_bucket,r2_path,file){
+                          file.copy(file.path(fixture$dir,sub("^census/","",r2_path)),file,overwrite=TRUE)
+                        })
+  cache <- local_cache_dir()
+  withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret",R2PARQUET_CACHE_PATH=cache)
+  manifest <- function(path)jsonlite::fromJSON(file.path(path,"_manifest.json"))
+  suppressMessages(local <- cache_parquet("r2://bucket/census/data"))
+  # a changed file of the directory gets recorded in the directory's manifest, not in one of its own, so the
+  # directory stays current
+  objects$etag[objects$key=="census/data/year=2021/data_0.parquet"] <- "changed"
+  expect_message(file <- cache_parquet("r2://bucket/census/data/year=2021/data_0.parquet"),"Downloading 1 file")
+  expect_false(file.exists(file.path(local,"year=2021","_manifest.json")))
+  expect_equal(manifest(local)$files$etag[1],"changed")
+  expect_true(manifest(local)$directory)
+  clear_cache_checks()
+  expect_no_warning(expect_equal(r2parquet:::cache_lookup("r2://bucket/census/data"),local))
+  # a partition of the cached directory gets recorded in the directory's manifest as well
+  objects$etag[objects$key=="census/data/year=2022/data_0.parquet"] <- "changed too"
+  expect_message(partition <- cache_parquet("r2://bucket/census/data/year=2022"),"Downloading 1 file")
+  expect_false(file.exists(file.path(partition,"_manifest.json")))
+  expect_equal(manifest(local)$files$etag,c("changed","changed too"))
+  clear_cache_checks()
+  expect_no_warning(expect_equal(r2parquet:::cache_lookup("r2://bucket/census/data/year=2022"),partition))
+  expect_equal(r2parquet:::cache_offline("r2://bucket/census/data/year=2022"),partition)
+  objects <- fixture$objects
+  expect_message(cache_parquet("r2://bucket/census/data"),"Downloading 2 files")
+  expect_equal(manifest(local)$files$etag,objects$etag[startsWith(objects$key,"census/data/")])
+  expect_equal(nrow(list_cache()),2)
+  # a partition below a directory holding only a cached single file keeps a manifest of its own, so its copy
+  # is known to be complete, and gets recorded in the directory's manifest as well
+  suppressMessages(remove_from_cache("r2://bucket/census/data"))
+  suppressMessages(single <- cache_parquet("r2://bucket/census/single.parquet"))
+  expect_false(manifest(dirname(single))$directory)
+  suppressMessages(cache_parquet("r2://bucket/census/data/year=2022"))
+  expect_true(file.exists(file.path(partition,"_manifest.json")))
+  expect_equal(manifest(dirname(single))$files$path,c("data/year=2022/data_0.parquet","single.parquet"))
+  expect_false(manifest(dirname(single))$directory)
+  expect_equal(r2parquet:::cache_offline("r2://bucket/census/data/year=2022"),partition)
+  # a directory with everything below it lists everything and replaces the manifests below, and the file and
+  # partition syncs update it
+  suppressMessages(census <- cache_parquet("r2://bucket/census"))
+  expect_equal(manifest(census)$files$path,c("data/year=2021/data_0.parquet","data/year=2022/data_0.parquet","single.parquet"))
+  expect_false(file.exists(file.path(local,"_manifest.json")))
+  expect_false(file.exists(file.path(partition,"_manifest.json")))
+  objects$etag[objects$key=="census/data/year=2022/data_0.parquet"] <- "changed again"
+  suppressMessages(partition <- cache_parquet("r2://bucket/census/data/year=2022"))
+  expect_equal(manifest(census)$files$etag[2],"changed again")
+  expect_false(file.exists(file.path(partition,"_manifest.json")))
+  expect_false(file.exists(file.path(local,"_manifest.json")))
+  objects$etag[objects$key=="census/single.parquet"] <- "changed single"
+  suppressMessages(cache_parquet("r2://bucket/census/single.parquet"))
+  expect_equal(manifest(census)$files$etag[3],"changed single")
+  expect_equal(nrow(list_cache()),3)
+})
+
+test_that("URL paths get encoded without breaking the path", {
+  encode <- r2parquet:::url_path_encode
+  expect_equal(encode(c("data/year=2021/a b#1.parquet","q?.parquet","plain.parquet","100%.parquet")),
+               c("data/year=2021/a%20b%231.parquet","q%3F.parquet","plain.parquet","100%25.parquet"))
+})
+
+test_that("URLs get probed with HEAD, or the first byte where HEAD is not allowed", {
+  requests <- character()
+  local_mocked_bindings(HEAD=function(url,...){
+    requests <<- c(requests,paste("HEAD",url))
+    fake_response(if (grepl("signed",url)) 403 else 200)
+  },GET=function(url,...){
+    requests <<- c(requests,paste("GET",url))
+    fake_response(206)
+  },.package="httr")
+  expect_equal(httr::status_code(r2parquet:::http_probe("https://example.com/a.parquet")),200)
+  expect_equal(httr::status_code(r2parquet:::http_probe("https://example.com/signed.parquet")),206)
+  expect_equal(requests,c("HEAD https://example.com/a.parquet","HEAD https://example.com/signed.parquet","GET https://example.com/signed.parquet"))
+})

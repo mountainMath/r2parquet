@@ -34,14 +34,16 @@ metadata_strings <- function(metadata,columns,labels=NULL){
   }
   if (length(metadata)==0) return(NULL)
   vapply(metadata,function(value){
-    if (is.atomic(value) && length(value)==1 && is.null(names(value))) as.character(value)
+    # a string that would read back as JSON gets written as a JSON string, so it reads back as it is
+    if (is.atomic(value) && length(value)==1 && is.null(names(value)) && !grepl("^\\s*[\\[{\"]",value)) as.character(value)
     else as.character(jsonlite::toJSON(value,auto_unbox=TRUE,null="null",na="null",digits=NA))
   },character(1))
 }
 
-# metadata values parsed back from the footer strings, JSON objects and arrays get parsed, the rest stays a string
+# metadata values parsed back from the footer strings, JSON objects, arrays and strings get parsed, the rest
+# stays a string
 parse_metadata_value <- function(value){
-  if (grepl("^\\s*[\\[{]",value)) {
+  if (grepl("^\\s*[\\[{\"]",value)) {
     parsed <- tryCatch(jsonlite::fromJSON(value,simplifyDataFrame=FALSE,simplifyMatrix=FALSE),error=function(e)NULL)
     if (!is.null(parsed)) return(parsed)
   }

@@ -54,7 +54,7 @@ test_that("list_parquet lists local files and the files of a table", {
   expect_equal(list_parquet(parquet_tbl(file.path(dir,"data"))),files)
   expect_equal(list_parquet(parquet_tbl(file.path(dir,"single.parquet")))$path,file.path(dir,"single.parquet"))
   tbl <- parquet_tbl(file.path(dir,"single.parquet"))
-  attr(tbl,"r2parquet_paths") <- "https://example.com/data.parquet"
+  attr(tbl,"r2parquet_paths") <- attr(tbl,"r2parquet_source") <- "https://example.com/data.parquet"
   local_mocked_bindings(http_probe=function(url)fake_response(404),http_get=function(url)fake_response(404))
   url <- list_parquet(tbl)
   expect_equal(url$path,"https://example.com/data.parquet")
@@ -64,4 +64,48 @@ test_that("list_parquet lists local files and the files of a table", {
   expect_true(is.na(url$etag))
   expect_error(list_parquet(dplyr::tbl(parquet_connection(),dplyr::sql("SELECT 1"))),"not created by parquet_tbl")
   expect_error(list_parquet(1),"path")
+})
+
+# a local http server for the files of a directory, started in the background with python, NULL if that fails
+local_http_server <- function(root,envir=parent.frame()){
+  skip_on_os("windows")
+  skip_if(Sys.which("python3")=="","python3 not available")
+  port <- sample(20000:40000,1)
+  pid <- system(paste0("python3 -m http.server ",port," --bind 127.0.0.1 --directory ",shQuote(root)," >/dev/null 2>&1 & echo $!"),intern=TRUE)
+  withr::defer(tools::pskill(as.integer(pid)),envir=envir)
+  base <- paste0("http://127.0.0.1:",port)
+  for (i in 1:100) {
+    if (tryCatch(httr::status_code(httr::GET(paste0(base,"/"),httr::timeout(1)))<500,error=function(e)FALSE)) return(base)
+    Sys.sleep(0.1)
+  }
+  skip("could not start a local http server")
+}
+
+test_that("directories at URLs get read through their manifest", {
+  skip_if_no_duckdb_extensions()
+  root <- withr::local_tempdir()
+  df <- data.frame(year=c(2021L,2021L,2022L),value=1:3)
+  # a directory, and one named like a parquet file
+  for (name in c("data","data.parquet")) {
+    data_to_parquet(df,file.path(root,name),partition_by="year",metadata=list(source="s"))
+    files <- dir(file.path(root,name),"\\.parquet$",recursive=TRUE)
+    info <- file.info(file.path(root,name,files))
+    etags <- vapply(file.path(root,name,files),digest::digest,"",algo="md5",file=TRUE,USE.NAMES=FALSE)
+    writeLines(as.character(r2parquet:::manifest_json(r2parquet:::manifest_files(files,info$size,etags,info$mtime))),
+               file.path(root,name,"_manifest.json"))
+  }
+  base <- local_http_server(root)
+  tbl <- parquet_tbl(paste0(base,"/data/"))
+  expect_equal(dplyr::pull(dplyr::count(tbl)),3)
+  # the partition columns come from the paths of the files, as for local directories
+  expect_equal(sort(dplyr::pull(dplyr::distinct(tbl,year))),sort(dplyr::pull(dplyr::distinct(parquet_tbl(file.path(root,"data")),year))))
+  expect_equal(attr(tbl,"r2parquet_paths"),paste0(base,"/data/year=",2021:2022,"/data_0.parquet"))
+  expect_equal(list_parquet(tbl)$path,paste0(base,"/data/year=",2021:2022,"/data_0.parquet"))
+  expect_equal(parquet_metadata(tbl)$source,"s")
+  # without the trailing slash the files get tried first, a file is read as it is
+  expect_equal(dplyr::pull(dplyr::count(parquet_tbl(paste0(base,"/data.parquet")))),3)
+  expect_equal(dplyr::pull(dplyr::count(parquet_tbl(c(paste0(base,"/data"),paste0(base,"/data/year=2022/data_0.parquet"))))),4)
+  # without a manifest the error of the read stands, or says what is missing for a directory
+  expect_error(parquet_tbl(paste0(base,"/missing.parquet")),"404")
+  expect_error(parquet_tbl(paste0(base,"/missing/")),"no manifest")
 })

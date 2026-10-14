@@ -41,7 +41,8 @@
 #' are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
 #' get purged from the Cloudflare cache like in `upload_parquet`, unless `purge_cache` is `FALSE`. Partitioned
 #' writes to R2 write a manifest of the directory, and all writes update the existing manifests of the
-#' directories above the destination, see `upload_parquet`.
+#' directories above the destination, see `upload_parquet`, which also describes what happens when a manifest
+#' can't be updated.
 #'
 #' `metadata` gets written into the footer of the parquet files, where other tools can read it too (DuckDB's
 #' `parquet_kv_metadata`, arrow's schema metadata), and `parquet_metadata` reads it back. `collect_parquet`
@@ -175,6 +176,8 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
     DBI::dbExecute(con,"SET threads = 1")
     on.exit(if (DBI::dbIsValid(con)) DBI::dbExecute(con,paste0("SET threads = ",threads)),add=TRUE,after=FALSE)
   }
+  # DuckDB does not create missing directories
+  dir.create(if (length(partition_by)>0) path else dirname(path),recursive=TRUE,showWarnings=FALSE)
   DBI::dbExecute(con,paste0("COPY (SELECT * FROM ",source,
                             if (length(order)>0) paste0(" ORDER BY ",paste0(order,collapse=", ")),
                             ") TO ",DBI::dbQuoteString(con,path)," (",paste0(options,collapse=", "),")"))
@@ -196,27 +199,19 @@ r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_grou
   local_path <- local_data_to_parquet(data,file.path(tmp_dir,basename(r2_path)),sort_by=sort_by,
                                       partition_by=partition_by,row_group_size=row_group_size,metadata=metadata,
                                       compression=compression)
-  stale <- character()
-  if (remove_stale) {
-    objects <- r2_objects(r2_bucket,r2_path)
-    if (r2_path %in% objects$key) {
-      # a file at r2_path would shadow the directory of partitions, a file is replaced by the upload anyway
-      if (partitioned) stale <- r2_path
-    } else {
-      # partitions of earlier writes, other files in the directory are kept
-      files <- objects$key[grepl("\\.parquet$",objects$key)]
-      stale <- files[is_partition_file(substring(files,nchar(r2_path)+2))]
-    }
-    if (length(stale)>0) {
-      message("Removing ",length(stale)," stale parquet file",if (length(stale)>1) "s"," from ",r2_url,".")
-      r2_delete_objects(r2_bucket,stale)
-    }
+  # what r2_upload removes first, given the listing of the path and the keys of the upload
+  stale <- if (remove_stale) function(objects,r2_paths){
+    # a file at r2_path would shadow the directory of partitions, a file is replaced by the upload anyway
+    if (r2_path %in% objects$key) return(if (partitioned) r2_path)
+    # partitions of earlier writes, other files in the directory are kept
+    files <- objects$key[grepl("\\.parquet$",objects$key)]
+    files[is_partition_file(substring(files,nchar(r2_path)+2))]
   }
   files <- attr(local_path,"files")
   message("Uploading ",format(structure(sum(file.size(files)),class="object_size"),units="auto",standard="SI"),
           " in ",length(files)," parquet file",if (length(files)>1) "s"," to ",r2_url,".")
-  uploaded <- r2_upload(local_path,r2_bucket,r2_path)
-  if (purge_cache) r2_purge_cache_after_change(r2_bucket,union(stale,c(uploaded$files,uploaded$manifests)))
+  uploaded <- r2_upload(local_path,r2_bucket,r2_path,stale=stale)
+  if (purge_cache) r2_purge_cache_after_change(r2_bucket,union(uploaded$stale,c(uploaded$files,uploaded$manifests)))
   invisible(structure(r2_url,files=paste0("r2://",r2_bucket,"/",uploaded$files)))
 }
 

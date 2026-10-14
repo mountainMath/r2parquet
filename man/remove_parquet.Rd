@@ -21,8 +21,11 @@ manifests (`_manifest.json`, see `write_manifest`) below the directories. The pa
 file whatever its type, like a JSON index uploaded with `upload_parquet`, or a manifest, which takes the
 directory's manifest away until `write_manifest` or the next upload writes it again; a directory only loses
 its parquet files and manifests, other files in it are left in place. The existing manifests of the
-directories above the removed files and directories get updated, since a manifest lists all parquet files
-below its directory, so removing a file or a partition from a dataset keeps the dataset's manifest current.
+directories above removed parquet files and directories get updated, since a manifest lists all parquet files
+below its directory, so removing a file or a partition from a dataset keeps the dataset's manifest current:
+the removed files are dropped from what the manifests record, without listing their directories, and a
+manifest left without files is removed. The manifests are written conditionally, like `upload_parquet`
+writes them, and a manifest that could not be updated is reported with a warning after the files are gone.
 Removed files can't be recovered.
 Expects the R2 account id and the access key id and secret access key
 of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`

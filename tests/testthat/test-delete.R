@@ -70,19 +70,19 @@ test_that("remove_parquet removes manifests with directories and updates them fo
   objects <- data.frame(key=c("data/a.parquet","data/b.parquet","data/_manifest.json","data/sub/c.parquet","data/sub/_manifest.json",
                               "nested/x.parquet","nested/_manifest.json","plain/y.parquet","plain/z.parquet"),
                         size=1,modified=now,etag="e")
+  bodies <- list("data/_manifest.json"=manifest_body(c("a.parquet","b.parquet","sub/c.parquet")),
+                 "data/sub/_manifest.json"=manifest_body("c.parquet"),"nested/_manifest.json"=manifest_body("x.parquet"))
   deleted <- list()
   puts <- list()
   purged <- list()
-  local_mocked_bindings(r2_request=function(verb,r2_bucket,r2_path="",query=list(),headers=list(),body=raw(),config=NULL){
-    if (verb=="PUT") puts[[length(puts)+1]] <<- list(key=r2_path,files=jsonlite::fromJSON(rawToChar(body))$files$path)
-    fake_response(if (verb=="GET" && !(r2_path %in% objects$key)) 404 else 200)
-  },r2_list_objects=function(r2_bucket,prefix="")objects[startsWith(objects$key,prefix),],
-  r2_delete_objects=function(r2_bucket,r2_paths){
-    deleted[[length(deleted)+1]] <<- r2_paths
-    objects <<- objects[!objects$key %in% r2_paths,]
-  },r2_purge_cache_after_change=function(r2_bucket,r2_paths)purged[[length(purged)+1]] <<- r2_paths,
-  parquet_footers=fake_footers())
-  # a directory takes its manifests with it, a single file gets its directory's manifest rewritten
+  local_mocked_bindings(r2_request=manifest_bucket(environment()),
+                        r2_list_objects=function(r2_bucket,prefix="")objects[startsWith(objects$key,prefix),],
+                        r2_delete_objects=function(r2_bucket,r2_paths){
+                          deleted[[length(deleted)+1]] <<- r2_paths
+                          objects <<- objects[!objects$key %in% r2_paths,]
+                        },r2_purge_cache_after_change=function(r2_bucket,r2_paths)purged[[length(purged)+1]] <<- r2_paths,
+                        parquet_footers=fake_footers())
+  # a directory takes its manifests with it, a single file gets its directory's manifest patched
   removed <- remove_parquet(c("r2://bucket/data","r2://bucket/nested/x.parquet","r2://bucket/plain/y.parquet"))
   expect_equal(removed,c("r2://bucket/data/a.parquet","r2://bucket/data/b.parquet","r2://bucket/data/sub/c.parquet",
                          "r2://bucket/nested/x.parquet","r2://bucket/plain/y.parquet"))
@@ -93,33 +93,39 @@ test_that("remove_parquet removes manifests with directories and updates them fo
   expect_length(puts,0)
   expect_equal(purged,list(c("data/a.parquet","data/b.parquet","data/sub/c.parquet","nested/x.parquet","plain/y.parquet",
                              "data/_manifest.json","data/sub/_manifest.json","nested/_manifest.json")))
-  # a single file out of a directory with a manifest and remaining files rewrites the manifest
+  # a single file out of a directory with a manifest and remaining files drops it from the manifest, without
+  # listing the directory
   objects <- data.frame(key=c("data/a.parquet","data/b.parquet","data/_manifest.json"),size=1,modified=now,etag="e")
+  bodies <- list("data/_manifest.json"=manifest_body(c("a.parquet","b.parquet")))
   deleted <- list()
   purged <- list()
+  listings <- 0
+  local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix=""){
+    listings <<- listings+1
+    objects[startsWith(objects$key,prefix),]
+  })
   remove_parquet("r2://bucket/data/a.parquet")
   expect_equal(deleted,list("data/a.parquet"))
-  expect_equal(puts,list(list(key="data/_manifest.json",files="b.parquet")))
+  expect_equal(puts,list("data/_manifest.json"="b.parquet"))
   expect_equal(purged,list(c("data/a.parquet","data/_manifest.json")))
+  expect_equal(listings,1)
 })
 
 test_that("remove_parquet keeps the manifests above removed files and partitions current", {
   now <- as.POSIXct("2026-10-10 12:00:00",tz="UTC")
   # a partitioned dataset with its manifest at the root, as data_to_parquet writes it, below a directory with
   # a manifest of its own
-  objects <- data.frame(key=c("data/year=2021/data_0.parquet","data/year=2022/data_0.parquet","data/year=2023/data_0.parquet",
-                              "data/_manifest.json","other.parquet","_manifest.json"),size=1,modified=now,etag="e")
+  partitions <- paste0("data/year=",2021:2023,"/data_0.parquet")
+  objects <- data.frame(key=c(partitions,"data/_manifest.json","other.parquet","_manifest.json"),size=1,modified=now,etag="e")
+  bodies <- list("data/_manifest.json"=manifest_body(substring(partitions,6)),"_manifest.json"=manifest_body(c(partitions,"other.parquet")))
   puts <- list()
   purged <- list()
   gets <- character()
-  local_mocked_bindings(r2_request=function(verb,r2_bucket,r2_path="",query=list(),headers=list(),body=raw(),config=NULL){
-    if (verb=="PUT") puts[[r2_path]] <<- jsonlite::fromJSON(rawToChar(body))$files$path
-    if (verb=="GET") gets <<- c(gets,r2_path)
-    fake_response(if (verb=="GET" && !(r2_path %in% objects$key)) 404 else 200)
-  },r2_list_objects=function(r2_bucket,prefix="")objects[startsWith(objects$key,prefix),],
-  r2_delete_objects=function(r2_bucket,r2_paths)objects <<- objects[!objects$key %in% r2_paths,],
-  r2_purge_cache_after_change=function(r2_bucket,r2_paths)purged[[length(purged)+1]] <<- r2_paths,
-  parquet_footers=fake_footers())
+  local_mocked_bindings(r2_request=manifest_bucket(environment()),
+                        r2_list_objects=function(r2_bucket,prefix="")objects[startsWith(objects$key,prefix),],
+                        r2_delete_objects=function(r2_bucket,r2_paths)objects <<- objects[!objects$key %in% r2_paths,],
+                        r2_purge_cache_after_change=function(r2_bucket,r2_paths)purged[[length(purged)+1]] <<- r2_paths,
+                        parquet_footers=fake_footers())
   # a file out of a partition: the partition directory has no manifest, the dataset and the bucket root do
   remove_parquet("r2://bucket/data/year=2021/data_0.parquet")
   expect_equal(gets,c("data/year=2021/_manifest.json","data/_manifest.json","_manifest.json"))

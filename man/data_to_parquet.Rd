@@ -83,7 +83,8 @@ parquet file, `parquet_tbl` tells files and directories apart. Stale files get r
 are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
 get purged from the Cloudflare cache like in `upload_parquet`, unless `purge_cache` is `FALSE`. Partitioned
 writes to R2 write a manifest of the directory, and all writes update the existing manifests of the
-directories above the destination, see `upload_parquet`.
+directories above the destination, see `upload_parquet`, which also describes what happens when a manifest
+can't be updated.
 
 `metadata` gets written into the footer of the parquet files, where other tools can read it too (DuckDB's
 `parquet_kv_metadata`, arrow's schema metadata), and `parquet_metadata` reads it back. `collect_parquet`

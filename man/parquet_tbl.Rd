@@ -44,8 +44,11 @@ Public URLs and local paths need no credentials. Paths on R2 expect the R2 accou
 and secret access key of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and
 `R2_SECRET_ACCESS_KEY` environment variables. Directories on R2 are often named like a parquet file,
 e.g. `r2://bucket/data.parquet`, these get resolved to all parquet files within them.
-Local directories get read as all parquet files within them, URLs have to point to files since directories
-can't be listed over https.
+Local directories get read as all parquet files within them. Directories can't be listed over https, so a
+directory at a URL gets read through the manifest next to its files (`_manifest.json`, which
+`upload_parquet`, `data_to_parquet` and `write_manifest` write), which lists the files to read. A URL
+ending in a slash is read as a directory; a URL without one is read as a file first and, if there is no
+file at it, as a directory, so a directory named like a parquet file works either way.
 
 The table is a lazy `dplyr` table on a DuckDB connection that is cached for the session (`parquet_connection`),
 so that tables from several calls can be joined, or on the connection given as `con`. `dplyr` verbs get

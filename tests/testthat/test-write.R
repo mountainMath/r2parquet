@@ -181,3 +181,10 @@ test_that("the compression codec can be chosen", {
   expect_equal(codec(),"UNCOMPRESSED")
   expect_error(data_to_parquet(df,path,compression="bz2"))
 })
+
+test_that("missing directories get created", {
+  dir <- withr::local_tempdir()
+  df <- data.frame(year=c(2021L,2022L),value=1:2)
+  expect_equal(nrow(dplyr::collect(parquet_tbl(data_to_parquet(df,file.path(dir,"new","file.parquet"))))),2)
+  expect_equal(nrow(dplyr::collect(parquet_tbl(data_to_parquet(df,file.path(dir,"deeper","new","data"),partition_by="year")))),2)
+})

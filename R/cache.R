@@ -116,10 +116,19 @@ http_get <- function(url){
   httr::GET(url)
 }
 
-# the headers of a file at a URL via a request for its first byte, a HEAD request would do but fails on presigned
-# URLs, which are signed for GET only
+# the headers of a file at a URL: a HEAD request, or a request for its first byte where HEAD is not allowed, as
+# on presigned URLs, which are signed for GET only; a server that ignores the range sends the whole file
 http_probe <- function(url){
+  response <- httr::HEAD(url)
+  if (!(httr::status_code(response) %in% c(403L,405L))) return(response)
   httr::GET(url,httr::add_headers(Range="bytes=0-0"))
+}
+
+# a key or relative path encoded for the path of a URL: URLencode leaves the characters that are reserved in
+# URLs alone, which is right for the slashes and the = of hive partitions but not for # and ?, which would end
+# the path
+url_path_encode <- function(path){
+  gsub("?","%3F",gsub("#","%23",vapply(path,utils::URLencode,"",USE.NAMES=FALSE),fixed=TRUE),fixed=TRUE)
 }
 
 # download from a public URL to a local file
@@ -205,7 +214,7 @@ url_cache_source <- function(location){
   }
   files <- parse_manifest(httr::content(response,"text",encoding="UTF-8"))
   if (nrow(files)==0) stop(paste0("The manifest at ",manifest_url," lists no files."))
-  files$key <- paste0(base,"/",vapply(files$path,utils::URLencode,"",USE.NAMES=FALSE))
+  files$key <- paste0(base,"/",url_path_encode(files$path))
   list(is_file=FALSE,files=files,download=http_download)
 }
 
@@ -249,7 +258,7 @@ covering_manifest <- function(location,source){
     prefix <- paste0(basename(manifest_dir),"/",prefix)
     manifest_dir <- dirname(manifest_dir)
   }
-  list(dir=manifest_dir,path=paste0(prefix,source$files$path))
+  list(dir=manifest_dir,prefix=prefix,path=paste0(prefix,source$files$path))
 }
 
 # whether the local copy of the dataset is in line with the remote files without touching it: every remote
@@ -263,14 +272,24 @@ cache_current <- function(location,source){
     (source$is_file || length(setdiff(dir(location$local,"\\.parquet$",recursive=TRUE),source$files$path))==0)
 }
 
-# bring the local copy of the dataset in line with the remote files, returns the local path
+# bring the local copy of the dataset in line with the remote files, returns the local path. A file, or a
+# directory below a directory whose manifest lists everything below it, gets recorded in the manifest that
+# covers it, so a file or partition of a cached directory does not get a second manifest of its own that the
+# directory's syncs would leave behind, and a directory's manifest replaces the manifests below it, which
+# it covers
 sync_cache <- function(location,source){
   local <- location$local
-  manifest_dir <- manifest_directory(location,source)
+  manifest <- covering_manifest(location,source)
+  known <- read_local_manifest(file.path(manifest$dir,manifest_name))
+  if (manifest$prefix!="" && (nrow(known)==0 || (!source$is_file && !isTRUE(attr(known,"directory"))))) {
+    manifest <- list(dir=manifest_directory(location,source),prefix="",path=source$files$path)
+    known <- read_local_manifest(file.path(manifest$dir,manifest_name))
+  }
+  manifest_dir <- manifest$dir
   dir.create(manifest_dir,recursive=TRUE,showWarnings=FALSE)
   manifest_file <- file.path(manifest_dir,manifest_name)
-  known <- read_local_manifest(manifest_file)
   remote <- source$files
+  remote$path <- manifest$path
   targets <- file.path(manifest_dir,remote$path)
   current <- current_files(manifest_dir,remote)
   if (any(!current)) {
@@ -282,19 +301,53 @@ sync_cache <- function(location,source){
   }
   if (!source$is_file) {
     # the table reads every parquet file below the directory, so files that are gone remotely have to go
-    stale <- setdiff(dir(local,"\\.parquet$",recursive=TRUE),remote$path)
+    stale <- setdiff(dir(local,"\\.parquet$",recursive=TRUE),source$files$path)
     unlink(file.path(local,stale))
+    unlink(dir(local,"^_manifest\\.json$",recursive=TRUE,full.names=TRUE,all.files=TRUE))
     for (directory in rev(list.dirs(local,recursive=TRUE)[-1])) {
       if (length(dir(directory,all.files=TRUE,no..=TRUE))==0) unlink(directory,recursive=TRUE)
     }
-    files <- remote
-    directory <- TRUE
+    keep <- !startsWith(known$path,manifest$prefix)
+    directory <- manifest$prefix=="" || isTRUE(attr(known,"directory"))
   } else {
-    files <- rbind(known[known$path!=remote$path,c("path","size","etag","modified")],remote[,c("path","size","etag","modified")])
+    keep <- known$path!=remote$path
     directory <- isTRUE(attr(known,"directory"))
   }
-  writeLines(manifest_json(files,directory),manifest_file,useBytes=TRUE)
+  writeLines(manifest_json(sorted_files(rbind(known[keep,manifest_columns],remote[,manifest_columns])),directory),
+             manifest_file,useBytes=TRUE)
+  patch_ancestor_manifests(manifest_dir,if (source$is_file) remote$path else manifest$prefix,source$is_file,remote,location$cache_dir)
   local
+}
+
+manifest_columns <- c("path","size","etag","modified")
+
+# manifest entries in the order of their paths, as listings return them, so patched manifests stay in order
+sorted_files <- function(files){
+  files <- files[order(files$path),]
+  rownames(files) <- NULL
+  files
+}
+
+# after syncing a path (a file, or a directory as a prefix relative to the manifest directory), replace what
+# the manifests of the directories above record below it, so that the manifests above agree with the nearest
+# one, which is the one the checks use
+patch_ancestor_manifests <- function(manifest_dir,synced,is_file,files,cache_dir){
+  directory <- dirname(manifest_dir)
+  prefix <- paste0(basename(manifest_dir),"/")
+  while (startsWith(directory,paste0(cache_dir,"/"))) {
+    manifest_file <- file.path(directory,manifest_name)
+    if (file.exists(manifest_file)) {
+      known <- read_local_manifest(manifest_file)
+      below <- paste0(prefix,synced)
+      keep <- if (is_file) known$path!=below else !startsWith(known$path,below)
+      fresh <- files[,manifest_columns]
+      fresh$path <- paste0(prefix,files$path)
+      writeLines(manifest_json(sorted_files(rbind(known[keep,manifest_columns],fresh)),isTRUE(attr(known,"directory"))),
+                 manifest_file,useBytes=TRUE)
+    }
+    prefix <- paste0(basename(directory),"/",prefix)
+    directory <- dirname(directory)
+  }
 }
 
 # the cached copy without checking the remote: a directory whose manifest covers it, or a file or directory
@@ -443,7 +496,7 @@ cache_remote_path <- function(local,cache_dir){
     if (segments[1]=="r2") {
       paste0("r2://",segments[3],"/",paste0(segments[-(1:3)],collapse="/"))
     } else {
-      paste0(segments[1],"://",segments[2],"/",paste0(vapply(segments[-(1:2)],utils::URLencode,"",USE.NAMES=FALSE),collapse="/"))
+      paste0(segments[1],"://",segments[2],"/",url_path_encode(paste0(segments[-(1:2)],collapse="/")))
     }
   },"",USE.NAMES=FALSE)
 }
