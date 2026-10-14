@@ -43,7 +43,7 @@ test_that("remove_parquet resolves all paths first and removes per bucket", {
                         r2_delete_objects=function(r2_bucket,r2_paths)deleted[[r2_bucket]] <<- r2_paths,
                         r2_purge_cache_after_change=function(r2_bucket,r2_paths)purged[[r2_bucket]] <<- r2_paths,
                         # no manifests to update
-                        r2_object_exists=function(r2_bucket,r2_path)FALSE)
+                        r2_get_manifest=function(r2_bucket,key)NULL)
   expect_message(expect_message(
     removed <- remove_parquet(c("r2://bucket/a.parquet","r2://other/b.parquet","r2://bucket/data/","r2://bucket/a.parquet")),
     "Removed 3 files from R2 bucket bucket"),"Removed 1 file from R2 bucket other")

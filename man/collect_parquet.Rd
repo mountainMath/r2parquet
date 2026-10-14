@@ -18,7 +18,8 @@ a tibble, or an sf object if the table has GEOMETRY columns
 Executes the query and returns the result as a tibble, or as an sf object if the table has GEOMETRY columns,
 like GeoParquet files written by `data_to_parquet`, converting them to sf geometry columns with their crs.
 The active geometry column is the one named `geometry`, as `data_to_parquet` writes it, or else the first
-GEOMETRY column, use `sf::st_set_geometry` to switch to another one.
+GEOMETRY column, use `sf::st_set_geometry` to switch to another one. Missing (`NULL`) geometries, e.g.
+from a left join, become empty geometries, since sf has no missing geometries.
 
 For tables from `parquet_tbl` the metadata of the parquet files (see `parquet_metadata`) gets attached
 to the result: the whole list as the `metadata` attribute, and the `label` entries of `columns` as `label`

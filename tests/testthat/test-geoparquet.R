@@ -69,3 +69,25 @@ test_that("the geometry column named geometry is the active one, otherwise the f
   wake <- data[data$NAME=="Wake",]
   expect_equal(nrow(collect_parquet(filter_spatial(renamed,wake))),nrow(collect_parquet(filter_spatial(tbl,wake,geometry_column="centroid"))))
 })
+
+test_that("missing geometries get collected as empty geometries", {
+  skip_if_no_duckdb_extensions()
+  data <- nc_data()
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(data,path)
+  tbl <- parquet_tbl(path)
+  # NULL geometries as a left join without a match would produce them
+  nulled <- dplyr::mutate(tbl,geometry=dplyr::sql("CASE WHEN NAME = 'Wake' THEN NULL ELSE geometry END"))
+  result <- collect_parquet(nulled)
+  expect_s3_class(result,"sf")
+  expect_s3_class(result$geometry,"sfc_MULTIPOLYGON")
+  expect_equal(result$NAME[sf::st_is_empty(result)],"Wake")
+  expect_true(sf::st_crs(result)==sf::st_crs(data))
+  expect_equal(nrow(result),nrow(data))
+  # all missing
+  all_null <- dplyr::mutate(tbl,geometry=dplyr::sql("CAST(NULL AS GEOMETRY)"))
+  result <- collect_parquet(all_null)
+  expect_s3_class(result,"sf")
+  expect_true(all(sf::st_is_empty(result)))
+  expect_equal(nrow(result),nrow(data))
+})

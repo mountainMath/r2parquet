@@ -34,6 +34,19 @@ duckdb_geometry_column <- function(tbl,geometry_column=NULL,geometry_columns=duc
   list(name=geometry_column,crs=geometry_columns[[geometry_column]])
 }
 
+# sf geometry column from the WKB that DuckDB returns for a GEOMETRY column, a list of raw vectors with NULL
+# for missing geometries, which become empty geometries of the column's type (sf has no NULL geometry)
+wkb_to_sfc <- function(wkb,crs){
+  missing <- vapply(wkb,is.null,logical(1))
+  geometry <- sf::st_as_sfc(structure(wkb[!missing],class="WKB"),crs=crs)
+  if (!any(missing)) return(geometry)
+  types <- unique(as.character(sf::st_geometry_type(geometry)))
+  empty <- sf::st_as_sfc(paste0(if (length(types)==1) types else "GEOMETRYCOLLECTION"," EMPTY"),crs=crs)
+  filled <- rep(empty,length(wkb))
+  filled[!missing] <- geometry
+  filled
+}
+
 # fix invalid geometries, leaving valid ones untouched, and keep multi geometries multi so that
 # geometry types stay consistent, st_make_valid turns single part multi polygons into polygons
 make_valid_geometries <- function(geometry){
@@ -100,7 +113,8 @@ filter_spatial <- function(tbl,y,geometry_column=NULL,exact=TRUE) {
 #' Executes the query and returns the result as a tibble, or as an sf object if the table has GEOMETRY columns,
 #' like GeoParquet files written by `data_to_parquet`, converting them to sf geometry columns with their crs.
 #' The active geometry column is the one named `geometry`, as `data_to_parquet` writes it, or else the first
-#' GEOMETRY column, use `sf::st_set_geometry` to switch to another one.
+#' GEOMETRY column, use `sf::st_set_geometry` to switch to another one. Missing (`NULL`) geometries, e.g.
+#' from a left join, become empty geometries, since sf has no missing geometries.
 #'
 #' For tables from `parquet_tbl` the metadata of the parquet files (see `parquet_metadata`) gets attached
 #' to the result: the whole list as the `metadata` attribute, and the `label` entries of `columns` as `label`
@@ -116,7 +130,7 @@ collect_parquet <- function(tbl,attach_metadata=TRUE) {
   geometry_columns <- duckdb_geometry_columns(tbl)
   data <- dplyr::collect(tbl)
   for (column in names(geometry_columns)) {
-    data[[column]] <- sf::st_as_sfc(structure(data[[column]],class="WKB"),crs=geometry_columns[[column]])
+    data[[column]] <- wkb_to_sfc(data[[column]],geometry_columns[[column]])
   }
   if (length(geometry_columns)>0) {
     data <- sf::st_as_sf(data,sf_column_name=duckdb_geometry_column(tbl,geometry_columns=geometry_columns)$name)

@@ -11,3 +11,4 @@ docs/
 # it up as a page alongside README.md.
 .claude/*
 !.claude/CLAUDE.md
+!.claude/review-*.md
