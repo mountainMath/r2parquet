@@ -37,6 +37,13 @@ test_that("upload destinations get resolved for files and directories", {
   expect_error(upload_parquet(dir,"r2://bucket"),"specify the directory")
   expect_error(upload_parquet(dir,"r2://bucket/"),"specify the directory")
 
+  # names DuckDB would read as patterns are refused before anything goes up
+  writeBin(as.raw(1),file.path(dir,"b[1].parquet"))
+  uploads <- list()
+  expect_error(upload_parquet(dir,"r2://bucket/data/"),"can't contain \\*, \\? or \\[.*data/b\\[1\\]\\.parquet")
+  expect_error(upload_parquet(file.path(dir,"a.parquet"),"r2://bucket/dir/what?.parquet"),"can't contain")
+  expect_length(uploads,0)
+
   expect_error(upload_parquet(file.path(dir,"missing.parquet"),"r2://bucket"),"does not exist")
   expect_error(upload_parquet(withr::local_tempdir(),"r2://bucket"),"No parquet files found")
   expect_error(upload_parquet(file.path(dir,"a.parquet"),"bucket/a.parquet"),"r2://bucket/path")

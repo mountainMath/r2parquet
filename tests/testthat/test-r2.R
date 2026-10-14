@@ -50,6 +50,11 @@ test_that("parquet files can be uploaded, queried and removed", {
   expect_equal(vapply(manifest$files,`[[`,"",i="path"),c("high_sid=0/data_0.parquet","high_sid=1/data_0.parquet","other.parquet"))
   expect_equal(manifest$files[[3]]$metadata,list(subset="first five"))
   expect_equal(manifest$files[[1]]$metadata,list(columns=list(NAME=list(label="County name"))))
+  # parquet_metadata reads the manifest, or the footers on request, for the dataset, a partition and a file
+  expect_equal(parquet_metadata(dir_path),list(source="r2parquet tests",columns=list(NAME=list(label="County name")),subset="first five"))
+  expect_equal(parquet_metadata(other_path),list(source="r2parquet tests",subset="first five"))
+  expect_equal(parquet_metadata(paste0(dir_path,"/high_sid=0")),parquet_metadata(paste0(dir_path,"/high_sid=0"),from_files=TRUE))
+  expect_equal(parquet_metadata(other_path),parquet_metadata(other_path,from_files=TRUE))
   expect_equal(files$cache,rep("not cached",3))
   expect_message(cached <- cache_parquet(dir_path),"Downloading 3 files")
   expect_length(dir(cached,"\\.parquet$",recursive=TRUE),3)

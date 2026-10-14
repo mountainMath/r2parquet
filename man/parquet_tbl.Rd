@@ -40,9 +40,7 @@ restrict which parts of the files are downloaded. When filtering on integer colu
 `2021L`, comparing to a plain number like `2021` is a floating point comparison that downloads considerably
 more data.
 
-Public URLs and local paths need no credentials. Paths on R2 expect the R2 account id and the access key id
-and secret access key of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and
-`R2_SECRET_ACCESS_KEY` environment variables. Directories on R2 are often named like a parquet file,
+Directories on R2 are often named like a parquet file,
 e.g. `r2://bucket/data.parquet`, these get resolved to all parquet files within them.
 Local directories get read as all parquet files within them. Directories can't be listed over https, so a
 directory at a URL gets read through the manifest next to its files (`_manifest.json`, which
@@ -69,3 +67,14 @@ the cached copy gets used with a warning when the remote can't be reached, e.g. 
 network connection, or to compare the copy with the current remote files (`cache = FALSE`) before updating
 it. Directories at public URLs can only be cached if they have a manifest, see `upload_parquet`.
 }
+\section{Credentials}{
+
+Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
+R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
+environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
+no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
+that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
+an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
+set.
+}
+

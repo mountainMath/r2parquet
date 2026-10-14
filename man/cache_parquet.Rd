@@ -27,8 +27,7 @@ The cache directory is the one in the `R2PARQUET_CACHE_PATH` environment variabl
 directory (`tools::R_user_dir("r2parquet", "cache")`) if that is not set. Set the environment variable, e.g.
 in `.Renviron`, for a cache local to a project.
 
-Paths on R2 (`r2://bucket/path`) get listed with the same credentials as `upload_parquet`. URLs of files,
-including presigned URLs, get checked with a request for their first byte, which returns the etag.
+URLs of files, including presigned URLs, get checked with a request for their first byte, which returns the etag.
 Directories at URLs can't be listed, they need a manifest next to the files, which `upload_parquet` and
 `data_to_parquet` write for directories uploaded to R2 and `write_manifest` writes for existing ones.
 Local paths are returned as they are.
@@ -41,3 +40,14 @@ which is the MD5 hash of the content, so an interrupted download never ends up i
 `list_cache` lists what is in the cache, `list_parquet` on the remote paths tells whether the copies are
 current, and `remove_from_cache` removes copies.
 }
+\section{Credentials}{
+
+Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
+R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
+environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
+no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
+that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
+an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
+set.
+}
+

@@ -405,8 +405,7 @@ cached_copy <- function(location){
 #' directory (`tools::R_user_dir("r2parquet", "cache")`) if that is not set. Set the environment variable, e.g.
 #' in `.Renviron`, for a cache local to a project.
 #'
-#' Paths on R2 (`r2://bucket/path`) get listed with the same credentials as `upload_parquet`. URLs of files,
-#' including presigned URLs, get checked with a request for their first byte, which returns the etag.
+#' URLs of files, including presigned URLs, get checked with a request for their first byte, which returns the etag.
 #' Directories at URLs can't be listed, they need a manifest next to the files, which `upload_parquet` and
 #' `data_to_parquet` write for directories uploaded to R2 and `write_manifest` writes for existing ones.
 #' Local paths are returned as they are.
@@ -419,6 +418,7 @@ cached_copy <- function(location){
 #' `list_cache` lists what is in the cache, `list_parquet` on the remote paths tells whether the copies are
 #' current, and `remove_from_cache` removes copies.
 #'
+#' @inheritSection upload_parquet Credentials
 #' @param path URL or `r2://bucket/path` of the parquet file or the directory with (partitioned) parquet
 #' files, or a vector of these
 #' @return the local paths of the cached files or directories, one per path, ready for `parquet_tbl`

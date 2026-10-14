@@ -22,8 +22,17 @@ the presigned URLs, one per path
 URLs that grant time limited access to single files in a private bucket, without credentials.
 Anyone with the URL can download the file (`method="GET"`) or, for `method="PUT"`, upload a file
 to that path until the URL expires, so treat the URL like a password. The URLs are signed locally,
-creating them does not check that the files exist.
-Expects the R2 account id and the access key id and secret access key
-of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables. The URLs stop working when the API token is revoked.
+creating them does not check that the files exist. The URLs stop working when the API token they were signed
+with is revoked.
 }
+\section{Credentials}{
+
+Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
+R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
+environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
+no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
+that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
+an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
+set.
+}
+

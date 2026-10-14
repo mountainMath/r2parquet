@@ -34,9 +34,9 @@
 #' threaded writes don't keep the sort order within partitions.
 #'
 #' Destinations on R2 get written to a temporary directory and uploaded via `upload_parquet`. The bucket has to
-#' exist, use `create_r2_bucket` to create it. This expects the R2 account id and the access key id and secret
-#' access key of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-#' environment variables. A directory of partitioned files may be named like a
+#' exist, use `create_r2_bucket` to create it. Each file is uploaded in a single request from memory, so the
+#' files have to fit into memory and stay below 5 GB each, partition large data with `partition_by`. A directory
+#' of partitioned files may be named like a
 #' parquet file, `parquet_tbl` tells files and directories apart. Stale files get removed before the new ones
 #' are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
 #' get purged from the Cloudflare cache like in `upload_parquet`, unless `purge_cache` is `FALSE`. Partitioned
@@ -54,6 +54,7 @@
 #' as they are and anything else, like `columns`, as JSON; `NULL` and `NA` entries get dropped with a warning.
 #' Changing the metadata means writing the data again.
 #'
+#' @inheritSection upload_parquet Credentials
 #' @param data data frame, sf object or lazy DuckDB table
 #' @param path local path or `r2://bucket/path` of the parquet file to write, or of the directory if `partition_by`
 #' is given. A parquet file on R2 has to end in `.parquet`. Existing files at that path get overwritten.

@@ -27,11 +27,19 @@ the removed files are dropped from what the manifests record, without listing th
 manifest left without files is removed. The manifests are written conditionally, like `upload_parquet`
 writes them, and a manifest that could not be updated is reported with a warning after the files are gone.
 Removed files can't be recovered.
-Expects the R2 account id and the access key id and secret access key
-of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables.
 
 All paths get resolved to files first, so a path that does not exist stops the call before anything is
 removed. The files are then removed in one batch per bucket. If the bucket is served via a custom domain,
 the removed files get purged from the Cloudflare cache, with the same requirements as for `upload_parquet`.
 }
+\section{Credentials}{
+
+Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
+R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
+environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
+no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
+that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
+an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
+set.
+}
+

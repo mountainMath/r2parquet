@@ -26,10 +26,10 @@ directories below `destination` lose the removed files, and go when nothing is l
 }
 \description{
 Uploads a single file, or all parquet files in a directory of (partitioned) parquet files, keeping the
-directory structure. The bucket has to exist, use `create_r2_bucket` to create it.
-Expects the R2 account id and the access key id and secret access key
-of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables.
+directory structure. The bucket has to exist, use `create_r2_bucket` to create it. File names with `*`, `?`
+or `[` are refused, since DuckDB reads them as patterns when the files are queried. Each file goes up in a
+single request and is read into memory for that, so a file has to fit into memory, and the 5 GB limit of
+single requests on R2 applies; split larger data into partitions with `data_to_parquet`.
 
 A single file can be of any type, like a JSON index or a README that gets published next to a dataset. It
 goes up with the content type for its extension (`application/json` for `.json`, `application/geo+json` for
@@ -38,9 +38,8 @@ clients handle it correctly; parquet files and files with unknown extensions are
 `application/octet-stream`. `remove_parquet` removes such files again. `_manifest.json` files are reserved
 for the manifests described below and can't be uploaded, use `write_manifest` to write them.
 
-If the bucket is served via a custom domain, the uploaded files get purged from the Cloudflare cache
-so that the new versions are served right away. This needs the value of an R2 API token with Zone Cache Purge
-permission in the `R2_API_TOKEN` environment variable, see `create_r2_bucket`, and is skipped if it is not set.
+If the bucket is served via a custom domain, the uploaded files get purged from the Cloudflare cache, see
+the Credentials section.
 
 Directory uploads write a manifest, a `_manifest.json` file in the destination directory listing the parquet
 files below it with their size, etag and modification time and the metadata in their footers, see
@@ -60,3 +59,14 @@ never creates a manifest, and a directory can't be uploaded to the root of the b
 list the whole bucket and `remove_stale` would empty it: upload it into a directory, `write_manifest` writes a
 manifest of a whole bucket on request.
 }
+\section{Credentials}{
+
+Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
+R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
+environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
+no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
+that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
+an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
+set.
+}
+

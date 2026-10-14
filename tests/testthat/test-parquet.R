@@ -91,7 +91,8 @@ test_that("directories at URLs get read through their manifest", {
     files <- dir(file.path(root,name),"\\.parquet$",recursive=TRUE)
     info <- file.info(file.path(root,name,files))
     etags <- vapply(file.path(root,name,files),digest::digest,"",algo="md5",file=TRUE,USE.NAMES=FALSE)
-    writeLines(as.character(r2parquet:::manifest_json(r2parquet:::manifest_files(files,info$size,etags,info$mtime))),
+    footers <- unname(r2parquet:::parquet_footers(file.path(root,name,files)))
+    writeLines(as.character(r2parquet:::manifest_json(r2parquet:::manifest_files(files,info$size,etags,info$mtime,footers))),
                file.path(root,name,"_manifest.json"))
   }
   base <- local_http_server(root)
@@ -102,6 +103,15 @@ test_that("directories at URLs get read through their manifest", {
   expect_equal(attr(tbl,"r2parquet_paths"),paste0(base,"/data/year=",2021:2022,"/data_0.parquet"))
   expect_equal(list_parquet(tbl)$path,paste0(base,"/data/year=",2021:2022,"/data_0.parquet"))
   expect_equal(parquet_metadata(tbl)$source,"s")
+  expect_equal(parquet_metadata(tbl,from_files=TRUE)$source,"s")
+  # the metadata of a directory, of a partition and of a file comes from the manifest, or from the footers
+  expect_equal(parquet_metadata(paste0(base,"/data/")),list(source="s"))
+  expect_equal(parquet_metadata(paste0(base,"/data.parquet")),list(source="s"))
+  expect_equal(parquet_metadata(paste0(base,"/data/year=2022")),list(source="s"))
+  expect_equal(parquet_metadata(paste0(base,"/data/year=2022/data_0.parquet")),list(source="s"))
+  expect_equal(parquet_metadata(paste0(base,"/data/year=2022/data_0.parquet"),from_files=TRUE),list(source="s"))
+  expect_equal(parquet_metadata(paste0(base,"/data/year=2022/data_0.parquet?x=1")),list(source="s"))
+  expect_error(parquet_metadata(paste0(base,"/missing/")),"no manifest")
   # without the trailing slash the files get tried first, a file is read as it is
   expect_equal(dplyr::pull(dplyr::count(parquet_tbl(paste0(base,"/data.parquet")))),3)
   expect_equal(dplyr::pull(dplyr::count(parquet_tbl(c(paste0(base,"/data"),paste0(base,"/data/year=2022/data_0.parquet"))))),4)

@@ -102,9 +102,7 @@ duckdb_parquet_paths <- function(con,path){
 #' `2021L`, comparing to a plain number like `2021` is a floating point comparison that downloads considerably
 #' more data.
 #'
-#' Public URLs and local paths need no credentials. Paths on R2 expect the R2 account id and the access key id
-#' and secret access key of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and
-#' `R2_SECRET_ACCESS_KEY` environment variables. Directories on R2 are often named like a parquet file,
+#' Directories on R2 are often named like a parquet file,
 #' e.g. `r2://bucket/data.parquet`, these get resolved to all parquet files within them.
 #' Local directories get read as all parquet files within them. Directories can't be listed over https, so a
 #' directory at a URL gets read through the manifest next to its files (`_manifest.json`, which
@@ -131,6 +129,7 @@ duckdb_parquet_paths <- function(con,path){
 #' network connection, or to compare the copy with the current remote files (`cache = FALSE`) before updating
 #' it. Directories at public URLs can only be cached if they have a manifest, see `upload_parquet`.
 #'
+#' @inheritSection upload_parquet Credentials
 #' @param path URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)
 #' parquet files, or a vector of these
 #' @param hive_partitioning if `TRUE`, the default, partition columns get derived from `key=value` components of the
@@ -221,11 +220,12 @@ local_parquet_files <- function(path){
 #' Lists the parquet files at paths on R2, at URLs or at local paths with their size, modification time and
 #' etag, and whether the local cache holds a current copy, or the files a lazy table from `parquet_tbl` reads.
 #' Directories get listed recursively, so a directory of (partitioned) parquet files lists all the parquet
-#' files in it, and a path that does not exist lists nothing. Paths on R2 need the same credentials as
-#' `upload_parquet`. Files at URLs, including presigned URLs, get their size and etag from a request for their
+#' files in it, and a path that does not exist lists nothing.
+#' Files at URLs, including presigned URLs, get their size and etag from a request for their
 #' first byte, directories at URLs from the manifest next to the files (see `upload_parquet`). A URL with
 #' neither, or one that can't be reached, is listed as it is with `NA`s.
 #'
+#' @inheritSection upload_parquet Credentials
 #' @param x `r2://bucket/path`, URL or local path of a parquet file or of a directory with (partitioned)
 #' parquet files, a vector of these, or a lazy DuckDB table from `parquet_tbl`
 #' @return a tibble with one row per parquet file and the columns `file`, the file name, `size`, formatted for

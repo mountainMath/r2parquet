@@ -22,8 +22,8 @@ before, and rebuilds the manifest of a directory from a listing when it fell beh
 changed with other tools, after an upload or removal warned that a manifest could not be updated, or after a
 manifest was removed. Manifests let `cache_parquet` and `parquet_tbl(cache = TRUE)` cache a directory from its
 public URL, since directories can't be listed over https, and let clients other than R read what a dataset
-holds. Expects the same credentials as `upload_parquet`, and purges the manifest from the Cloudflare cache of
-the bucket's custom domains like `upload_parquet` does. `write_manifest("r2://bucket")` writes a manifest of the
+holds. The manifest gets purged from the Cloudflare cache of the bucket's custom domains like `upload_parquet`
+does. `write_manifest("r2://bucket")` writes a manifest of the
 whole bucket at its root, which uploads and removals anywhere in the bucket then keep current.
 
 The metadata comes from the parquet footers, as `parquet_metadata` reads it. Files that an existing manifest
@@ -50,5 +50,16 @@ A manifest is a JSON object with three members:
 The metadata of a file is the manifest's `metadata` with the file's own `metadata` added. Values are stored
 as `parquet_metadata` returns them, single values as strings and everything else as the JSON objects and
 arrays that `data_to_parquet` wrote.
+}
+
+\section{Credentials}{
+
+Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
+R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
+environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
+no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
+that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
+an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
+set.
 }
 

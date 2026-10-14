@@ -465,6 +465,11 @@ r2_upload <- function(path,r2_bucket,r2_path,stale=NULL,directory=FALSE){
   } else {
     stop(paste0("File or directory ",path," does not exist."))
   }
+  # DuckDB reads these characters as patterns, such files could never be queried by their name
+  patterns <- grepl("[*?\\[]",r2_paths)
+  if (any(patterns)) {
+    stop(paste0("File names can't contain *, ? or [, DuckDB reads them as patterns: ",paste0(r2_paths[patterns],collapse=", "),"."))
+  }
   # the footers get read before anything goes up, so a file that is not parquet stops the upload
   parquet <- grepl("\\.parquet$",r2_paths)
   uploaded <- r2_upload_entries(files[parquet],r2_paths[parquet])
@@ -592,10 +597,10 @@ create_r2_bucket <- function(r2_bucket,public=FALSE,custom_domain=NULL) {
 #'
 #' @description
 #' Uploads a single file, or all parquet files in a directory of (partitioned) parquet files, keeping the
-#' directory structure. The bucket has to exist, use `create_r2_bucket` to create it.
-#' Expects the R2 account id and the access key id and secret access key
-#' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-#' environment variables.
+#' directory structure. The bucket has to exist, use `create_r2_bucket` to create it. File names with `*`, `?`
+#' or `[` are refused, since DuckDB reads them as patterns when the files are queried. Each file goes up in a
+#' single request and is read into memory for that, so a file has to fit into memory, and the 5 GB limit of
+#' single requests on R2 applies; split larger data into partitions with `data_to_parquet`.
 #'
 #' A single file can be of any type, like a JSON index or a README that gets published next to a dataset. It
 #' goes up with the content type for its extension (`application/json` for `.json`, `application/geo+json` for
@@ -604,9 +609,8 @@ create_r2_bucket <- function(r2_bucket,public=FALSE,custom_domain=NULL) {
 #' `application/octet-stream`. `remove_parquet` removes such files again. `_manifest.json` files are reserved
 #' for the manifests described below and can't be uploaded, use `write_manifest` to write them.
 #'
-#' If the bucket is served via a custom domain, the uploaded files get purged from the Cloudflare cache
-#' so that the new versions are served right away. This needs the value of an R2 API token with Zone Cache Purge
-#' permission in the `R2_API_TOKEN` environment variable, see `create_r2_bucket`, and is skipped if it is not set.
+#' If the bucket is served via a custom domain, the uploaded files get purged from the Cloudflare cache, see
+#' the Credentials section.
 #'
 #' Directory uploads write a manifest, a `_manifest.json` file in the destination directory listing the parquet
 #' files below it with their size, etag and modification time and the metadata in their footers, see
@@ -625,6 +629,15 @@ create_r2_bucket <- function(r2_bucket,public=FALSE,custom_domain=NULL) {
 #' never creates a manifest, and a directory can't be uploaded to the root of the bucket, since its manifest would
 #' list the whole bucket and `remove_stale` would empty it: upload it into a directory, `write_manifest` writes a
 #' manifest of a whole bucket on request.
+#'
+#' @section Credentials:
+#' Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
+#' R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
+#' environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
+#' no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
+#' that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
+#' an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
+#' set.
 #'
 #' @param path path to a local file, or to a directory with (partitioned) parquet files
 #' @param destination destination on R2 as `r2://bucket/path`. If `path` is a file and `destination` ends with a slash (`/`)
@@ -657,8 +670,8 @@ upload_parquet <- function(path,destination,purge_cache=TRUE,remove_stale=FALSE)
 #' changed with other tools, after an upload or removal warned that a manifest could not be updated, or after a
 #' manifest was removed. Manifests let `cache_parquet` and `parquet_tbl(cache = TRUE)` cache a directory from its
 #' public URL, since directories can't be listed over https, and let clients other than R read what a dataset
-#' holds. Expects the same credentials as `upload_parquet`, and purges the manifest from the Cloudflare cache of
-#' the bucket's custom domains like `upload_parquet` does. `write_manifest("r2://bucket")` writes a manifest of the
+#' holds. The manifest gets purged from the Cloudflare cache of the bucket's custom domains like `upload_parquet`
+#' does. `write_manifest("r2://bucket")` writes a manifest of the
 #' whole bucket at its root, which uploads and removals anywhere in the bucket then keep current.
 #'
 #' The metadata comes from the parquet footers, as `parquet_metadata` reads it. Files that an existing manifest
@@ -685,6 +698,7 @@ upload_parquet <- function(path,destination,purge_cache=TRUE,remove_stale=FALSE)
 #' as `parquet_metadata` returns them, single values as strings and everything else as the JSON objects and
 #' arrays that `data_to_parquet` wrote.
 #'
+#' @inheritSection upload_parquet Credentials
 #' @param path directory with (partitioned) parquet files on R2 as `r2://bucket/path`, or a vector of these
 #' @param purge_cache if `TRUE`, the default, purge the manifests from the Cloudflare cache of custom domains of the bucket
 #' @return (invisibly) the manifests as `r2://bucket/path/_manifest.json`
@@ -718,14 +732,12 @@ write_manifest <- function(path,purge_cache=TRUE) {
 #' manifest left without files is removed. The manifests are written conditionally, like `upload_parquet`
 #' writes them, and a manifest that could not be updated is reported with a warning after the files are gone.
 #' Removed files can't be recovered.
-#' Expects the R2 account id and the access key id and secret access key
-#' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-#' environment variables.
 #'
 #' All paths get resolved to files first, so a path that does not exist stops the call before anything is
 #' removed. The files are then removed in one batch per bucket. If the bucket is served via a custom domain,
 #' the removed files get purged from the Cloudflare cache, with the same requirements as for `upload_parquet`.
 #'
+#' @inheritSection upload_parquet Credentials
 #' @param path file, or directory with (partitioned) parquet files, on R2 as `r2://bucket/path`, or a
 #' vector of these
 #' @param purge_cache if `TRUE`, the default, purge the removed files from the Cloudflare cache of custom domains of the bucket
@@ -779,11 +791,10 @@ remove_parquet <- function(path,purge_cache=TRUE) {
 #' URLs that grant time limited access to single files in a private bucket, without credentials.
 #' Anyone with the URL can download the file (`method="GET"`) or, for `method="PUT"`, upload a file
 #' to that path until the URL expires, so treat the URL like a password. The URLs are signed locally,
-#' creating them does not check that the files exist.
-#' Expects the R2 account id and the access key id and secret access key
-#' of an R2 API token to be available as `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-#' environment variables. The URLs stop working when the API token is revoked.
+#' creating them does not check that the files exist. The URLs stop working when the API token they were signed
+#' with is revoked.
 #'
+#' @inheritSection upload_parquet Credentials
 #' @param path file on R2 as `r2://bucket/path`, or a vector of these
 #' @param expires number of seconds the URLs are valid for, between 1 second and 7 days (604800 seconds),
 #' default is one hour

@@ -31,8 +31,19 @@ uploaded by this package, `NA` for local files, and `path`, the `r2://bucket/pat
 Lists the parquet files at paths on R2, at URLs or at local paths with their size, modification time and
 etag, and whether the local cache holds a current copy, or the files a lazy table from `parquet_tbl` reads.
 Directories get listed recursively, so a directory of (partitioned) parquet files lists all the parquet
-files in it, and a path that does not exist lists nothing. Paths on R2 need the same credentials as
-`upload_parquet`. Files at URLs, including presigned URLs, get their size and etag from a request for their
+files in it, and a path that does not exist lists nothing.
+Files at URLs, including presigned URLs, get their size and etag from a request for their
 first byte, directories at URLs from the manifest next to the files (see `upload_parquet`). A URL with
 neither, or one that can't be reached, is listed as it is with `NA`s.
 }
+\section{Credentials}{
+
+Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
+R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
+environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
+no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
+that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
+an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
+set.
+}
+

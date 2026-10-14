@@ -121,3 +121,57 @@ test_that("lazy tables get written with metadata", {
   expect_equal(parquet_metadata(path2),list(source="s2"))
   expect_error(data_to_parquet(parquet_tbl(path),path2,metadata=list(columns=list(other="x"))),"Columns other")
 })
+
+test_that("remote metadata comes from the nearest manifest, or from the footers without one", {
+  now <- as.POSIXct("2026-10-10 12:00:00",tz="UTC")
+  objects <- data.frame(key=c("data/year=2021/data_0.parquet","data/year=2022/data_0.parquet","data/_manifest.json",
+                              "plain/a.parquet","old/a.parquet","old/_manifest.json"),size=1,modified=now,etag="e")
+  bodies <- list("data/_manifest.json"=manifest_body(c("year=2021/data_0.parquet","year=2022/data_0.parquet"),
+                                                     metadata=list(list(source="s",license="l"),list(source="s",license="m"))),
+                 # a manifest from before manifests recorded metadata
+                 "old/_manifest.json"='{"directory":true,"files":[{"path":"a.parquet","size":1,"etag":"e","modified":"2026-10-10T12:00:00Z"}]}')
+  gets <- character()
+  footers <- character()
+  read_footers <- r2parquet:::read_parquet_footers
+  local_mocked_bindings(r2_request=manifest_bucket(environment()),
+                        duckdb_parquet_paths=function(con,path)path,
+                        # remote footers are faked, local ones read
+                        read_parquet_footers=function(con,path){
+                          if (!any(startsWith(path,"r2://"))) return(read_footers(con,path))
+                          footers <<- c(footers,path)
+                          stats::setNames(rep(list(list(source="f")),length(path)),path)
+                        })
+  # a directory: one request, the entries of its files merged like footers
+  expect_warning(result <- parquet_metadata("r2://bucket/data"),"disagree on the metadata entry license")
+  expect_equal(result,list(source="s",license="l"))
+  expect_equal(gets,"data/_manifest.json")
+  # a partition and a file in it are covered by the manifest above them
+  gets <- character()
+  expect_equal(parquet_metadata("r2://bucket/data/year=2022"),list(source="s",license="m"))
+  expect_equal(parquet_metadata("r2://bucket/data/year=2022/data_0.parquet"),list(source="s",license="m"))
+  expect_equal(gets,c("data/year=2022/_manifest.json","data/_manifest.json",
+                      "data/year=2022/data_0.parquet/_manifest.json","data/year=2022/_manifest.json","data/_manifest.json"))
+  expect_length(footers,0)
+  # the footers get read without a manifest, with one that predates the metadata, for a path the manifest does
+  # not list, and with from_files = TRUE
+  expect_equal(parquet_metadata("r2://bucket/plain/a.parquet"),list(source="f"))
+  expect_equal(parquet_metadata("r2://bucket/old/a.parquet"),list(source="f"))
+  expect_equal(parquet_metadata("r2://bucket/data/year=2023"),list(source="f"))
+  expect_equal(parquet_metadata("r2://bucket/data",from_files=TRUE),list(source="f"))
+  expect_equal(footers,c("r2://bucket/plain/a.parquet","r2://bucket/old/a.parquet","r2://bucket/data/year=2023","r2://bucket/data"))
+  # paths with and without a manifest get merged like files
+  footers <- character()
+  expect_warning(result <- parquet_metadata(c("r2://bucket/plain/a.parquet","r2://bucket/data/year=2022")),"disagree on the metadata entry source")
+  expect_equal(result,list(source="s",license="m"))
+  expect_equal(footers,"r2://bucket/plain/a.parquet")
+  # a table reads the manifests of the paths it was resolved from, or the footers of the files it reads
+  dir <- withr::local_tempdir()
+  data_to_parquet(data.frame(a=1),file.path(dir,"local.parquet"),metadata=list(source="local"))
+  tbl <- parquet_tbl(file.path(dir,"local.parquet"))
+  expect_equal(parquet_metadata(tbl),list(source="local"))
+  attr(tbl,"r2parquet_source") <- "r2://bucket/data/year=2022"
+  expect_equal(parquet_metadata(tbl),list(source="s",license="m"))
+  expect_equal(parquet_metadata(tbl,from_files=TRUE),list(source="local"))
+  attr(tbl,"r2parquet_source") <- "r2://bucket/plain/a.parquet"
+  expect_equal(parquet_metadata(tbl),list(source="local"))
+})
