@@ -73,7 +73,7 @@ geo_attributes
 
 Sorting by the dissemination block id keeps the blocks of each province, census division and subdivision together in the same row groups, so queries filtering on these only download the row groups they need.
 
-We also encode basic metadata on data provenance and licence to give clarity what the data is and where it comes from.
+We also encode basic metadata on data provenance and licence to give clarity what the data is and where it comes from, and declare the primary key, the dissemination block id that identifies each row. `data_to_parquet()` checks that it does before writing.
 
 
 ``` r
@@ -83,7 +83,8 @@ metadata <- list(
   "reference_guide"="https://www150.statcan.gc.ca/n1/en/catalogue/92-151-G2021001",
   "licence"="Statistics Canada Open Licence",
   "licence_url"="https://www.statcan.gc.ca/en/terms-conditions/open-licence",
-  "attribution"="Statistics Canada Product 2021_92-151_X"
+  "attribution"="Statistics Canada Product 2021_92-151_X",
+  "primary_key"="DBUID"
 )
 ```
 
@@ -139,7 +140,7 @@ cma_geos <- sf::st_read(file.path(params$download_path,"lcma000b21f_e/lcma000b21
 
 We then write this to a parquet file on R2, with the first path component being the bucket, which has to exist already (see `create_r2_bucket()` and the [Setting up R2](setting_up_r2.html) article for the credentials needed). 
 
-We again create a basic metadata template.
+We again create a basic metadata template. CMAs that cross a provincial boundary, like Campbellton in New Brunswick and Quebec, have one row for each province, so the CMA id alone does not identify rows, the primary key is the CMA id together with the province id.
 
 
 ``` r
@@ -149,7 +150,8 @@ metadata <- list(
   "reference_guide"="https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21",
   "licence"="Statistics Canada Open Licence",
   "licence_url"="https://www.statcan.gc.ca/en/terms-conditions/open-licence",
-  "attribution"="Statistics Canada Product lcma000b21f_e"
+  "attribution"="Statistics Canada Product lcma000b21f_e",
+  "primary_key"=c("CMAUID", "PRUID")
 )
 ```
 
@@ -162,6 +164,21 @@ data_to_parquet(cma_geos, "r2://test/census/2021/lcma000b21f_e.parquet",
 #> Renaming geometry column SHAPE to the GeoParquet standard name geometry.
 #> Repairing 2 invalid geometries via sf::st_make_valid.
 #> Uploading 12.9 MB in 1 parquet file to r2://test/census/2021/lcma000b21f_e.parquet.
+```
+
+Repairing geometries changes the data, so `data_to_parquet()` records it in the metadata: `processing` says how many geometries were repaired and with which version of the geometry library, and `geometry_repairs` lists the repaired rows by their primary key. Without a declared primary key it uses the first column or a column whose name ends in `ID` if one of them identifies the rows, and records just the number with a warning otherwise.
+
+
+``` r
+cma_metadata <- parquet_metadata("r2://test/census/2021/lcma000b21f_e.parquet")
+cma_metadata$processing
+#> [1] "Repaired 2 of 156 geometries that were invalid, via sf::st_make_valid (GEOS 3.13.0), keeping multi geometry types. The repaired rows are listed in geometry_repairs by CMAUID, PRUID."
+str(cma_metadata$geometry_repairs)
+#> List of 2
+#>  $ columns: chr [1:2] "CMAUID" "PRUID"
+#>  $ rows   :List of 2
+#>   ..$ : chr [1:2] "571" "35"
+#>   ..$ : chr [1:2] "705" "47"
 ```
 
 The uploaded file can be queried lazily right away, here we read the Montréal CMA.

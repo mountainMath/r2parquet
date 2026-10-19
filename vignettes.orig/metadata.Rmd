@@ -55,13 +55,15 @@ DBI::dbGetQuery(con, paste0(
   DBI::dbQuoteString(con, db_url), ")"))
 ```
 
-`parquet_metadata()` reads these entries back as a list, parsing the JSON ones and leaving out `geo`: the crs of a geometry column lives in the column's type, which is where `collect_parquet()` takes it from. `from_files = TRUE` makes it read the footer of the file, we will see below what it reads otherwise.
+`parquet_metadata()` reads these entries back as a list, parsing the JSON ones and leaving out `geo`: the crs of a geometry column lives in the column's type, which is where `collect_parquet()` takes it from. `from_files = TRUE` makes it read the footer of the file, we will see below what it reads otherwise. The file lists the 830 geometries that were repaired when it was written, we only show the first three.
 
 ```{r}
-parquet_metadata(db_url, from_files = TRUE)
+db_metadata <- parquet_metadata(db_url, from_files = TRUE)
+db_metadata$geometry_repairs$rows <- head(db_metadata$geometry_repairs$rows, 3)
+db_metadata
 ```
 
-The entries are free-form, the ones in this bucket describe provenance and licence. A `columns` entry, a list with one entry per column holding a `label` and a `description`, is the one entry `collect_parquet()` treats specially, the labels get attached to the collected columns as `label` attributes. Column labels can be seen in action in the partitioned dataset below.
+The entries are free-form, the ones in this bucket describe provenance and licence. A `columns` entry, a list with one entry per column holding a `label` and a `description`, is the one entry `collect_parquet()` treats specially, the labels get attached to the collected columns as `label` attributes. Column labels can be seen in action in the partitioned dataset below. Three more entries have a fixed meaning: `primary_key` names the columns that together identify the rows, which `data_to_parquet()` checks before writing, one column for the files here and several for long tables like the partitioned dataset below, where rows are identified by area and characteristic. `processing` and `geometry_repairs` record geometries that `data_to_parquet()` repaired, how many and with which library, and which rows by their primary key.
 
 Metadata in the footer is part of the file, so changing it means writing the file again.
 
@@ -69,7 +71,7 @@ Metadata in the footer is part of the file, so changing it means writing the fil
 
 Directories on R2 can be listed with the credentials of the bucket, but not over https, so a public bucket needs some other way of telling a client what a directory holds. That is the *manifest*, a `_manifest.json` file next to the data, which `upload_parquet()` and `data_to_parquet()` write for the directories they upload and `write_manifest()` adds to directories that were uploaded by other means. A manifest lists every parquet file below its directory with its size, etag and modification time, and copies the metadata from the files' footers, so clients get all of it with a single request.
 
-The `census/2021` directory of the public bucket holds several datasets, single files like the boundary files and the geographic attribute file, and partitioned datasets that are directories of files, and one manifest listing all of them. We show it with the file entries cut down to three, a single file and the first file of each of the two partitioned datasets.
+The `census/2021` directory of the public bucket holds several datasets, single files like the boundary files and the geographic attribute file, and partitioned datasets that are directories of files, and one manifest listing all of them. We show it with the file entries cut down to three, a single file and the first file of each of the two partitioned datasets, and the list of repaired geometries cut down to three rows.
 
 ```{r}
 census_url <- "https://data.mountainmath.xyz/census/2021/"
@@ -81,6 +83,10 @@ length(manifest$files)
 paths <- sapply(manifest$files, function(f) f$path)
 manifest$files <- manifest$files[match(c("ldb_000b21f_e.parquet", "lada000b21f_e/PRUID=10/data_0.parquet",
                                          "profile_ADA/PRUID=10/data_0.parquet"), paths)]
+manifest$files <- lapply(manifest$files, function(f) {
+  if (!is.null(f$metadata$geometry_repairs)) f$metadata$geometry_repairs$rows <- head(f$metadata$geometry_repairs$rows, 3)
+  f
+})
 
 jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE)
 ```
@@ -98,7 +104,7 @@ list_parquet(census_url) |>
 `parquet_metadata()` reads the manifest for paths on R2 and at URLs, instead of the footers: for a file it looks for the manifest of the file's directory, or of the nearest directory above it that has one, and takes the file's entry, a single request that is the same for every file of a dataset. The result is the same as reading the footer above, as long as the manifest is current.
 
 ```{r}
-parquet_metadata(db_url)
+parquet_metadata(db_url)[c("title", "primary_key", "processing")]
 ```
 
 The manifest is current as long as the files only change through `upload_parquet()`, `data_to_parquet()` and `remove_parquet()`, which keep the manifests of the directories they touch and of the directories above up to date. Files changed with other tools are not reflected until `write_manifest()` rebuilds the manifest from a listing; `from_files = TRUE` bypasses the manifest and reads the footers.

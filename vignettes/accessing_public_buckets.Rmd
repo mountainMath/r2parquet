@@ -37,28 +37,35 @@ db_table |> colnames()
 #> [13] "geometry"
 ```
 
-This only reads the parquet metadata, the file carries several geographic identifiers as well as the geography. The table also carries custom metadata that gives more information about data provenance and licence.
+This only reads the parquet metadata, the file carries several geographic identifiers as well as the geography. The table also carries custom metadata that gives more information about data provenance and licence, the primary key, and which geometries were repaired when the file was written, here we leave out the list of the repaired rows.
 
 
 ``` r
-db_table |> parquet_metadata()
-#> $title
-#> [1] "2021 Census – Boundary files - Dissemination blocks"
-#> 
-#> $source_url
-#> [1] "https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=ldb_000b21f_e.zip&k=%20%20%20248570&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/ldb_000b21f_e.zip"
-#> 
-#> $reference_guide
-#> [1] "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21"
-#> 
+db_metadata <- db_table |> parquet_metadata()
+db_metadata[names(db_metadata) != "geometry_repairs"]
 #> $licence
 #> [1] "Statistics Canada Open Licence"
 #> 
 #> $licence_url
 #> [1] "https://www.statcan.gc.ca/en/terms-conditions/open-licence"
 #> 
+#> $title
+#> [1] "2021 Census – Boundary files - Dissemination blocks"
+#> 
 #> $attribution
 #> [1] "Statistics Canada Product ldb_000b21f_e"
+#> 
+#> $processing
+#> [1] "Repaired 830 of 498,547 geometries that were invalid, via sf::st_make_valid (GEOS 3.13.0), keeping multi geometry types. The repaired rows are listed in geometry_repairs by DBUID."
+#> 
+#> $primary_key
+#> [1] "DBUID"
+#> 
+#> $source_url
+#> [1] "https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=ldb_000b21f_e.zip&k=%20%20%20248570&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/ldb_000b21f_e.zip"
+#> 
+#> $reference_guide
+#> [1] "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21"
 ```
 
 A simple query would be to fetch the data for just the City of Vancouver.
