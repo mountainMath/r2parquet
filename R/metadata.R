@@ -63,10 +63,11 @@ check_primary_key <- function(con,source,metadata,columns){
 }
 
 # metadata values parsed back from the footer strings, JSON objects, arrays and strings get parsed, the rest
-# stays a string
+# stays a string. Arrays stay lists, unsimplified, so that manifests write them back as they were, a one element
+# array like ["DBUID"] would turn into a string otherwise; simplify_metadata() simplifies for the user
 parse_metadata_value <- function(value){
   if (grepl("^\\s*[\\[{\"]",value)) {
-    parsed <- tryCatch(jsonlite::fromJSON(value,simplifyDataFrame=FALSE,simplifyMatrix=FALSE),error=function(e)NULL)
+    parsed <- tryCatch(jsonlite::fromJSON(value,simplifyVector=FALSE),error=function(e)NULL)
     if (!is.null(parsed)) return(parsed)
   }
   value
@@ -103,8 +104,16 @@ parquet_footers <- function(path){
   metadata
 }
 
+# metadata as returned to the user, arrays of single values simplified to vectors, as jsonlite simplifies them
+simplify_metadata <- function(metadata){
+  lapply(metadata,function(value){
+    if (!is.list(value)) return(value)
+    jsonlite::fromJSON(jsonlite::toJSON(value,auto_unbox=TRUE,null="null",na="null",digits=NA),simplifyDataFrame=FALSE,simplifyMatrix=FALSE)
+  })
+}
+
 # the metadata of a set of parquet files from their footers, a list per file named by the file: the values of
-# the first file where the files disagree, with a warning
+# the first file where the files disagree, with a warning; simplified for the user
 merge_footers <- function(footers){
   if (length(footers)==0) return(list())
   metadata <- footers[[1]]
@@ -118,7 +127,7 @@ merge_footers <- function(footers){
     warning("The files disagree on the metadata entr",if (length(conflicts)>1) "ies " else "y ",paste0(conflicts,collapse=", "),
             ", using the values of ",names(footers)[1],".",call.=FALSE)
   }
-  metadata
+  simplify_metadata(metadata)
 }
 
 # the metadata of parquet files, paths or globs, read from their footers on a connection that can read them

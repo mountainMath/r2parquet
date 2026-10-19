@@ -85,7 +85,8 @@ manifest_json <- function(files,directory=TRUE){
 # attributes (manifests written before the metadata was added don't), an error if it is not a manifest. The
 # metadata of each file is the manifest's metadata with the file's own entries added
 parse_manifest <- function(text){
-  manifest <- tryCatch(jsonlite::fromJSON(text,simplifyDataFrame=FALSE,simplifyMatrix=FALSE),error=function(e)NULL)
+  # unsimplified like the footer values, see parse_metadata_value()
+  manifest <- tryCatch(jsonlite::fromJSON(text,simplifyVector=FALSE),error=function(e)NULL)
   if (!is.list(manifest) || !("files" %in% names(manifest))) stop("Not a manifest.")
   has_metadata <- is.list(manifest$metadata)
   common <- if (has_metadata) manifest$metadata else list()

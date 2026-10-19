@@ -134,6 +134,25 @@ test_that("primary keys get checked and written as arrays", {
                "does not identify rows")
 })
 
+test_that("manifests keep one element arrays as arrays", {
+  df <- data.frame(id=c("a","b"),value=1:2)
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(df,path,metadata=list(primary_key="id",notes=list("one"),repairs=list(columns="id",rows=list(list("a")))))
+  footers <- unname(r2parquet:::parquet_footers(path))
+  json <- as.character(r2parquet:::manifest_json(r2parquet:::manifest_files("data.parquet",1,"e",Sys.time(),footers)))
+  manifest <- jsonlite::fromJSON(json,simplifyVector=FALSE)
+  expect_equal(manifest$metadata$primary_key,list("id"))
+  expect_equal(manifest$metadata$notes,list("one"))
+  expect_equal(manifest$metadata$repairs,list(columns="id",rows=list(list("a"))))
+  # and keep them through a rewrite of the manifest
+  rewritten <- as.character(r2parquet:::manifest_json(r2parquet:::parse_manifest(json)))
+  expect_equal(jsonlite::fromJSON(rewritten,simplifyVector=FALSE)$metadata,manifest$metadata)
+  # the user gets them simplified, the same from the footers and from the manifest
+  expected <- list(primary_key="id",notes="one",repairs=list(columns="id",rows=list("a")))
+  expect_equal(parquet_metadata(path),expected)
+  expect_equal(r2parquet:::merge_footers(r2parquet:::parse_manifest(json)$metadata),expected)
+})
+
 test_that("lazy tables get written with metadata", {
   df <- data.frame(id=1:3,value=c(3,1,2))
   path <- withr::local_tempfile(fileext=".parquet")
