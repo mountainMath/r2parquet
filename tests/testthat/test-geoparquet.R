@@ -11,6 +11,38 @@ test_that("invalid multi polygons get repaired and stay multi polygons", {
   expect_true(all(sf::st_is_valid(fixed)))
   expect_equal(as.character(sf::st_geometry_type(fixed)),c("MULTIPOLYGON","MULTIPOLYGON"))
   expect_identical(fixed[[2]],square)
+  expect_equal(attr(fixed,"repaired"),c(TRUE,FALSE))
+  expect_equal(attr(r2parquet:::make_valid_geometries(sf::st_sfc(square)),"repaired"),FALSE)
+})
+
+test_that("geometry repairs get recorded in the metadata", {
+  skip_if_no_duckdb_extensions()
+  bowtie <- sf::st_multipolygon(list(list(rbind(c(0,0),c(1,1),c(1,0),c(0,1),c(0,0)))))
+  square <- sf::st_multipolygon(list(list(rbind(c(0,0),c(0,1),c(1,1),c(1,0),c(0,0)))))
+  data <- sf::st_sf(name=c("a","b","b"),DBUID=c("x1","x2","x3"),geometry=sf::st_sfc(square,bowtie,square,crs=3347))
+  path <- withr::local_tempfile(fileext=".parquet")
+  # listed by the first unique column named like an id
+  expect_message(data_to_parquet(data,path,metadata=list(source="s")),"Repairing 1 invalid geometry")
+  metadata <- parquet_metadata(path)
+  expect_match(metadata$processing,"^Repaired 1 of 3 geometries that were invalid, via sf::st_make_valid \\(GEOS .*by DBUID\\.$")
+  expect_equal(metadata$geometry_repairs,list(columns="DBUID",rows=list("x2")))
+  expect_equal(metadata$source,"s")
+  # by the declared primary key, of several columns
+  suppressMessages(data_to_parquet(data,path,metadata=list(primary_key=c("name","DBUID"))))
+  metadata <- parquet_metadata(path)
+  expect_equal(metadata$geometry_repairs,list(columns=c("name","DBUID"),rows=list(c("b","x2"))))
+  # only counted without a column that identifies rows
+  data$DBUID <- "x"
+  expect_warning(suppressMessages(data_to_parquet(data,path)),"no primary key")
+  metadata <- parquet_metadata(path)
+  expect_match(metadata$processing,"^Repaired 1 of 3 geometries.*geometry types\\.$")
+  expect_null(metadata$geometry_repairs)
+  # entries given in the metadata are kept
+  suppressWarnings(suppressMessages(data_to_parquet(data,path,metadata=list(processing="own"))))
+  expect_equal(parquet_metadata(path)$processing,"own")
+  # valid data gets no entries
+  data_to_parquet(data[c(1,3),],path)
+  expect_null(parquet_metadata(path)$processing)
 })
 
 test_that("spatial filter matches sf", {

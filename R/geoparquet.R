@@ -48,11 +48,12 @@ wkb_to_sfc <- function(wkb,crs){
 }
 
 # fix invalid geometries, leaving valid ones untouched, and keep multi geometries multi so that
-# geometry types stay consistent, st_make_valid turns single part multi polygons into polygons
+# geometry types stay consistent, st_make_valid turns single part multi polygons into polygons; which
+# geometries got repaired is in the repaired attribute, a logical vector
 make_valid_geometries <- function(geometry){
   invalid <- !sf::st_is_valid(geometry)
   invalid[is.na(invalid)] <- TRUE
-  if (!any(invalid)) return(geometry)
+  if (!any(invalid)) return(structure(geometry,repaired=invalid))
   message("Repairing ",sum(invalid)," invalid geometr",ifelse(sum(invalid)==1,"y","ies")," via sf::st_make_valid.")
   original_types <- as.character(sf::st_geometry_type(geometry[invalid]))
   fixed <- sf::st_make_valid(geometry[invalid])
@@ -60,7 +61,52 @@ make_valid_geometries <- function(geometry){
   multi <- which(grepl("^MULTI",original_types) & fixed_types==sub("^MULTI","",original_types))
   fixed[multi] <- lapply(multi,function(i)sf::st_cast(fixed[[i]],original_types[i]))
   geometry[invalid] <- fixed
-  geometry
+  structure(geometry,repaired=invalid)
+}
+
+# at most this many repaired rows get listed in the metadata, which every reader downloads with the footer
+max_listed_repairs <- 1000
+
+# a column that identifies the rows of data, for listing repaired rows when no primary key was declared: the
+# first column or a column named like an id (ending in ID), whichever is unique first, NULL if neither is
+id_column <- function(data){
+  candidates <- unique(c(names(data)[1],grep("id$",names(data),ignore.case=TRUE,value=TRUE)))
+  for (column in candidates) {
+    values <- data[[column]]
+    if ((is.character(values) || is.factor(values) || is.integer(values)) && !anyNA(values) && !anyDuplicated(values)) return(column)
+  }
+  NULL
+}
+
+# metadata with geometry repairs recorded, unless it has the entries already: processing says how many geometries
+# got repaired and by which library, since results can differ between versions (s2 for geographic coordinates
+# with sf_use_s2(), GEOS otherwise), and geometry_repairs lists the repaired rows by the primary key, or by a
+# column that identifies rows when none was declared, as {"columns": [...], "rows": [[...], ...]}
+record_geometry_repairs <- function(metadata,data,repaired,geometry,primary_key=NULL){
+  # metadata that isn't a list gets rejected by metadata_strings()
+  if ((!is.null(metadata) && !is.list(metadata)) || (!is.null(metadata$processing) && !is.null(metadata$geometry_repairs))) return(metadata)
+  key <- if (length(primary_key)>0) primary_key else id_column(data)
+  engine <- if (sf::sf_use_s2() && isTRUE(sf::st_is_longlat(geometry))) {
+    paste0("s2 ",utils::packageVersion("s2"))
+  } else {
+    paste0("GEOS ",sf::sf_extSoftVersion()[["GEOS"]])
+  }
+  note <- paste0("Repaired ",format(sum(repaired),big.mark=",")," of ",format(length(repaired),big.mark=","),
+                 " geometries that were invalid, via sf::st_make_valid (",engine,"), keeping multi geometry types.")
+  if (is.null(key)) {
+    warning("Repaired geometries can't be listed since the data has no primary key, declare the columns that identify ",
+            "rows via metadata = list(primary_key = ...).",call.=FALSE)
+  } else if (sum(repaired)>max_listed_repairs) {
+    note <- paste0(note," Too many to list the rows.")
+  } else {
+    note <- paste0(note," The repaired rows are listed in geometry_repairs by ",paste0(key,collapse=", "),".")
+    rows <- lapply(data[repaired,key,drop=FALSE],function(values)if (is.factor(values)) as.character(values) else values)
+    if (is.null(metadata$geometry_repairs)) {
+      metadata$geometry_repairs <- list(columns=I(key),rows=lapply(seq_len(sum(repaired)),function(i)I(unname(lapply(rows,`[[`,i)))))
+    }
+  }
+  if (is.null(metadata$processing)) metadata$processing <- note
+  metadata
 }
 
 #' spatially filter a lazy DuckDB table of GeoParquet data

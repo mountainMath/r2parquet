@@ -58,7 +58,13 @@ the column and a bounding box per row group. After the `sort_by` columns, rows g
 so that each row group covers a compact area and spatial filters can skip row groups based on their bounding
 box, see `filter_spatial`. Invalid geometries get fixed via `sf::st_make_valid`, keeping multi geometries multi,
 and the geometry column is always named `geometry`, following the GeoParquet convention, independent of its
-name in `data`. Both emit a message when they change the data.
+name in `data`. Both emit a message when they change the data. Repairs also get recorded in the metadata: a
+`processing` entry says how many geometries were repaired and with which version of GEOS (or s2 for
+geographic coordinates), and a `geometry_repairs` entry lists the repaired rows by their primary key, as an
+object with `columns`, the key columns, and `rows`, an array of key values per repaired row, up to 1000 rows. Without a declared primary key the
+rows get listed by the first column or a column whose name ends in `ID` if one of these identifies the rows,
+otherwise only the number gets recorded, with a warning. Entries given in `metadata` are kept; repair the
+geometries before writing to avoid both.
 
 Lazy DuckDB tables, e.g. from `parquet_tbl` after filtering, get written by DuckDB directly
 without collecting the data into R. Tables with GEOMETRY columns get written as GeoParquet in the same way,
@@ -95,6 +101,11 @@ short for the label. Columns of data frames with a `label` attribute, as set by 
 packages, get their label added automatically. Parquet footers hold strings, so single values get written
 as they are and anything else, like `columns`, as JSON; `NULL` and `NA` entries get dropped with a warning.
 Changing the metadata means writing the data again.
+
+A `primary_key` entry declares the columns that together identify the rows, one column like `"DBUID"` or
+several for long tables, like `c("DAUID", "characteristic")`. The columns have to exist, have no missing
+values and identify the rows, which gets checked before writing, at the cost of an extra pass over a lazy
+table. It gets written as a JSON array, also for a single column, and is how repaired geometries get listed.
 }
 \section{Credentials}{
 

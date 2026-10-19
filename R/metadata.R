@@ -32,12 +32,34 @@ metadata_strings <- function(metadata,columns,labels=NULL){
   for (column in names(labels)) {
     if (is.null(metadata$columns[[column]]$label)) metadata$columns[[column]]$label <- as.character(labels[[column]])
   }
+  # always an array, also for a single column
+  if (!is.null(metadata$primary_key)) metadata$primary_key <- I(metadata$primary_key)
   if (length(metadata)==0) return(NULL)
   vapply(metadata,function(value){
     # a string that would read back as JSON gets written as a JSON string, so it reads back as it is
-    if (is.atomic(value) && length(value)==1 && is.null(names(value)) && !grepl("^\\s*[\\[{\"]",value)) as.character(value)
+    if (is.atomic(value) && length(value)==1 && is.null(names(value)) && !inherits(value,"AsIs") && !grepl("^\\s*[\\[{\"]",value)) as.character(value)
     else as.character(jsonlite::toJSON(value,auto_unbox=TRUE,null="null",na="null",digits=NA))
   },character(1))
+}
+
+# the columns of the primary_key metadata entry, checked to exist and to identify the rows of source (a table or
+# subquery on con) without missing values, NULL if there is no entry
+check_primary_key <- function(con,source,metadata,columns){
+  key <- if (is.list(metadata)) metadata$primary_key
+  if (is.null(key)) return(NULL)
+  if (!is.character(key) || length(key)==0 || anyNA(key) || anyDuplicated(key)) {
+    stop("metadata$primary_key has to be a vector of column names.")
+  }
+  missing_columns <- setdiff(key,columns)
+  if (length(missing_columns)>0) stop(paste0("Columns ",paste0(missing_columns,collapse=", ")," in metadata$primary_key not found in data."))
+  quoted <- DBI::dbQuoteIdentifier(con,key)
+  check <- DBI::dbGetQuery(con,paste0("SELECT count(*) AS n, count(DISTINCT row(",paste0(quoted,collapse=", "),")) AS distinct_keys, ",
+                                      "count(*) FILTER (WHERE ",paste0(quoted," IS NULL",collapse=" OR "),") AS missing FROM ",source))
+  if (check$missing>0) stop(paste0("The primary key ",paste0(key,collapse=", ")," has missing values in ",check$missing," rows."))
+  if (check$distinct_keys<check$n) {
+    stop(paste0("The primary key ",paste0(key,collapse=", ")," does not identify rows, ",check$n-check$distinct_keys," rows repeat a key."))
+  }
+  key
 }
 
 # metadata values parsed back from the footer strings, JSON objects, arrays and strings get parsed, the rest

@@ -112,6 +112,28 @@ test_that("GeoParquet keeps the geo entry out of the metadata and collect_parque
   expect_equal(attr(result,"sf_column"),"geometry")
 })
 
+test_that("primary keys get checked and written as arrays", {
+  df <- data.frame(DAUID=c("1","1","2"),characteristic=c(1L,2L,1L),value=c(3,1,2))
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(df,path,metadata=list(primary_key=c("DAUID","characteristic")))
+  expect_equal(parquet_metadata(path)$primary_key,c("DAUID","characteristic"))
+  # a single column is an array in the footer too
+  data_to_parquet(df[1:2,],path,metadata=list(primary_key="characteristic"))
+  con <- DBI::dbConnect(duckdb::duckdb())
+  withr::defer(DBI::dbDisconnect(con,shutdown=TRUE))
+  kv <- DBI::dbGetQuery(con,paste0("SELECT decode(key) AS k, decode(value) AS v FROM parquet_kv_metadata('",path,"')"))
+  expect_equal(kv$v[kv$k=="primary_key"],'["characteristic"]')
+  expect_error(data_to_parquet(df,path,metadata=list(primary_key="DAUID")),"does not identify rows, 1 rows repeat a key")
+  expect_error(data_to_parquet(df,path,metadata=list(primary_key=c("DAUID","other"))),"Columns other in metadata\\$primary_key")
+  expect_error(data_to_parquet(df,path,metadata=list(primary_key=1)),"vector of column names")
+  df$characteristic[3] <- NA
+  expect_error(data_to_parquet(df,path,metadata=list(primary_key=c("DAUID","characteristic"))),"missing values in 1 rows")
+  # lazy tables get checked as well
+  data_to_parquet(df[1:2,],path)
+  expect_error(data_to_parquet(parquet_tbl(path),withr::local_tempfile(fileext=".parquet"),metadata=list(primary_key="DAUID")),
+               "does not identify rows")
+})
+
 test_that("lazy tables get written with metadata", {
   df <- data.frame(id=1:3,value=c(3,1,2))
   path <- withr::local_tempfile(fileext=".parquet")

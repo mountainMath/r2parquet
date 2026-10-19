@@ -16,7 +16,13 @@
 #' so that each row group covers a compact area and spatial filters can skip row groups based on their bounding
 #' box, see `filter_spatial`. Invalid geometries get fixed via `sf::st_make_valid`, keeping multi geometries multi,
 #' and the geometry column is always named `geometry`, following the GeoParquet convention, independent of its
-#' name in `data`. Both emit a message when they change the data.
+#' name in `data`. Both emit a message when they change the data. Repairs also get recorded in the metadata: a
+#' `processing` entry says how many geometries were repaired and with which version of GEOS (or s2 for
+#' geographic coordinates), and a `geometry_repairs` entry lists the repaired rows by their primary key, as an
+#' object with `columns`, the key columns, and `rows`, an array of key values per repaired row, up to 1000 rows. Without a declared primary key the
+#' rows get listed by the first column or a column whose name ends in `ID` if one of these identifies the rows,
+#' otherwise only the number gets recorded, with a warning. Entries given in `metadata` are kept; repair the
+#' geometries before writing to avoid both.
 #'
 #' Lazy DuckDB tables, e.g. from `parquet_tbl` after filtering, get written by DuckDB directly
 #' without collecting the data into R. Tables with GEOMETRY columns get written as GeoParquet in the same way,
@@ -53,6 +59,11 @@
 #' packages, get their label added automatically. Parquet footers hold strings, so single values get written
 #' as they are and anything else, like `columns`, as JSON; `NULL` and `NA` entries get dropped with a warning.
 #' Changing the metadata means writing the data again.
+#'
+#' A `primary_key` entry declares the columns that together identify the rows, one column like `"DBUID"` or
+#' several for long tables, like `c("DAUID", "characteristic")`. The columns have to exist, have no missing
+#' values and identify the rows, which gets checked before writing, at the cost of an extra pass over a lazy
+#' table. It gets written as a JSON array, also for a single column, and is how repaired geometries get listed.
 #'
 #' @inheritSection upload_parquet Credentials
 #' @param data data frame, sf object or lazy DuckDB table
@@ -91,6 +102,7 @@ data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_s
 # write data to a local parquet file or directory of partitioned files
 local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,remove_stale=TRUE,metadata=NULL,compression="zstd") {
   if (row_group_size<2048) warning("DuckDB writes row groups of at least 2048 rows, row_group_size has no effect below that.",call.=FALSE)
+  repaired <- FALSE
   if (inherits(data,"tbl_lazy")) {
     if (!methods::is(dbplyr::remote_con(data),"duckdb_connection")) stop("Lazy tables have to be DuckDB tables.")
     con <- dbplyr::remote_con(data)
@@ -107,7 +119,9 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
       message("Renaming geometry column ",attr(data,"sf_column")," to the GeoParquet standard name geometry.")
     }
     df <- sf::st_drop_geometry(data)
-    df[[geometry_column]] <- unclass(sf::st_as_binary(make_valid_geometries(sf::st_geometry(data))))
+    fixed <- make_valid_geometries(sf::st_geometry(data))
+    repaired <- attr(fixed,"repaired")
+    df[[geometry_column]] <- unclass(sf::st_as_binary(fixed))
     duckdb::duckdb_register(con,"r2parquet_sf_data",df)
     on.exit(duckdb::duckdb_unregister(con,"r2parquet_sf_data"))
     geometry <- DBI::dbQuoteIdentifier(con,geometry_column)
@@ -137,6 +151,9 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
   missing_columns <- setdiff(c(sort_by,partition_by),columns)
   if (length(missing_columns)>0) stop(paste0("Columns ",paste0(missing_columns,collapse=", ")," not found in data."))
   labels <- if (is.data.frame(data)) lapply(data,attr,"label")
+  primary_key <- check_primary_key(con,source,metadata,columns)
+  # repairs change the data, so they get recorded in the metadata
+  if (any(repaired)) metadata <- record_geometry_repairs(metadata,df,repaired,sf::st_geometry(data),primary_key)
   metadata <- metadata_strings(metadata,columns,labels)
 
   order <- if (length(sort_by)>0) DBI::dbQuoteIdentifier(con,sort_by)
