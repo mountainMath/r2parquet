@@ -211,7 +211,8 @@ attach_parquet_metadata <- function(data,metadata){
 #' the manifest where there is one
 #' @param ... not used
 #' @return a named list of the metadata entries, empty if the files have none (or the data was collected
-#' without attaching it)
+#' without attaching it), of class `parquet_metadata`, which only changes how it prints: one line per entry,
+#' lists as compact JSON, and the `columns` entry as a table of the columns with their labels and descriptions
 #' @export
 parquet_metadata <- function(x,...) UseMethod("parquet_metadata")
 
@@ -232,7 +233,7 @@ parquet_metadata.character <- function(x,from_files=FALSE,...) {
     con <- parquet_connection()
     footers <- c(footers,read_parquet_footers(con,duckdb_parquet_paths(con,x)))
   }
-  merge_footers(footers)
+  new_parquet_metadata(merge_footers(footers))
 }
 
 #' @rdname parquet_metadata
@@ -245,20 +246,85 @@ parquet_metadata.tbl_lazy <- function(x,from_files=FALSE,...) {
   source <- attr(x,"r2parquet_source")
   if (!isTRUE(from_files) && length(source)>0 && all(is_remote(source))) {
     recorded <- lapply(unique(source),manifest_footers)
-    if (!any(vapply(recorded,is.null,logical(1)))) return(merge_footers(do.call(c,recorded)))
+    if (!any(vapply(recorded,is.null,logical(1)))) return(new_parquet_metadata(merge_footers(do.call(c,recorded))))
   }
-  duckdb_parquet_metadata(dbplyr::remote_con(x),path)
+  new_parquet_metadata(duckdb_parquet_metadata(dbplyr::remote_con(x),path))
 }
 
 #' @rdname parquet_metadata
 #' @export
 parquet_metadata.data.frame <- function(x,...) {
-  metadata <- attr(x,"metadata")
-  if (is.null(metadata)) list() else metadata
+  new_parquet_metadata(attr(x,"metadata"))
 }
 
 #' @rdname parquet_metadata
 #' @export
 parquet_metadata.default <- function(x,...) {
   stop("x has to be a path, a vector of paths, a lazy DuckDB table from parquet_tbl or data collected with collect_parquet.")
+}
+
+# the metadata as returned by parquet_metadata, a named list with a class for printing
+new_parquet_metadata <- function(metadata){
+  if (is.null(metadata)) metadata <- list()
+  structure(unclass(metadata),class="parquet_metadata")
+}
+
+#' @export
+`[.parquet_metadata` <- function(x,i){
+  new_parquet_metadata(unclass(x)[i])
+}
+
+# a string cut to a display width, with an ellipsis where it was cut
+truncate_width <- function(x,width){
+  ellipsis <- if (l10n_info()[["UTF-8"]]) "\u2026" else "..."
+  vapply(x,function(s){
+    if (is.na(s) || nchar(s,type="width")<=width) return(s)
+    while (nchar(s,type="width")>width-nchar(ellipsis,type="width")) s <- substr(s,1,nchar(s)-max(1,nchar(s,type="width")-width))
+    paste0(s,ellipsis)
+  },"",USE.NAMES=FALSE)
+}
+
+# a metadata value on one line: single values as they are, vectors comma separated, lists as JSON
+format_metadata_value <- function(value){
+  if (is.null(value)) return("NULL")
+  if (is.atomic(value) && is.null(names(value))) return(gsub("\\s*\n\\s*"," ",paste0(as.character(value),collapse=", ")))
+  as.character(jsonlite::toJSON(value,auto_unbox=TRUE,null="null",na="null",digits=NA))
+}
+
+#' @export
+format.parquet_metadata <- function(x,width=getOption("width"),max_columns=20,...){
+  x <- unclass(x)
+  if (length(x)==0) return("<parquet metadata: no entries>")
+  columns <- if (is.list(x$columns) && !is.null(names(x$columns))) x$columns
+  values <- vapply(names(x),function(name){
+    if (name=="columns" && !is.null(columns)) {
+      return(paste0("<",length(columns)," column",if (length(columns)!=1) "s",", see below>"))
+    }
+    format_metadata_value(x[[name]])
+  },"")
+  key_width <- max(nchar(names(x),type="width"))
+  lines <- c(paste0("<parquet metadata: ",length(x)," entr",if (length(x)==1) "y" else "ies",">"),
+             truncate_width(paste0(formatC(names(x),width=-key_width),"  ",values),width))
+  if (!is.null(columns)) {
+    shown <- utils::head(columns,max_columns)
+    descriptions <- vapply(shown,function(entry){
+      if (!is.list(entry)) return(format_metadata_value(entry))
+      label <- if (!is.null(entry$label)) format_metadata_value(entry$label) else ""
+      description <- if (!is.null(entry$description)) format_metadata_value(entry$description) else ""
+      rest <- entry[setdiff(names(entry),c("label","description"))]
+      paste0(label,if (label!="" && description!="") ": ",description,
+             if (length(rest)>0) paste0(if (label!="" || description!="") " ",format_metadata_value(rest)))
+    },"")
+    column_width <- max(nchar(names(shown),type="width"))
+    lines <- c(lines,"","columns",
+               truncate_width(paste0("  ",formatC(names(shown),width=-column_width),"  ",descriptions),width),
+               if (length(columns)>max_columns) paste0("  ... and ",length(columns)-max_columns," more"))
+  }
+  lines
+}
+
+#' @export
+print.parquet_metadata <- function(x,...){
+  cat(format(x,...),sep="\n")
+  invisible(x)
 }

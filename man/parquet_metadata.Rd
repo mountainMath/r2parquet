@@ -31,7 +31,8 @@ the manifest where there is one}
 }
 \value{
 a named list of the metadata entries, empty if the files have none (or the data was collected
-without attaching it)
+without attaching it), of class `parquet_metadata`, which only changes how it prints: one line per entry,
+lists as compact JSON, and the `columns` entry as a table of the columns with their labels and descriptions
 }
 \description{
 Reads the key-value metadata from the footer of parquet files, like the `source`, `license`, `notes` and

@@ -39,10 +39,40 @@ test_that("strings that look like JSON come back as strings", {
   path <- withr::local_tempfile(fileext=".parquet")
   metadata <- list(array="[1]",object='{"a": 1}',quoted='"x"',spaced=" [1]",plain="a [1]")
   data_to_parquet(data.frame(a=1),path,metadata=metadata)
-  expect_equal(parquet_metadata(path),metadata)
+  expect_equal(unclass(parquet_metadata(path)),metadata)
   # structured entries still get parsed
   data_to_parquet(data.frame(a=1),path,metadata=list(notes=list(a=1L,b="[1]")))
   expect_equal(parquet_metadata(path)$notes,list(a=1L,b="[1]"))
+})
+
+test_that("metadata prints one line per entry and the columns as a table", {
+  metadata <- r2parquet:::new_parquet_metadata(list(
+    title="A title",primary_key=c("a","b"),notes="line one\nline two",repairs=list(columns="a",rows=list("x","y")),
+    columns=list(a=list(label="The a",description="Longer"),b=list(label="The b"),c=list(description="Only a description"))))
+  lines <- format(metadata,width=80)
+  expect_equal(lines[1:6],c("<parquet metadata: 5 entries>",
+                            "title        A title",
+                            "primary_key  a, b",
+                            "notes        line one line two",
+                            'repairs      {"columns":"a","rows":["x","y"]}',
+                            "columns      <3 columns, see below>"))
+  expect_equal(lines[8:11],c("columns","  a  The a: Longer","  b  The b","  c  Only a description"))
+  expect_true(all(nchar(format(metadata,width=20)[-1],type="width")<=20))
+  expect_match(format(metadata,max_columns=2)[11],"and 1 more")
+  expect_output(print(metadata),"<parquet metadata: 5 entries>")
+  expect_equal(format(r2parquet:::new_parquet_metadata(list())),"<parquet metadata: no entries>")
+  # subsetting keeps the class, single entries come out as they are
+  expect_s3_class(metadata[c("title","primary_key")],"parquet_metadata")
+  expect_equal(names(metadata[c("title","primary_key")]),c("title","primary_key"))
+  expect_equal(metadata$primary_key,c("a","b"))
+})
+
+test_that("metadata read back can be written again", {
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(data.frame(a=1),path,metadata=list(source="s",primary_key="a",columns=list(a="The a")))
+  copy <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(data.frame(a=2),copy,metadata=parquet_metadata(path)[c("source","primary_key","columns")])
+  expect_equal(unclass(parquet_metadata(copy)),list(source="s",primary_key="a",columns=list(a=list(label="The a"))))
 })
 
 test_that("column labels get picked up from label attributes", {
@@ -50,10 +80,10 @@ test_that("column labels get picked up from label attributes", {
   attr(df$value,"label") <- "The value"
   path <- withr::local_tempfile(fileext=".parquet")
   data_to_parquet(df,path)
-  expect_equal(parquet_metadata(path),list(columns=list(value=list(label="The value"))))
+  expect_equal(unclass(parquet_metadata(path)),list(columns=list(value=list(label="The value"))))
   # files without metadata have none
   data_to_parquet(data.frame(a=1),path)
-  expect_equal(parquet_metadata(path),list())
+  expect_equal(unclass(parquet_metadata(path)),list())
 })
 
 test_that("collect_parquet attaches metadata and labels, also after dplyr verbs", {
@@ -61,7 +91,7 @@ test_that("collect_parquet attaches metadata and labels, also after dplyr verbs"
   path <- withr::local_tempfile(fileext=".parquet")
   data_to_parquet(df,path,metadata=list(source="s",columns=list(id="Identifier",value="Value")))
   tbl <- parquet_tbl(path)
-  expect_equal(parquet_metadata(tbl),list(source="s",columns=list(id=list(label="Identifier"),value=list(label="Value"))))
+  expect_equal(unclass(parquet_metadata(tbl)),list(source="s",columns=list(id=list(label="Identifier"),value=list(label="Value"))))
   result <- collect_parquet(tbl)
   expect_s3_class(result,"tbl_df")
   expect_false(inherits(result,"sf"))
@@ -70,7 +100,7 @@ test_that("collect_parquet attaches metadata and labels, also after dplyr verbs"
   expect_equal(attr(result$value,"label"),"Value")
   # collected data carries the metadata, sf results included
   expect_equal(parquet_metadata(result),parquet_metadata(tbl))
-  expect_equal(parquet_metadata(data.frame(a=1)),list())
+  expect_equal(unclass(parquet_metadata(data.frame(a=1))),list())
   filtered <- collect_parquet(dplyr::select(dplyr::filter(tbl,value>1),id))
   expect_equal(nrow(filtered),2)
   expect_equal(attr(filtered,"metadata")$source,"s")
@@ -78,7 +108,7 @@ test_that("collect_parquet attaches metadata and labels, also after dplyr verbs"
   plain <- collect_parquet(tbl,attach_metadata=FALSE)
   expect_null(attr(plain,"metadata"))
   expect_null(attr(plain$id,"label"))
-  expect_equal(parquet_metadata(plain),list())
+  expect_equal(unclass(parquet_metadata(plain)),list())
   # lazy tables not from parquet_tbl have no metadata
   other <- dplyr::tbl(dbplyr::remote_con(tbl),dplyr::sql("SELECT 1 AS a"))
   expect_null(attr(collect_parquet(other),"metadata"))
@@ -90,11 +120,11 @@ test_that("partitioned directories share their metadata and disagreeing files wa
   df <- data.frame(group=rep(c("a","b"),each=3),value=1:6)
   dir <- withr::local_tempdir()
   data_to_parquet(df,file.path(dir,"data"),partition_by="group",metadata=list(source="s"))
-  expect_equal(parquet_metadata(file.path(dir,"data")),list(source="s"))
-  expect_equal(parquet_metadata(parquet_tbl(file.path(dir,"data"))),list(source="s"))
+  expect_equal(unclass(parquet_metadata(file.path(dir,"data"))),list(source="s"))
+  expect_equal(unclass(parquet_metadata(parquet_tbl(file.path(dir,"data")))),list(source="s"))
   data_to_parquet(df[df$group=="b",],file.path(dir,"data"),partition_by="group",remove_stale=FALSE,metadata=list(source="t",license="l"))
   expect_warning(result <- parquet_metadata(file.path(dir,"data")),"disagree on the metadata entry source")
-  expect_equal(result,list(source="s",license="l"))
+  expect_equal(unclass(result),list(source="s",license="l"))
 })
 
 test_that("GeoParquet keeps the geo entry out of the metadata and collect_parquet returns sf", {
@@ -149,7 +179,7 @@ test_that("manifests keep one element arrays as arrays", {
   expect_equal(jsonlite::fromJSON(rewritten,simplifyVector=FALSE)$metadata,manifest$metadata)
   # the user gets them simplified, the same from the footers and from the manifest
   expected <- list(primary_key="id",notes="one",repairs=list(columns="id",rows=list("a")))
-  expect_equal(parquet_metadata(path),expected)
+  expect_equal(unclass(parquet_metadata(path)),expected)
   expect_equal(r2parquet:::merge_footers(r2parquet:::parse_manifest(json)$metadata),expected)
 })
 
@@ -159,7 +189,7 @@ test_that("lazy tables get written with metadata", {
   data_to_parquet(df,path,metadata=list(source="s",columns=list(value="Value")))
   path2 <- withr::local_tempfile(fileext=".parquet")
   data_to_parquet(dplyr::filter(parquet_tbl(path),value>1),path2,metadata=list(source="s2"))
-  expect_equal(parquet_metadata(path2),list(source="s2"))
+  expect_equal(unclass(parquet_metadata(path2)),list(source="s2"))
   expect_error(data_to_parquet(parquet_tbl(path),path2,metadata=list(columns=list(other="x"))),"Columns other")
 })
 
@@ -184,37 +214,37 @@ test_that("remote metadata comes from the nearest manifest, or from the footers 
                         })
   # a directory: one request, the entries of its files merged like footers
   expect_warning(result <- parquet_metadata("r2://bucket/data"),"disagree on the metadata entry license")
-  expect_equal(result,list(source="s",license="l"))
+  expect_equal(unclass(result),list(source="s",license="l"))
   expect_equal(gets,"data/_manifest.json")
   # a partition and a file in it are covered by the manifest above them
   gets <- character()
-  expect_equal(parquet_metadata("r2://bucket/data/year=2022"),list(source="s",license="m"))
-  expect_equal(parquet_metadata("r2://bucket/data/year=2022/data_0.parquet"),list(source="s",license="m"))
+  expect_equal(unclass(parquet_metadata("r2://bucket/data/year=2022")),list(source="s",license="m"))
+  expect_equal(unclass(parquet_metadata("r2://bucket/data/year=2022/data_0.parquet")),list(source="s",license="m"))
   expect_equal(gets,c("data/year=2022/_manifest.json","data/_manifest.json",
                       "data/year=2022/data_0.parquet/_manifest.json","data/year=2022/_manifest.json","data/_manifest.json"))
   expect_length(footers,0)
   # the footers get read without a manifest, with one that predates the metadata, for a path the manifest does
   # not list, and with from_files = TRUE
-  expect_equal(parquet_metadata("r2://bucket/plain/a.parquet"),list(source="f"))
-  expect_equal(parquet_metadata("r2://bucket/old/a.parquet"),list(source="f"))
-  expect_equal(parquet_metadata("r2://bucket/data/year=2023"),list(source="f"))
-  expect_equal(parquet_metadata("r2://bucket/data",from_files=TRUE),list(source="f"))
+  expect_equal(unclass(parquet_metadata("r2://bucket/plain/a.parquet")),list(source="f"))
+  expect_equal(unclass(parquet_metadata("r2://bucket/old/a.parquet")),list(source="f"))
+  expect_equal(unclass(parquet_metadata("r2://bucket/data/year=2023")),list(source="f"))
+  expect_equal(unclass(parquet_metadata("r2://bucket/data",from_files=TRUE)),list(source="f"))
   expect_equal(footers,c("r2://bucket/plain/a.parquet","r2://bucket/old/a.parquet","r2://bucket/data/year=2023","r2://bucket/data"))
   # paths with and without a manifest get merged like files
   footers <- character()
   expect_warning(result <- parquet_metadata(c("r2://bucket/plain/a.parquet","r2://bucket/data/year=2022")),"disagree on the metadata entry source")
-  expect_equal(result,list(source="s",license="m"))
+  expect_equal(unclass(result),list(source="s",license="m"))
   expect_equal(footers,"r2://bucket/plain/a.parquet")
   # a table reads the manifests of the paths it was resolved from, or the footers of the files it reads
   dir <- withr::local_tempdir()
   data_to_parquet(data.frame(a=1),file.path(dir,"local.parquet"),metadata=list(source="local"))
   tbl <- parquet_tbl(file.path(dir,"local.parquet"))
-  expect_equal(parquet_metadata(tbl),list(source="local"))
+  expect_equal(unclass(parquet_metadata(tbl)),list(source="local"))
   attr(tbl,"r2parquet_source") <- "r2://bucket/data/year=2022"
-  expect_equal(parquet_metadata(tbl),list(source="s",license="m"))
-  expect_equal(parquet_metadata(tbl,from_files=TRUE),list(source="local"))
+  expect_equal(unclass(parquet_metadata(tbl)),list(source="s",license="m"))
+  expect_equal(unclass(parquet_metadata(tbl,from_files=TRUE)),list(source="local"))
   attr(tbl,"r2parquet_source") <- "r2://bucket/plain/a.parquet"
-  expect_equal(parquet_metadata(tbl),list(source="local"))
+  expect_equal(unclass(parquet_metadata(tbl)),list(source="local"))
 })
 
 test_that("footer reads stay out of RStudio's Connections pane", {

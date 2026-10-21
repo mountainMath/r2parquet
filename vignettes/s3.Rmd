@@ -159,17 +159,11 @@ The manifest carries the metadata of the dataset, so `parquet_metadata()` reads 
 
 ``` r
 parquet_metadata(cma_url)
-#> $licence_url
-#> [1] "https://www.statcan.gc.ca/en/terms-conditions/open-licence"
-#> 
-#> $licence
-#> [1] "Statistics Canada Open Licence"
-#> 
-#> $attribution
-#> [1] "Statistics Canada Product lcma000b21f_e"
-#> 
-#> $title
-#> [1] "2021 Census – Boundary files - Census metropolitan areas and census agglomerations"
+#> <parquet metadata: 4 entries>
+#> title        2021 Census – Boundary files - Census metropolitan areas and censu…
+#> attribution  Statistics Canada Product lcma000b21f_e
+#> licence      Statistics Canada Open Licence
+#> licence_url  https://www.statcan.gc.ca/en/terms-conditions/open-licence
 
 list_parquet(cma_url) |>
   mutate(path = sub(cma_url, "", path, fixed = TRUE)) |>

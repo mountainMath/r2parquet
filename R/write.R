@@ -101,6 +101,7 @@ data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_s
 
 # write data to a local parquet file or directory of partitioned files
 local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,remove_stale=TRUE,metadata=NULL,compression="zstd") {
+  if (inherits(metadata,"parquet_metadata")) metadata <- unclass(metadata)
   if (row_group_size<2048) warning("DuckDB writes row groups of at least 2048 rows, row_group_size has no effect below that.",call.=FALSE)
   repaired <- FALSE
   if (inherits(data,"tbl_lazy")) {

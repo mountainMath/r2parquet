@@ -55,12 +55,12 @@ DBI::dbGetQuery(con, paste0(
   DBI::dbQuoteString(con, db_url), ")"))
 ```
 
-`parquet_metadata()` reads these entries back as a list, parsing the JSON ones and leaving out `geo`: the crs of a geometry column lives in the column's type, which is where `collect_parquet()` takes it from. `from_files = TRUE` makes it read the footer of the file, we will see below what it reads otherwise. The file lists the 830 geometries that were repaired when it was written, we only show the first three.
+`parquet_metadata()` reads these entries back as a list, parsing the JSON ones and leaving out `geo`: the crs of a geometry column lives in the column's type, which is where `collect_parquet()` takes it from. `from_files = TRUE` makes it read the footer of the file, we will see below what it reads otherwise. The list prints one line per entry, cut to the width of the console, with lists like the 830 geometries that were repaired when the file was written shown as compact JSON; the entries themselves are complete.
 
 ```{r}
 db_metadata <- parquet_metadata(db_url, from_files = TRUE)
-db_metadata$geometry_repairs$rows <- head(db_metadata$geometry_repairs$rows, 3)
 db_metadata
+db_metadata$processing
 ```
 
 The entries are free-form, the ones in this bucket describe provenance and licence. A `columns` entry, a list with one entry per column holding a `label` and a `description`, is the one entry `collect_parquet()` treats specially, the labels get attached to the collected columns as `label` attributes. Column labels can be seen in action in the partitioned dataset below. Three more entries have a fixed meaning: `primary_key` names the columns that together identify the rows, which `data_to_parquet()` checks before writing, one column for the files here and several for long tables like the partitioned dataset below, where rows are identified by area and characteristic. `processing` and `geometry_repairs` record geometries that `data_to_parquet()` repaired, how many and with which library, and which rows by their primary key.
@@ -134,10 +134,10 @@ manifest$files <- manifest$files[1:2]
 jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE)
 ```
 
-`parquet_metadata()` on the directory returns that shared metadata, from the manifest.
+`parquet_metadata()` on the directory returns that shared metadata, from the manifest. The `columns` entry prints as a table of the columns with their labels and descriptions.
 
 ```{r}
-str(parquet_metadata(profile_url), max.level = 1)
+parquet_metadata(profile_url)
 ```
 
 `parquet_tbl()` reads the directory as one table, with `PRUID` coming from the paths, and a filter on it only opens the files of the matching partitions. Within a partition the rows are sorted by `characteristic_id`, so a filter on it only downloads the row groups holding that characteristic. The literal is written as `1L`, an integer like the column: a plain `1` is a double in R, which would make DuckDB cast the column instead of using its statistics and download every row group, so the package renders whole numbers in comparisons as integers, with a message the first time, see `?parquet_tbl`.

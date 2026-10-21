@@ -80,51 +80,23 @@ DBI::dbGetQuery(con, paste0(
 #> 10 {"version":"2.0.0","primary_column":"geometry","columns":{"g
 ```
 
-`parquet_metadata()` reads these entries back as a list, parsing the JSON ones and leaving out `geo`: the crs of a geometry column lives in the column's type, which is where `collect_parquet()` takes it from. `from_files = TRUE` makes it read the footer of the file, we will see below what it reads otherwise. The file lists the 830 geometries that were repaired when it was written, we only show the first three.
+`parquet_metadata()` reads these entries back as a list, parsing the JSON ones and leaving out `geo`: the crs of a geometry column lives in the column's type, which is where `collect_parquet()` takes it from. `from_files = TRUE` makes it read the footer of the file, we will see below what it reads otherwise. The list prints one line per entry, cut to the width of the console, with lists like the 830 geometries that were repaired when the file was written shown as compact JSON; the entries themselves are complete.
 
 
 ``` r
 db_metadata <- parquet_metadata(db_url, from_files = TRUE)
-db_metadata$geometry_repairs$rows <- head(db_metadata$geometry_repairs$rows, 3)
 db_metadata
-#> $title
-#> [1] "2021 Census – Boundary files - Dissemination blocks"
-#> 
-#> $source_url
-#> [1] "https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=ldb_000b21f_e.zip&k=%20%20%20248570&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/ldb_000b21f_e.zip"
-#> 
-#> $reference_guide
-#> [1] "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21"
-#> 
-#> $licence
-#> [1] "Statistics Canada Open Licence"
-#> 
-#> $licence_url
-#> [1] "https://www.statcan.gc.ca/en/terms-conditions/open-licence"
-#> 
-#> $attribution
-#> [1] "Statistics Canada Product ldb_000b21f_e"
-#> 
-#> $primary_key
-#> [1] "DBUID"
-#> 
-#> $geometry_repairs
-#> $geometry_repairs$columns
-#> [1] "DBUID"
-#> 
-#> $geometry_repairs$rows
-#> $geometry_repairs$rows[[1]]
-#> [1] "10010273010"
-#> 
-#> $geometry_repairs$rows[[2]]
-#> [1] "10010667008"
-#> 
-#> $geometry_repairs$rows[[3]]
-#> [1] "10010817014"
-#> 
-#> 
-#> 
-#> $processing
+#> <parquet metadata: 9 entries>
+#> title             2021 Census – Boundary files - Dissemination blocks
+#> source_url        https://www12.statcan.gc.ca/census-recensement/alternative_al…
+#> reference_guide   https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/g…
+#> licence           Statistics Canada Open Licence
+#> licence_url       https://www.statcan.gc.ca/en/terms-conditions/open-licence
+#> attribution       Statistics Canada Product ldb_000b21f_e
+#> primary_key       DBUID
+#> geometry_repairs  {"columns":"DBUID","rows":["10010273010","10010667008","10010…
+#> processing        Repaired 830 of 498,547 geometries that were invalid, via sf:…
+db_metadata$processing
 #> [1] "Repaired 830 of 498,547 geometries that were invalid, via sf::st_make_valid (GEOS 3.13.0), keeping multi geometry types. The repaired rows are listed in geometry_repairs by DBUID."
 ```
 
@@ -339,14 +311,10 @@ list_parquet(census_url) |>
 
 ``` r
 parquet_metadata(db_url)[c("title", "primary_key", "processing")]
-#> $title
-#> [1] "2021 Census – Boundary files - Dissemination blocks"
-#> 
-#> $primary_key
-#> [1] "DBUID"
-#> 
-#> $processing
-#> [1] "Repaired 830 of 498,547 geometries that were invalid, via sf::st_make_valid (GEOS 3.13.0), keeping multi geometry types. The repaired rows are listed in geometry_repairs by DBUID."
+#> <parquet metadata: 3 entries>
+#> title        2021 Census – Boundary files - Dissemination blocks
+#> primary_key  DBUID
+#> processing   Repaired 830 of 498,547 geometries that were invalid, via sf::st_m…
 ```
 
 The manifest is current as long as the files only change through `upload_parquet()`, `data_to_parquet()` and `remove_parquet()`, which keep the manifests of the directories they touch and of the directories above up to date. Files changed with other tools are not reflected until `write_manifest()` rebuilds the manifest from a listing; `from_files = TRUE` bypasses the manifest and reads the footers.
@@ -471,21 +439,38 @@ jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE)
 #> }
 ```
 
-`parquet_metadata()` on the directory returns that shared metadata, from the manifest.
+`parquet_metadata()` on the directory returns that shared metadata, from the manifest. The `columns` entry prints as a table of the columns with their labels and descriptions.
 
 
 ``` r
-str(parquet_metadata(profile_url), max.level = 1)
-#> List of 9
-#>  $ title          : chr "2021 Census Profile – Aggregate dissemination areas"
-#>  $ source_url     : chr "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/download-telecharger/comp/GetFile.cfm?La"| __truncated__
-#>  $ reference_guide: chr "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/about-apropos.cfm?Lang=E"
-#>  $ licence        : chr "Statistics Canada Open Licence"
-#>  $ licence_url    : chr "https://www.statcan.gc.ca/en/terms-conditions/open-licence"
-#>  $ attribution    : chr "Statistics Canada Product 98-401-X2021012"
-#>  $ notes          : chr "Symbols: x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be pu"| __truncated__
-#>  $ columns        :List of 15
-#>  $ primary_key    : chr [1:2] "geo_uid" "characteristic_id"
+parquet_metadata(profile_url)
+#> <parquet metadata: 9 entries>
+#> title            2021 Census Profile – Aggregate dissemination areas
+#> source_url       https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof…
+#> reference_guide  https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof…
+#> licence          Statistics Canada Open Licence
+#> licence_url      https://www.statcan.gc.ca/en/terms-conditions/open-licence
+#> attribution      Statistics Canada Product 98-401-X2021012
+#> notes            Symbols: x suppressed to meet the confidentiality requirements…
+#> columns          <15 columns, see below>
+#> primary_key      geo_uid, characteristic_id
+#> 
+#> columns
+#>   geo_uid            Aggregate dissemination area unique identifier
+#>   PRUID              Province or territory unique identifier
+#>   characteristic_id  Characteristic identifier, see profile_characteristics.par…
+#>   total              Count, total
+#>   men                Count, men+
+#>   women              Count, women+
+#>   rate_total         Rate, total
+#>   rate_men           Rate, men+
+#>   rate_women         Rate, women+
+#>   symbol_total       Symbol for the total count
+#>   symbol_men         Symbol for the men+ count
+#>   symbol_women       Symbol for the women+ count
+#>   symbol_rate_total  Symbol for the total rate
+#>   symbol_rate_men    Symbol for the men+ rate
+#>   symbol_rate_women  Symbol for the women+ rate
 ```
 
 `parquet_tbl()` reads the directory as one table, with `PRUID` coming from the paths, and a filter on it only opens the files of the matching partitions. Within a partition the rows are sorted by `characteristic_id`, so a filter on it only downloads the row groups holding that characteristic. The literal is written as `1L`, an integer like the column: a plain `1` is a double in R, which would make DuckDB cast the column instead of using its statistics and download every row group, so the package renders whole numbers in comparisons as integers, with a message the first time, see `?parquet_tbl`.

@@ -43,29 +43,15 @@ This only reads the parquet metadata, the file carries several geographic identi
 ``` r
 db_metadata <- db_table |> parquet_metadata()
 db_metadata[names(db_metadata) != "geometry_repairs"]
-#> $licence
-#> [1] "Statistics Canada Open Licence"
-#> 
-#> $licence_url
-#> [1] "https://www.statcan.gc.ca/en/terms-conditions/open-licence"
-#> 
-#> $title
-#> [1] "2021 Census – Boundary files - Dissemination blocks"
-#> 
-#> $attribution
-#> [1] "Statistics Canada Product ldb_000b21f_e"
-#> 
-#> $processing
-#> [1] "Repaired 830 of 498,547 geometries that were invalid, via sf::st_make_valid (GEOS 3.13.0), keeping multi geometry types. The repaired rows are listed in geometry_repairs by DBUID."
-#> 
-#> $primary_key
-#> [1] "DBUID"
-#> 
-#> $source_url
-#> [1] "https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=ldb_000b21f_e.zip&k=%20%20%20248570&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/ldb_000b21f_e.zip"
-#> 
-#> $reference_guide
-#> [1] "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21"
+#> <parquet metadata: 8 entries>
+#> licence          Statistics Canada Open Licence
+#> licence_url      https://www.statcan.gc.ca/en/terms-conditions/open-licence
+#> title            2021 Census – Boundary files - Dissemination blocks
+#> attribution      Statistics Canada Product ldb_000b21f_e
+#> processing       Repaired 830 of 498,547 geometries that were invalid, via sf::…
+#> primary_key      DBUID
+#> source_url       https://www12.statcan.gc.ca/census-recensement/alternative_alt…
+#> reference_guide  https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/gu…
 ```
 
 A simple query would be to fetch the data for just the City of Vancouver.
