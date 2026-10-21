@@ -17,116 +17,161 @@ data_to_parquet(
 )
 }
 \arguments{
-\item{data}{data frame, sf object or lazy DuckDB table}
+\item{data}{data frame, sf object or lazy DuckDB table.}
 
-\item{path}{local path or `r2://bucket/path` of the parquet file to write, or of the directory if `partition_by`
-is given. A parquet file on R2 has to end in `.parquet`. Existing files at that path get overwritten.}
+\item{path}{local path, \verb{r2://bucket/path} or \verb{s3://bucket/path} of the parquet file, or of the directory
+with \code{partition_by}. A file in a bucket has to end in \code{.parquet}. Existing files get overwritten.}
 
-\item{sort_by}{optional vector of column names to sort by, for spatial data before sorting spatially}
+\item{sort_by}{column names to sort by, optional. Spatial data gets sorted spatially after these.}
 
-\item{partition_by}{optional vector of column names to partition by}
+\item{partition_by}{column names to partition by, optional; \code{path} is then a directory.}
 
-\item{row_group_size}{number of rows per row group, rounded up to a multiple of 2048 by DuckDB, default is 10000}
+\item{row_group_size}{rows per row group, default \code{10000}, rounded up to a multiple of 2048 by DuckDB.}
 
-\item{remove_stale}{if `TRUE`, the default, parquet files in hive partition directories (`key=value`) below an
-existing directory at `path` get removed first, so that no partitions from earlier writes remain, also if the
-partition columns changed. Other files below `path` are kept. With `FALSE` written files replace files with the
-same path and other files are kept, e.g. to add partitions. Files at the paths being written always get replaced.}
+\item{remove_stale}{what happens to the files of an existing directory at \code{path}:
+\itemize{
+\item \code{TRUE} (default): parquet files in hive partition directories (\code{key=value}) get removed first, so no
+partitions of earlier writes remain, also if the partition columns changed. Other files are kept.
+\item \code{FALSE}: existing files are kept and only the files at the paths being written get replaced, e.g. to
+add partitions.
+}}
 
-\item{metadata}{optional named list of metadata to write into the parquet footer, see description. The entry
-`geo` is reserved for the GeoParquet metadata. `list()` writes none without the warning about the metadata of
-the source.}
+\item{metadata}{named list of metadata to write into the parquet footer, see the Metadata section.
+\itemize{
+\item \code{NULL} (default): none of the source's metadata, with a warning if the source has any.
+\item \code{list()}: none, without the warning.
+}}
 
-\item{compression}{parquet compression codec, `"zstd"` (the default), `"snappy"`, `"gzip"`, `"brotli"`,
-`"lz4"`, `"lz4_raw"` or `"uncompressed"`. zstd compresses well and decompresses fast, which suits files
+\item{compression}{parquet compression codec: \code{"zstd"} (default), \code{"snappy"}, \code{"gzip"}, \code{"brotli"},
+\code{"lz4"}, \code{"lz4_raw"} or \code{"uncompressed"}. zstd compresses well and decompresses fast, which suits files
 that get read remotely.}
 
-\item{purge_cache}{if `TRUE`, the default, purge the changed files from the Cloudflare cache of custom domains
-of the bucket when writing to R2, like `upload_parquet`. Ignored for local paths.}
+\item{purge_cache}{\code{TRUE} (default) or \code{FALSE}: purge the changed files from the Cloudflare cache of the
+bucket's custom domains when writing to R2, like \code{\link[=upload_parquet]{upload_parquet()}}. Ignored for S3 and local paths.}
 }
 \value{
-(invisibly) `path`, normalized to `r2://bucket/path` for R2, ready to be passed to `parquet_tbl`,
-with the parquet files that were written, local paths or `r2://bucket/path`, in the `files` attribute
+(invisibly) \code{path}, normalized to \verb{r2://bucket/path} or \verb{s3://bucket/path} for buckets, ready for
+\code{\link[=parquet_tbl]{parquet_tbl()}}, with the written files (local paths or bucket paths) in the \code{files} attribute.
 }
 \description{
-Writes a data frame, an sf object or a lazy DuckDB table to a parquet file, or to a directory of
-hive partitioned parquet files if `partition_by` is given, locally or on R2 as `r2://bucket/path`. Rows get sorted by the `sort_by` columns,
-so that the row group statistics of these columns are selective and filters on them only read the
-row groups they need when reading remotely.
-
-sf objects get written as GeoParquet 2.0 using the native parquet GEOMETRY type, which stores the crs with
-the column and a bounding box per row group. After the `sort_by` columns, rows get sorted along a Hilbert curve
-so that each row group covers a compact area and spatial filters can skip row groups based on their bounding
-box, see `sf::st_filter` on lazy tables. Invalid geometries get fixed via `sf::st_make_valid`, keeping multi geometries multi,
-and the geometry column is always named `geometry`, following the GeoParquet convention, independent of its
-name in `data`. Both emit a message when they change the data. Repairs also get recorded in the metadata: a
-`processing` entry says how many geometries were repaired and with which version of GEOS (or s2 for
-geographic coordinates), and a `geometry_repairs` entry lists the repaired rows by their primary key, as an
-object with `columns`, the key columns, and `rows`, an array of key values per repaired row, up to 1000 rows. Without a declared primary key the
-rows get listed by the first column or a column whose name ends in `ID` if one of these identifies the rows,
-otherwise only the number gets recorded, with a warning. Entries given in `metadata` are kept; repair the
-geometries before writing to avoid both.
-
-Lazy DuckDB tables, e.g. from `parquet_tbl` after filtering, get written by DuckDB directly
-without collecting the data into R. Tables with GEOMETRY columns get written as GeoParquet in the same way,
-sorted by their first GEOMETRY column (or the one named `geometry`) and without repairing invalid geometries.
-The extent of the Hilbert curve gets computed in a separate query first, so the source gets scanned twice,
-and a remote source downloads its geometry twice. Empty geometries sort last.
-
-Row groups are what readers can skip, so their size balances selectivity of filters against the size of the
-file metadata. DuckDB writes row groups in multiples of 2048 rows, smaller values of `row_group_size` result in
-row groups of 2048 rows, so data with fewer rows ends up in a single row group and filters can't skip any part of it.
-
-With `partition_by`, `path` is a directory that gets one subdirectory per value, like `year=2021/data_0.parquet`.
-The partition values are only stored in the directory names, readers recover them from there with hive partitioning,
-DuckDB keeps string values like `"001"` as strings. Partitioned files get written single threaded, as multi
-threaded writes don't keep the sort order within partitions. They get written to a new directory next to
-`path` first and moved into place once complete, so a dataset can be rewritten from a lazy table reading it,
-and a failed write leaves the existing files as they were. A file at `path` gets replaced by the directory.
-
-Destinations on R2 get written to a temporary directory and uploaded via `upload_parquet`. The bucket has to
-exist, use `create_r2_bucket` to create it. Each file is uploaded in a single request from memory, so the
-files have to fit into memory and stay below 5 GB each, partition large data with `partition_by`. A directory
-of partitioned files may be named like a
-parquet file, `parquet_tbl` tells files and directories apart. Stale files get removed before the new ones
-are uploaded, so readers of a partitioned dataset may see it incomplete while the upload runs. Changed files
-get purged from the Cloudflare cache like in `upload_parquet`, unless `purge_cache` is `FALSE`. Partitioned
-writes to R2 write a manifest of the directory, and all writes update the existing manifests of the
-directories above the destination, see `upload_parquet`, which also describes what happens when a manifest
-can't be updated.
-
-`metadata` gets written into the footer of the parquet files, where other tools can read it too (DuckDB's
-`parquet_kv_metadata`, arrow's schema metadata), and `parquet_metadata` reads it back. `collect_parquet`
-attaches it to the collected data, so for consistency use entries like `source` (URL of the original data),
-`license`, `notes` and `description`, and a `columns` entry with one entry per column holding its `label` and
-`description`, e.g. `columns = list(pop = list(label = "Population", description = "..."))`; a string is
-short for the label. Columns of data frames with a `label` attribute, as set by the haven or labelled
-packages, get their label added automatically. Parquet footers hold strings, so single values get written
-as they are and anything else, like `columns`, as JSON; `NULL` and `NA` entries get dropped with a warning.
-Changing the metadata means writing the data again.
-
-Metadata doesn't get carried over by itself, data read from parquet files describes something else once it
-got changed. Without `metadata`, writing a lazy table from `parquet_tbl` (the files of the left-hand table
-for joins) or data collected with `collect_parquet` warns when the files it was read from have metadata. Pass
-`metadata = parquet_metadata(data)` to write it again, `modifyList(parquet_metadata(data), list(...))` to
-change entries (a `NULL` drops one), or `metadata = list()` to write none. Metadata read with
-`parquet_metadata` describes the source, so its `columns` entries for columns the data no longer has get
-dropped, and repaired geometries replace its `processing` and `geometry_repairs` entries. A `primary_key`
-gets checked like any other.
-
-A `primary_key` entry declares the columns that together identify the rows, one column like `"DBUID"` or
-several for long tables, like `c("DAUID", "characteristic")`. The columns have to exist, have no missing
-values and identify the rows, which gets checked before writing, at the cost of an extra pass over a lazy
-table. It gets written as a JSON array, also for a single column, and is how repaired geometries get listed.
+Writes a data frame, an sf object or a lazy DuckDB table to a parquet file, or to a directory of hive
+partitioned parquet files, locally, on R2 as \verb{r2://bucket/path} or on S3 as \verb{s3://bucket/path}. Rows get
+sorted so that filters on the \code{sort_by} columns, and spatial filters on sf data, only read the row groups
+they need. Lazy tables get written by DuckDB directly, without collecting the data into R.
 }
+\section{Spatial data}{
+sf objects get written as GeoParquet 2.0 with the native parquet GEOMETRY type, which stores the crs with
+the column and a bounding box per row group. After the \code{sort_by} columns, rows get sorted along a Hilbert
+curve so that each row group covers a compact area and \code{\link[=st_filter.tbl_duckdb_connection]{sf::st_filter()}}
+on lazy tables can skip row groups. The geometry column is always named \code{geometry}, following the
+GeoParquet convention.
+
+Invalid geometries get fixed via \code{\link[sf:st_make_valid]{sf::st_make_valid()}}, keeping multi geometries multi, with a message, and
+the repairs get recorded in the metadata:
+\itemize{
+\item \code{processing}: how many geometries were repaired, and with which version of GEOS (or s2 for geographic
+coordinates).
+\item \code{geometry_repairs}: the repaired rows, up to 1000, as an object with \code{columns}, the key columns, and
+\code{rows}, the key values per row. The key is the declared \code{primary_key}, or else the first column or a
+column ending in \code{ID} if it identifies the rows; otherwise only the count gets recorded, with a warning.
+}
+
+Entries given in \code{metadata} are kept; repair the geometries before writing to avoid both.
+
+Lazy tables with GEOMETRY columns get written as GeoParquet too, sorted by the column named \code{geometry} or
+else the first GEOMETRY column, without repairing geometries. The extent of the Hilbert curve gets computed
+in a separate query, so the source gets scanned twice, and a remote source downloads its geometry twice.
+Empty geometries sort last.
+}
+
+\section{Row groups}{
+Row groups are what readers can skip, so their size balances the selectivity of filters against the size
+of the file metadata. DuckDB writes row groups in multiples of 2048 rows, so data with fewer rows ends up in
+a single row group and filters can't skip any part of it.
+}
+
+\section{Partitioning}{
+With \code{partition_by}, \code{path} is a directory with one subdirectory per value, like
+\code{year=2021/data_0.parquet}. The partition values are only stored in the directory names, readers recover
+them with hive partitioning, DuckDB as strings (\code{"001"} stays \code{"001"}). Partitioned files get written single
+threaded, since multi threaded writes don't keep the sort order within partitions. They get written to a new
+directory next to \code{path} first and moved into place once complete, so a dataset can be rewritten from a lazy
+table reading it, and a failed write leaves the existing files as they were. A file at \code{path} gets replaced
+by the directory.
+}
+
+\section{Writing to R2 and S3}{
+Destinations in buckets get written to a temporary directory and uploaded via \code{\link[=upload_parquet]{upload_parquet()}}, into a bucket
+that has to exist (see \code{\link[=create_r2_bucket]{create_r2_bucket()}}). Each file goes up in a single request from memory, so files have
+to fit into memory and stay below 5 GB; partition large data with \code{partition_by}. A partitioned directory may
+be named like a parquet file, \code{\link[=parquet_tbl]{parquet_tbl()}} tells files and directories apart. Stale files get removed before
+the upload, so readers may see a partitioned dataset incomplete while it runs. Changed files get purged from
+the Cloudflare cache (R2 only) unless \code{purge_cache = FALSE}. Partitioned writes write a manifest of the
+directory, and all writes update the existing manifests of the directories above the destination, see
+\code{\link[=upload_parquet]{upload_parquet()}}.
+}
+
+\section{Metadata}{
+\code{metadata} gets written into the parquet footer, where other tools can read it too (DuckDB's
+\code{parquet_kv_metadata}, arrow's schema metadata). \code{\link[=parquet_metadata]{parquet_metadata()}} reads it back and \code{\link[=collect_parquet]{collect_parquet()}}
+attaches it to collected data. Conventional entries:
+\itemize{
+\item \code{source} (URL of the original data), \code{license}, \code{notes} and \code{description}.
+\item \code{columns}: a \code{label} and \code{description} per column, e.g.
+\code{columns = list(pop = list(label = "Population", description = "..."))}; a string is short for the label.
+\code{label} attributes of data frame columns, as set by the haven or labelled packages, get added
+automatically.
+\item \code{primary_key}: the columns that together identify the rows, one like \code{"DBUID"} or several for long
+tables, like \code{c("DAUID", "characteristic")}. They have to exist, have no missing values and identify the
+rows, which gets checked before writing, at the cost of an extra pass over a lazy table. It gets written
+as a JSON array, and is how repaired geometries get listed.
+\item \code{geo} is reserved for the GeoParquet metadata.
+}
+
+Single values get written as strings, anything else as JSON; \code{NULL} and \code{NA} entries get dropped with a
+warning. Changing the metadata means writing the data again.
+
+Metadata doesn't get carried over by itself, since data read from parquet files describes something else
+once it got changed. With \code{metadata = NULL}, writing a lazy table from \code{\link[=parquet_tbl]{parquet_tbl()}} (the files of the
+left-hand table for joins) or data collected with \code{\link[=collect_parquet]{collect_parquet()}} warns when the files it was read from
+have metadata:
+\itemize{
+\item \code{metadata = parquet_metadata(data)} writes it again;
+\item \code{metadata = modifyList(parquet_metadata(data), list(...))} changes entries (a \code{NULL} drops one);
+\item \code{metadata = list()} writes none.
+}
+
+Metadata read with \code{\link[=parquet_metadata]{parquet_metadata()}} describes the source, so its \code{columns} entries for columns the data
+no longer has get dropped, and repaired geometries replace its \code{processing} and \code{geometry_repairs} entries.
+A \code{primary_key} gets checked like any other.
+}
+
 \section{Credentials}{
 
-Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
-R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
-no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
-that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
-an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
-set.
+Credentials come from environment variables, e.g. set in \code{.Renviron}, read at call time. Public URLs and
+local paths need none.
+
+Paths on R2 (\verb{r2://bucket/path}):
+\itemize{
+\item \code{R2_ACCOUNT_ID}: the R2 account id.
+\item \code{R2_ACCESS_KEY_ID} and \code{R2_SECRET_ACCESS_KEY}: the access key id and secret access key of an R2 API
+token with access to the bucket.
+\item \code{R2_API_TOKEN}, optional: the value of an API token with Zone Cache Purge permission (see
+\code{\link[=create_r2_bucket]{create_r2_bucket()}}). Files that change on R2 then get purged from the Cloudflare cache of the bucket's
+custom domains, so that the new versions are served right away; the purge is skipped without it.
+}
+
+Paths on S3 (\verb{s3://bucket/path}), on Amazon S3 or another S3 compatible service like MinIO, use the
+variables AWS tools use:
+\itemize{
+\item \code{AWS_ACCESS_KEY_ID} and \code{AWS_SECRET_ACCESS_KEY}, and \code{AWS_SESSION_TOKEN} for temporary credentials.
+\item \code{AWS_REGION} or \code{AWS_DEFAULT_REGION}: the region, default \code{us-east-1}.
+\item \code{AWS_ENDPOINT_URL_S3} or \code{AWS_ENDPOINT_URL}: the endpoint of other S3 compatible services, like
+\verb{http://localhost:9000}, which get addressed with path style URLs (\code{endpoint/bucket/key}).
+\item \code{R2PARQUET_S3_URL_STYLE}: \code{path} or \code{vhost}, overrides the URL style.
+}
+
+AWS profiles and single sign-on are not read, \verb{aws configure export-credentials --format env} prints the
+variables for them.
 }
 

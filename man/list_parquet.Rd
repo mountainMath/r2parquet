@@ -16,34 +16,64 @@ list_parquet(x)
 \method{list_parquet}{default}(x)
 }
 \arguments{
-\item{x}{`r2://bucket/path`, URL or local path of a parquet file or of a directory with (partitioned)
-parquet files, a vector of these, or a lazy DuckDB table from `parquet_tbl`}
+\item{x}{what to list:
+\itemize{
+\item \verb{r2://bucket/path}, \verb{s3://bucket/path}, URL or local path of a parquet file or of a directory of
+(partitioned) parquet files, or a vector of these;
+\item a lazy DuckDB table from \code{\link[=parquet_tbl]{parquet_tbl()}}.
+}}
 }
 \value{
-a tibble with one row per parquet file and the columns `file`, the file name, `size`, formatted for
-reading like `2.5 kB`, `sizeRaw`, the size in bytes, `modified`, the modification time in UTC, `cache`, the
-status of the file in the local cache directory of `cache_parquet`: `"not cached"`, `"current"` when the
-cached copy has the etag of the file, `"stale"` when it does not, and `NA` for local files and where the
-etag of the file is unknown, `etag`, the etag of the file, which is the MD5 hash of its content for files
-uploaded by this package, `NA` for local files, and `path`, the `r2://bucket/path`, URL or local path
+a tibble with one row per parquet file and the columns
+\itemize{
+\item \code{file}: the file name;
+\item \code{size}: the size formatted for reading, like \verb{2.5 kB};
+\item \code{sizeRaw}: the size in bytes;
+\item \code{modified}: the modification time in UTC;
+\item \code{cache}: the status of the copy in the local cache directory of \code{\link[=cache_parquet]{cache_parquet()}}: \code{"not cached"},
+\code{"current"} when the copy has the etag of the file, \code{"stale"} when it does not, and \code{NA} for local
+files and where the etag is unknown;
+\item \code{etag}: the etag of the file, the MD5 hash of its content for files uploaded by this package, \code{NA} for
+local files;
+\item \code{path}: the \verb{r2://bucket/path}, \verb{s3://bucket/path}, URL or local path.
+}
 }
 \description{
-Lists the parquet files at paths on R2, at URLs or at local paths with their size, modification time and
-etag, and whether the local cache holds a current copy, or the files a lazy table from `parquet_tbl` reads.
-Directories get listed recursively, so a directory of (partitioned) parquet files lists all the parquet
-files in it, and a path that does not exist lists nothing.
-Files at URLs, including presigned URLs, get their size and etag from a request for their
-first byte, directories at URLs from the manifest next to the files (see `upload_parquet`). A URL with
-neither, or one that can't be reached, is listed as it is with `NA`s.
+Lists the parquet files at paths on R2 or S3, at URLs or at local paths, or the files a lazy table from
+\code{\link[=parquet_tbl]{parquet_tbl()}} reads, with their size, modification time and etag, and whether the local cache holds a
+current copy. Directories get listed recursively, a path that does not exist lists nothing.
+}
+\details{
+Files at URLs, including presigned URLs, get their size and etag from a request for their first byte,
+directories at URLs from the manifest next to the files (see \code{\link[=upload_parquet]{upload_parquet()}}). A URL with neither, or one
+that can't be reached, is listed as it is with \code{NA}s.
 }
 \section{Credentials}{
 
-Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
-R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
-no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
-that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
-an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
-set.
+Credentials come from environment variables, e.g. set in \code{.Renviron}, read at call time. Public URLs and
+local paths need none.
+
+Paths on R2 (\verb{r2://bucket/path}):
+\itemize{
+\item \code{R2_ACCOUNT_ID}: the R2 account id.
+\item \code{R2_ACCESS_KEY_ID} and \code{R2_SECRET_ACCESS_KEY}: the access key id and secret access key of an R2 API
+token with access to the bucket.
+\item \code{R2_API_TOKEN}, optional: the value of an API token with Zone Cache Purge permission (see
+\code{\link[=create_r2_bucket]{create_r2_bucket()}}). Files that change on R2 then get purged from the Cloudflare cache of the bucket's
+custom domains, so that the new versions are served right away; the purge is skipped without it.
+}
+
+Paths on S3 (\verb{s3://bucket/path}), on Amazon S3 or another S3 compatible service like MinIO, use the
+variables AWS tools use:
+\itemize{
+\item \code{AWS_ACCESS_KEY_ID} and \code{AWS_SECRET_ACCESS_KEY}, and \code{AWS_SESSION_TOKEN} for temporary credentials.
+\item \code{AWS_REGION} or \code{AWS_DEFAULT_REGION}: the region, default \code{us-east-1}.
+\item \code{AWS_ENDPOINT_URL_S3} or \code{AWS_ENDPOINT_URL}: the endpoint of other S3 compatible services, like
+\verb{http://localhost:9000}, which get addressed with path style URLs (\code{endpoint/bucket/key}).
+\item \code{R2PARQUET_S3_URL_STYLE}: \code{path} or \code{vhost}, overrides the URL style.
+}
+
+AWS profiles and single sign-on are not read, \verb{aws configure export-credentials --format env} prints the
+variables for them.
 }
 

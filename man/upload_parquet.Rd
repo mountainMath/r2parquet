@@ -2,71 +2,105 @@
 % Please edit documentation in R/r2.R
 \name{upload_parquet}
 \alias{upload_parquet}
-\title{transfer files to Cloudflare R2}
+\title{transfer files to Cloudflare R2 or S3}
 \usage{
 upload_parquet(path, destination, purge_cache = TRUE, remove_stale = FALSE)
 }
 \arguments{
-\item{path}{path to a local file, or to a directory with (partitioned) parquet files}
+\item{path}{local file, or directory of (partitioned) parquet files.}
 
-\item{destination}{destination on R2 as `r2://bucket/path`. If `path` is a file and `destination` ends with a slash (`/`)
-or is just the bucket, the basename of `path` gets appended. If `path` is a directory, `destination` is the directory
-under which the content of the directory gets placed, and has to be a directory in the bucket, not the bucket itself.}
+\item{destination}{destination as \verb{r2://bucket/path} or \verb{s3://bucket/path}:
+\itemize{
+\item for a file: the path of the file, or with a trailing slash (\code{/}), or just the bucket, the directory it
+goes into under its basename;
+\item for a directory: the directory its content goes into, which has to be a directory in the bucket, not
+the bucket itself.
+}}
 
-\item{purge_cache}{if `TRUE`, the default, purge the uploaded files from the Cloudflare cache of custom domains of the bucket}
+\item{purge_cache}{\code{TRUE} (default) or \code{FALSE}: purge the uploaded files from the Cloudflare cache of the
+bucket's custom domains. Ignored for S3.}
 
-\item{remove_stale}{if `TRUE`, and `path` is a directory, remove the parquet files below `destination` on R2 that
-are not in the directory, so that the destination mirrors the directory after the upload, e.g. when a dataset
-got rebuilt without a partition or file. The default `FALSE` leaves them in place. The files are removed before
-the upload, other files in the directory and files above `destination` are never touched; manifests of
-directories below `destination` lose the removed files, and go when nothing is left}
+\item{remove_stale}{what happens to parquet files below \code{destination} that are not in the uploaded
+directory:
+\itemize{
+\item \code{FALSE} (default): they are left in place.
+\item \code{TRUE}: they get removed before the upload, so that the destination mirrors the directory, e.g. when a
+dataset got rebuilt without a partition or file. Other files in the directory and files above
+\code{destination} are never touched; manifests of directories below \code{destination} lose the removed files,
+and go when nothing is left.
+}}
 }
 \value{
-(invisibly) the uploaded files as `r2://bucket/path`
+(invisibly) the uploaded files as \verb{r2://bucket/path} or \verb{s3://bucket/path}.
 }
 \description{
-Uploads a single file, or all parquet files in a directory of (partitioned) parquet files, keeping the
-directory structure. The bucket has to exist, use `create_r2_bucket` to create it. File names with `*`, `?`
-or `[` are refused, since DuckDB reads them as patterns when the files are queried. Each file goes up in a
-single request and is read into memory for that, so a file has to fit into memory, and the 5 GB limit of
-single requests on R2 applies; split larger data into partitions with `data_to_parquet`.
+Uploads a single file, or all parquet files in a directory of (partitioned) parquet files keeping the
+directory structure, to a bucket that has to exist (see \code{\link[=create_r2_bucket]{create_r2_bucket()}}). Directory uploads write a
+manifest (\verb{_manifest.json}), and all uploads keep the existing manifests of the dataset current.
+}
+\details{
+Each file goes up in a single request and is read into memory for that, so a file has to fit into memory,
+and the 5 GB limit of single requests applies; split larger data into partitions with
+\code{\link[=data_to_parquet]{data_to_parquet()}}. File names with \code{*}, \verb{?} or \code{[} are refused, since DuckDB reads them as patterns when the
+files are queried. If an R2 bucket is served via a custom domain, the uploaded files get purged from the
+Cloudflare cache, see the Credentials section.
 
 A single file can be of any type, like a JSON index or a README that gets published next to a dataset. It
-goes up with the content type for its extension (`application/json` for `.json`, `application/geo+json` for
-`.geojson`, `text/csv` for `.csv`, and so on, as `mime::guess_type` guesses it), so that browsers and other
-clients handle it correctly; parquet files and files with unknown extensions are sent as
-`application/octet-stream`. `remove_parquet` removes such files again. `_manifest.json` files are reserved
-for the manifests described below and can't be uploaded, use `write_manifest` to write them.
-
-If the bucket is served via a custom domain, the uploaded files get purged from the Cloudflare cache, see
-the Credentials section.
-
-Directory uploads write a manifest, a `_manifest.json` file in the destination directory listing the parquet
-files below it with their size, etag and modification time and the metadata in their footers, see
-`write_manifest` for the format. The manifest lets `cache_parquet` and `parquet_tbl(cache = TRUE)` cache the
-directory from a public URL, where the files can't be listed, and lets other clients read the dataset's
-metadata without parquet footers. The manifest of the destination is built from a listing of the directory, so it
-also repairs a manifest that fell behind. Since a manifest lists all parquet files below its directory, uploads
-also update the existing manifests of the directories above the destination, and directory uploads those of the
-directories below it, so that uploading a single file or a new partition into a dataset keeps the dataset's
-manifest current. These manifests get patched from what they record, without listing their directories: the
-uploaded and removed files are swapped in and out, everything else stays as recorded, and the metadata of the
-uploaded parquet files is read from the local files. `write_manifest` rebuilds a manifest from a listing when
-files were changed by other means. Manifests are written conditionally, so that an upload running at the same
-time can't overwrite an update, and the update starts over from the current manifest when that happens; the
-upload warns, after the files are up, when a manifest could not be updated this way. Uploading a single file
-never creates a manifest, and a directory can't be uploaded to the root of the bucket, since its manifest would
-list the whole bucket and `remove_stale` would empty it: upload it into a directory, `write_manifest` writes a
-manifest of a whole bucket on request.
+goes up with the content type for its extension, as \code{\link[mime:guess_type]{mime::guess_type()}} guesses it (\code{application/json} for
+\code{.json}, \code{text/csv} for \code{.csv}, and so on), so that browsers and other clients handle it correctly; parquet
+files and unknown extensions are sent as \code{application/octet-stream}. \code{\link[=remove_parquet]{remove_parquet()}} removes such files
+again. \verb{_manifest.json} files are reserved for manifests and can't be uploaded, use \code{\link[=write_manifest]{write_manifest()}} to
+write them.
 }
+\section{Manifests}{
+A manifest lists the parquet files below its directory with their size, etag, modification time and footer
+metadata, see \code{\link[=write_manifest]{write_manifest()}} for the format. It lets \code{\link[=cache_parquet]{cache_parquet()}} and \code{\link[=parquet_tbl]{parquet_tbl()}} read a directory
+from a public URL, where the files can't be listed, and lets other clients read the dataset's metadata
+without the parquet footers.
+\itemize{
+\item The manifest of the destination of a directory upload is built from a listing of the directory, so it also
+repairs a manifest that fell behind.
+\item Since a manifest lists all parquet files below its directory, the existing manifests of the directories
+above the destination get updated too, and for directory uploads those below it, so that uploading a
+single file or a new partition into a dataset keeps its manifest current. These get patched from what
+they record, without listing their directories: the uploaded and removed files are swapped in and out, and
+the metadata of the uploaded files is read from the local files. \code{\link[=write_manifest]{write_manifest()}} rebuilds a manifest from
+a listing when files were changed by other means.
+\item Manifests are written conditionally, so that an upload running at the same time can't overwrite an
+update, and the update starts over from the current manifest when that happens. The upload warns, after
+the files are up, when a manifest could not be updated this way.
+\item Uploading a single file never creates a manifest. A directory can't be uploaded to the root of the
+bucket, since its manifest would list the whole bucket and \code{remove_stale} would empty it;
+\code{\link[=write_manifest]{write_manifest()}} writes a manifest of a whole bucket on request.
+}
+}
+
 \section{Credentials}{
 
-Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
-R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
-no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
-that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
-an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
-set.
+Credentials come from environment variables, e.g. set in \code{.Renviron}, read at call time. Public URLs and
+local paths need none.
+
+Paths on R2 (\verb{r2://bucket/path}):
+\itemize{
+\item \code{R2_ACCOUNT_ID}: the R2 account id.
+\item \code{R2_ACCESS_KEY_ID} and \code{R2_SECRET_ACCESS_KEY}: the access key id and secret access key of an R2 API
+token with access to the bucket.
+\item \code{R2_API_TOKEN}, optional: the value of an API token with Zone Cache Purge permission (see
+\code{\link[=create_r2_bucket]{create_r2_bucket()}}). Files that change on R2 then get purged from the Cloudflare cache of the bucket's
+custom domains, so that the new versions are served right away; the purge is skipped without it.
+}
+
+Paths on S3 (\verb{s3://bucket/path}), on Amazon S3 or another S3 compatible service like MinIO, use the
+variables AWS tools use:
+\itemize{
+\item \code{AWS_ACCESS_KEY_ID} and \code{AWS_SECRET_ACCESS_KEY}, and \code{AWS_SESSION_TOKEN} for temporary credentials.
+\item \code{AWS_REGION} or \code{AWS_DEFAULT_REGION}: the region, default \code{us-east-1}.
+\item \code{AWS_ENDPOINT_URL_S3} or \code{AWS_ENDPOINT_URL}: the endpoint of other S3 compatible services, like
+\verb{http://localhost:9000}, which get addressed with path style URLs (\code{endpoint/bucket/key}).
+\item \code{R2PARQUET_S3_URL_STYLE}: \code{path} or \code{vhost}, overrides the URL style.
+}
+
+AWS profiles and single sign-on are not read, \verb{aws configure export-credentials --format env} prints the
+variables for them.
 }
 

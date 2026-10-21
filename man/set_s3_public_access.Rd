@@ -7,43 +7,68 @@
 set_s3_public_access(path, public = TRUE)
 }
 \arguments{
-\item{path}{prefix in a bucket as `s3://bucket/path`, or just the bucket, `s3://bucket`, for the whole bucket}
+\item{path}{prefix in a bucket as \verb{s3://bucket/path}, or \verb{s3://bucket} for the whole bucket.}
 
-\item{public}{`TRUE`, the default, to make the files below the prefix public, `FALSE` to remove the public
-access this function granted}
+\item{public}{\code{TRUE} (default) to make the files below the prefix public, \code{FALSE} to remove the public
+access this function granted.}
 }
 \value{
-(invisibly) the public URL of the prefix, ending in a slash
+(invisibly) the public URL of the prefix, ending in a slash.
 }
 \description{
 Makes the files below a prefix of a bucket on Amazon S3, or on another S3 compatible service like MinIO,
 publicly readable, or private again, by adding or removing a statement in the bucket policy that grants
-everyone `s3:GetObject` on the objects below the prefix. Whether a file is public is then decided by where it
-gets uploaded: files that `upload_parquet` and `data_to_parquet` write below the prefix are public, files
-elsewhere in the bucket stay private. Public files can be read by anyone at the URL returned, with
-`parquet_tbl`, `cache_parquet` and the other readers, and directories of parquet files are found through their
-manifests, since the policy does not allow listing the bucket. Other statements of the policy are kept.
+everyone \code{s3:GetObject} on the objects below the prefix. Other statements of the policy are kept.
+}
+\details{
+Whether a file is public is then decided by where it gets uploaded: files that \code{\link[=upload_parquet]{upload_parquet()}} and
+\code{\link[=data_to_parquet]{data_to_parquet()}} write below the prefix are public, files elsewhere in the bucket stay private. Public files
+can be read by anyone at the URL returned, with \code{\link[=parquet_tbl]{parquet_tbl()}}, \code{\link[=cache_parquet]{cache_parquet()}} and the other readers, and
+directories of parquet files are found through their manifests, since the policy does not allow listing the
+bucket.
 
-This is the S3 counterpart of `create_r2_bucket`'s public access, which R2 grants per bucket. Per-object ACLs
+This is the S3 counterpart of \code{\link[=create_r2_bucket]{create_r2_bucket()}}'s public access, which R2 grants per bucket. Per-object ACLs
 are not used, they are disabled on buckets created since April 2023, and a public manifest listing private
-files would leak their names and metadata; keep public and private data under separate prefixes, a manifest of
-a directory above both, like one `write_manifest` writes, stays private.
+files would leak their names and metadata; keep public and private data under separate prefixes, a manifest
+of a directory above both, like one \code{\link[=write_manifest]{write_manifest()}} writes, stays private.
 
-The credentials need the `s3:GetBucketPolicy`, `s3:PutBucketPolicy` and `s3:DeleteBucketPolicy`
-permissions. Block Public Access has to allow public bucket policies, for the bucket and for the AWS account;
-the call stops when the bucket's own settings would keep it private.
+Requirements:
+\itemize{
+\item The credentials need the \code{s3:GetBucketPolicy}, \code{s3:PutBucketPolicy} and \code{s3:DeleteBucketPolicy}
+permissions.
+\item Block Public Access has to allow public bucket policies, for the bucket and for the AWS account; the call
+stops when the bucket's own settings would keep it private.
+}
 
-Amazon S3 applies policy changes with a delay, for a few minutes after a call anonymous requests can still get
-403 Forbidden now and then, or succeed after the access has been removed.
+Amazon S3 applies policy changes with a delay, for a few minutes after a call anonymous requests can still
+get 403 Forbidden now and then, or succeed after the access has been removed.
 }
 \section{Credentials}{
 
-Paths on S3 (`s3://bucket/path`) are addressed with the environment variables AWS tools use:
-`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` for temporary credentials, and the region
-in `AWS_REGION` or `AWS_DEFAULT_REGION` (default `us-east-1`). Other S3 compatible services get their
-endpoint, like `http://localhost:9000`, from `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL`, and are addressed
-with path style URLs (`endpoint/bucket/key`); `R2PARQUET_S3_URL_STYLE` (`path` or `vhost`) overrides that.
-AWS profiles and single sign-on are not read, `aws configure export-credentials --format env` prints the
+Credentials come from environment variables, e.g. set in \code{.Renviron}, read at call time. Public URLs and
+local paths need none.
+
+Paths on R2 (\verb{r2://bucket/path}):
+\itemize{
+\item \code{R2_ACCOUNT_ID}: the R2 account id.
+\item \code{R2_ACCESS_KEY_ID} and \code{R2_SECRET_ACCESS_KEY}: the access key id and secret access key of an R2 API
+token with access to the bucket.
+\item \code{R2_API_TOKEN}, optional: the value of an API token with Zone Cache Purge permission (see
+\code{\link[=create_r2_bucket]{create_r2_bucket()}}). Files that change on R2 then get purged from the Cloudflare cache of the bucket's
+custom domains, so that the new versions are served right away; the purge is skipped without it.
+}
+
+Paths on S3 (\verb{s3://bucket/path}), on Amazon S3 or another S3 compatible service like MinIO, use the
+variables AWS tools use:
+\itemize{
+\item \code{AWS_ACCESS_KEY_ID} and \code{AWS_SECRET_ACCESS_KEY}, and \code{AWS_SESSION_TOKEN} for temporary credentials.
+\item \code{AWS_REGION} or \code{AWS_DEFAULT_REGION}: the region, default \code{us-east-1}.
+\item \code{AWS_ENDPOINT_URL_S3} or \code{AWS_ENDPOINT_URL}: the endpoint of other S3 compatible services, like
+\verb{http://localhost:9000}, which get addressed with path style URLs (\code{endpoint/bucket/key}).
+\item \code{R2PARQUET_S3_URL_STYLE}: \code{path} or \code{vhost}, overrides the URL style.
+}
+
+AWS profiles and single sign-on are not read, \verb{aws configure export-credentials --format env} prints the
 variables for them.
 }
 

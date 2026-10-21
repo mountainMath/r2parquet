@@ -67,37 +67,34 @@ s3_public_url <- function(r2_bucket,prefix){
 #' @description
 #' Makes the files below a prefix of a bucket on Amazon S3, or on another S3 compatible service like MinIO,
 #' publicly readable, or private again, by adding or removing a statement in the bucket policy that grants
-#' everyone `s3:GetObject` on the objects below the prefix. Whether a file is public is then decided by where it
-#' gets uploaded: files that `upload_parquet` and `data_to_parquet` write below the prefix are public, files
-#' elsewhere in the bucket stay private. Public files can be read by anyone at the URL returned, with
-#' `parquet_tbl`, `cache_parquet` and the other readers, and directories of parquet files are found through their
-#' manifests, since the policy does not allow listing the bucket. Other statements of the policy are kept.
+#' everyone `s3:GetObject` on the objects below the prefix. Other statements of the policy are kept.
 #'
-#' This is the S3 counterpart of `create_r2_bucket`'s public access, which R2 grants per bucket. Per-object ACLs
+#' @details
+#' Whether a file is public is then decided by where it gets uploaded: files that [upload_parquet()] and
+#' [data_to_parquet()] write below the prefix are public, files elsewhere in the bucket stay private. Public files
+#' can be read by anyone at the URL returned, with [parquet_tbl()], [cache_parquet()] and the other readers, and
+#' directories of parquet files are found through their manifests, since the policy does not allow listing the
+#' bucket.
+#'
+#' This is the S3 counterpart of [create_r2_bucket()]'s public access, which R2 grants per bucket. Per-object ACLs
 #' are not used, they are disabled on buckets created since April 2023, and a public manifest listing private
-#' files would leak their names and metadata; keep public and private data under separate prefixes, a manifest of
-#' a directory above both, like one `write_manifest` writes, stays private.
+#' files would leak their names and metadata; keep public and private data under separate prefixes, a manifest
+#' of a directory above both, like one [write_manifest()] writes, stays private.
 #'
-#' The credentials need the `s3:GetBucketPolicy`, `s3:PutBucketPolicy` and `s3:DeleteBucketPolicy`
-#' permissions. Block Public Access has to allow public bucket policies, for the bucket and for the AWS account;
-#' the call stops when the bucket's own settings would keep it private.
+#' Requirements:
+#' * The credentials need the `s3:GetBucketPolicy`, `s3:PutBucketPolicy` and `s3:DeleteBucketPolicy`
+#'   permissions.
+#' * Block Public Access has to allow public bucket policies, for the bucket and for the AWS account; the call
+#'   stops when the bucket's own settings would keep it private.
 #'
-#' Amazon S3 applies policy changes with a delay, for a few minutes after a call anonymous requests can still get
-#' 403 Forbidden now and then, or succeed after the access has been removed.
+#' Amazon S3 applies policy changes with a delay, for a few minutes after a call anonymous requests can still
+#' get 403 Forbidden now and then, or succeed after the access has been removed.
 #'
-#' @section Credentials:
-#' Paths on S3 (`s3://bucket/path`) are addressed with the environment variables AWS tools use:
-#' `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` for temporary credentials, and the region
-#' in `AWS_REGION` or `AWS_DEFAULT_REGION` (default `us-east-1`). Other S3 compatible services get their
-#' endpoint, like `http://localhost:9000`, from `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL`, and are addressed
-#' with path style URLs (`endpoint/bucket/key`); `R2PARQUET_S3_URL_STYLE` (`path` or `vhost`) overrides that.
-#' AWS profiles and single sign-on are not read, `aws configure export-credentials --format env` prints the
-#' variables for them.
-#'
-#' @param path prefix in a bucket as `s3://bucket/path`, or just the bucket, `s3://bucket`, for the whole bucket
-#' @param public `TRUE`, the default, to make the files below the prefix public, `FALSE` to remove the public
-#' access this function granted
-#' @return (invisibly) the public URL of the prefix, ending in a slash
+#' @inheritSection upload_parquet Credentials
+#' @param path prefix in a bucket as `s3://bucket/path`, or `s3://bucket` for the whole bucket.
+#' @param public `TRUE` (default) to make the files below the prefix public, `FALSE` to remove the public
+#'   access this function granted.
+#' @return (invisibly) the public URL of the prefix, ending in a slash.
 #' @export
 set_s3_public_access <- function(path,public=TRUE){
   if (!is.character(path) || length(path)!=1 || !startsWith(path,"s3://")) {

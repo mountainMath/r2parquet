@@ -2,64 +2,92 @@
 % Please edit documentation in R/r2.R
 \name{write_manifest}
 \alias{write_manifest}
-\title{write manifests for directories of parquet files on Cloudflare R2}
+\title{write manifests for directories of parquet files on Cloudflare R2 or S3}
 \usage{
 write_manifest(path, purge_cache = TRUE)
 }
 \arguments{
-\item{path}{directory with (partitioned) parquet files on R2 as `r2://bucket/path`, or a vector of these}
+\item{path}{directory of (partitioned) parquet files as \verb{r2://bucket/path} or \verb{s3://bucket/path}, or a
+vector of these.}
 
-\item{purge_cache}{if `TRUE`, the default, purge the manifests from the Cloudflare cache of custom domains of the bucket}
+\item{purge_cache}{\code{TRUE} (default) or \code{FALSE}: purge the manifests from the Cloudflare cache of the
+bucket's custom domains. Ignored for S3.}
 }
 \value{
-(invisibly) the manifests as `r2://bucket/path/_manifest.json`
+(invisibly) the manifests as \verb{r2://bucket/path/_manifest.json} or the \verb{s3://} equivalent.
 }
 \description{
-Writes a `_manifest.json` file into directories on R2, listing the parquet files below the directory with
-their size, etag and modification time and the metadata in their footers. `upload_parquet` and
-`data_to_parquet` write manifests for the directories they upload, this writes them for directories uploaded
-before, and rebuilds the manifest of a directory from a listing when it fell behind, e.g. after files were
-changed with other tools, after an upload or removal warned that a manifest could not be updated, or after a
-manifest was removed. Manifests let `cache_parquet` and `parquet_tbl(cache = TRUE)` cache a directory from its
+Writes a \verb{_manifest.json} file into directories on R2 or S3, listing the parquet files below the directory with
+their size, etag, modification time and footer metadata. For directories uploaded before, and to rebuild
+the manifest of a directory that fell behind.
+}
+\details{
+\code{\link[=upload_parquet]{upload_parquet()}} and \code{\link[=data_to_parquet]{data_to_parquet()}} write manifests for the directories they upload. A manifest falls
+behind after files were changed with other tools, after an upload or removal warned that it could not be
+updated, or after it was removed. Manifests let \code{\link[=cache_parquet]{cache_parquet()}} and \code{\link[=parquet_tbl]{parquet_tbl()}} read a directory from its
 public URL, since directories can't be listed over https, and let clients other than R read what a dataset
-holds. The manifest gets purged from the Cloudflare cache of the bucket's custom domains like `upload_parquet`
-does. `write_manifest("r2://bucket")` writes a manifest of the
-whole bucket at its root, which uploads and removals anywhere in the bucket then keep current.
+holds. On R2 the manifest gets purged from the Cloudflare cache of the bucket's custom domains like
+\code{\link[=upload_parquet]{upload_parquet()}} does. \code{write_manifest("r2://bucket")} writes a manifest of the whole bucket at its root,
+which uploads and removals anywhere in the bucket then keep current.
 
-The metadata comes from the parquet footers, as `parquet_metadata` reads it. Files that an existing manifest
-lists with the same etag keep the metadata recorded there, the footers of all other files get read from R2,
-which costs a request or two per file, so writing the manifest of a large directory for the first time takes
-a moment. The manifest is written conditionally, like `upload_parquet` writes them, and the call fails if it
-keeps changing underneath, e.g. because of uploads running at the same time.
+The metadata comes from the parquet footers, as \code{\link[=parquet_metadata]{parquet_metadata()}} reads it. Files that an existing manifest
+lists with the same etag keep the metadata recorded there, the footers of all other files get read from the
+bucket, which costs a request or two per file, so writing the manifest of a large directory for the first
+time takes a moment. The manifest is written conditionally, like \code{\link[=upload_parquet]{upload_parquet()}} writes them, and the
+call fails if it keeps changing underneath, e.g. because of uploads running at the same time.
 }
 \section{Manifest format}{
 
 A manifest is a JSON object with three members:
-* `directory`, `true` for the manifests on R2, which list every parquet file below their directory;
-* `metadata`, an object with the metadata entries that all files share, with identical values, the dataset's
-  metadata, which is what `parquet_metadata` returns for the directory. The entries are the ones
-  `data_to_parquet(metadata = )` wrote, `columns` included; the GeoParquet entry `geo` is left out;
-* `files`, an array with one object per parquet file, listed in the order of their keys: `path`, relative to the
-  manifest's directory; `size` in bytes; `etag`, for files uploaded by this package the MD5 hash of the file in
-  hex, which is what R2 assigns to single request uploads; `modified`, the modification time in UTC as
-  `YYYY-MM-DDTHH:MM:SSZ`; and `metadata`, an object with the entries of the file's footer that differ from those
-  of other files or that only this file has, left out if there are none. So the column descriptions of a
-  partitioned dataset sit in the manifest's `metadata`, and in a directory holding different datasets with
-  each file.
+\itemize{
+\item \code{directory}: \code{true} for the manifests in buckets, which list every parquet file below their directory.
+\item \code{metadata}: an object with the metadata entries that all files share with identical values, the
+dataset's metadata, which is what \code{\link[=parquet_metadata]{parquet_metadata()}} returns for the directory. The entries are the ones
+\code{data_to_parquet(metadata = )} wrote, \code{columns} included; the GeoParquet entry \code{geo} is left out.
+\item \code{files}: an array with one object per parquet file, in the order of their keys, with
+\itemize{
+\item \code{path}: relative to the manifest's directory;
+\item \code{size}: in bytes;
+\item \code{etag}: for files uploaded by this package the MD5 hash of the file in hex, which is what R2 and S3 assign
+to single request uploads without encryption by KMS or customer keys;
+\item \code{modified}: the modification time in UTC as \code{YYYY-MM-DDTHH:MM:SSZ};
+\item \code{metadata}: an object with the entries of the file's footer that differ from those of other files or
+that only this file has, left out if there are none.
+}
+}
 
-The metadata of a file is the manifest's `metadata` with the file's own `metadata` added. Values are stored
-as `parquet_metadata` returns them, single values as strings and everything else as the JSON objects and
-arrays that `data_to_parquet` wrote.
+The metadata of a file is the manifest's \code{metadata} with the file's own \code{metadata} added. So the column
+descriptions of a partitioned dataset sit in the manifest's \code{metadata}, and in a directory holding
+different datasets with each file. Values are stored as \code{\link[=parquet_metadata]{parquet_metadata()}} returns them, single values as
+strings and everything else as the JSON objects and arrays that \code{\link[=data_to_parquet]{data_to_parquet()}} wrote.
 }
 
 \section{Credentials}{
 
-Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
-R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
-no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
-that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
-an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
-set.
+Credentials come from environment variables, e.g. set in \code{.Renviron}, read at call time. Public URLs and
+local paths need none.
+
+Paths on R2 (\verb{r2://bucket/path}):
+\itemize{
+\item \code{R2_ACCOUNT_ID}: the R2 account id.
+\item \code{R2_ACCESS_KEY_ID} and \code{R2_SECRET_ACCESS_KEY}: the access key id and secret access key of an R2 API
+token with access to the bucket.
+\item \code{R2_API_TOKEN}, optional: the value of an API token with Zone Cache Purge permission (see
+\code{\link[=create_r2_bucket]{create_r2_bucket()}}). Files that change on R2 then get purged from the Cloudflare cache of the bucket's
+custom domains, so that the new versions are served right away; the purge is skipped without it.
+}
+
+Paths on S3 (\verb{s3://bucket/path}), on Amazon S3 or another S3 compatible service like MinIO, use the
+variables AWS tools use:
+\itemize{
+\item \code{AWS_ACCESS_KEY_ID} and \code{AWS_SECRET_ACCESS_KEY}, and \code{AWS_SESSION_TOKEN} for temporary credentials.
+\item \code{AWS_REGION} or \code{AWS_DEFAULT_REGION}: the region, default \code{us-east-1}.
+\item \code{AWS_ENDPOINT_URL_S3} or \code{AWS_ENDPOINT_URL}: the endpoint of other S3 compatible services, like
+\verb{http://localhost:9000}, which get addressed with path style URLs (\code{endpoint/bucket/key}).
+\item \code{R2PARQUET_S3_URL_STYLE}: \code{path} or \code{vhost}, overrides the URL style.
+}
+
+AWS profiles and single sign-on are not read, \verb{aws configure export-credentials --format env} prints the
+variables for them.
 }
 

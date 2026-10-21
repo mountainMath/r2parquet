@@ -24,41 +24,47 @@
 )
 }
 \arguments{
-\item{x}{lazy DuckDB table, e.g. from `parquet_tbl`}
+\item{x}{lazy DuckDB table, e.g. from \code{\link[=parquet_tbl]{parquet_tbl()}}.}
 
-\item{y}{sf, sfc or bbox object to filter by}
+\item{y}{sf, sfc or bbox object to filter by.}
 
-\item{...}{`dist` for `sf::st_is_within_distance`, in the units of the crs or as a units object}
+\item{...}{\code{dist} for \code{\link[sf:st_is_within_distance]{sf::st_is_within_distance()}}, in the units of the crs or as a units object.}
 
-\item{.predicate}{the sf predicate relating the geometry of `x` to `y`, one of `sf::st_intersects` (the default),
-`sf::st_within`, `sf::st_contains`, `sf::st_contains_properly`, `sf::st_covers`, `sf::st_covered_by`,
-`sf::st_touches`, `sf::st_overlaps`, `sf::st_crosses`, `sf::st_equals`, `sf::st_disjoint` and
-`sf::st_is_within_distance`; as for sf objects, rows are kept if the predicate holds for any feature of `y`}
+\item{.predicate}{sf predicate relating the geometry of \code{x} to \code{y}: \code{\link[sf:st_intersects]{sf::st_intersects()}} (default),
+\code{\link[sf:st_within]{sf::st_within()}}, \code{\link[sf:st_contains]{sf::st_contains()}}, \code{\link[sf:st_contains_properly]{sf::st_contains_properly()}}, \code{\link[sf:st_covers]{sf::st_covers()}},
+\code{\link[sf:st_covered_by]{sf::st_covered_by()}}, \code{\link[sf:st_touches]{sf::st_touches()}}, \code{\link[sf:st_overlaps]{sf::st_overlaps()}}, \code{\link[sf:st_crosses]{sf::st_crosses()}}, \code{\link[sf:st_equals]{sf::st_equals()}},
+\code{\link[sf:st_disjoint]{sf::st_disjoint()}} or \code{\link[sf:st_is_within_distance]{sf::st_is_within_distance()}}. As for sf objects, rows are kept if the predicate
+holds for any feature of \code{y}.}
 
-\item{geometry_column}{name of the geometry column, defaults to the column named `geometry`, as in files
-written by `data_to_parquet`, or else the first GEOMETRY column of `x`}
+\item{geometry_column}{name of the geometry column. \code{NULL} (default) takes the column named \code{geometry}, as
+in files written by \code{\link[=data_to_parquet]{data_to_parquet()}}, or else the first GEOMETRY column of \code{x}.}
 
-\item{exact}{if `TRUE`, the default, keep rows for which the predicate holds, otherwise keep rows whose
-bounding box intersects the bounding box of `y` (grown by `dist`), a superset of these rows}
+\item{exact}{which rows to keep:
+\itemize{
+\item \code{TRUE} (default): the rows for which the predicate holds.
+\item \code{FALSE}: the rows whose bounding box intersects the bounding box of \code{y} (grown by \code{dist}), a superset
+of these.
+}}
 }
 \value{
-a lazy `dplyr` table
+a lazy \code{dplyr} table.
 }
 \description{
-The `sf::st_filter` method for lazy DuckDB tables, like the ones from `parquet_tbl`: keeps the rows whose
-geometry relates to `y` by `.predicate`, intersecting it by default, translated to the DuckDB spatial function
-of the same name. Remote GeoParquet files only get read where needed:
-DuckDB skips row groups whose bounding box does not intersect the bounding box of `y`, using the
-statistics of the native GEOMETRY type. This only happens
-for the bounding box comparison, a plain `ST_Intersects` filter downloads the geometry of all rows,
-so the filter first compares bounding boxes and then, if `exact` is `TRUE`, applies the predicate
-to the remaining rows. How much gets skipped depends on the file being sorted spatially, like the files
-written by `data_to_parquet`. `sf::st_disjoint` can't skip anything.
+The \code{\link[sf:st_filter]{sf::st_filter()}} method for lazy DuckDB tables, like the ones from \code{\link[=parquet_tbl]{parquet_tbl()}}: keeps the rows whose
+geometry relates to \code{y} by \code{.predicate}, translated to the DuckDB spatial function of the same name. Remote
+GeoParquet files only get read where needed, by comparing bounding boxes first.
+}
+\details{
+DuckDB skips row groups whose bounding box does not intersect the bounding box of \code{y}, using the statistics
+of the native GEOMETRY type. This only happens for the bounding box comparison, a plain \code{ST_Intersects}
+filter downloads the geometry of all rows, so the filter first compares bounding boxes and then, if \code{exact}
+is \code{TRUE}, applies the predicate to the remaining rows. How much gets skipped depends on the file being
+sorted spatially, like the files written by \code{\link[=data_to_parquet]{data_to_parquet()}}. \code{\link[sf:st_disjoint]{sf::st_disjoint()}} can't skip anything.
 
-Unlike `sf::st_filter` on sf objects, `y` gets transformed to the crs of the geometry column if both have a crs.
-DuckDB treats coordinates as planar, also for longitude/latitude data, where sf uses spherical geometry
-(`sf::sf_use_s2()`), so results can differ near the edges of `y`, and `dist` is in degrees. The filter warns
-about this for longitude/latitude data while `sf::sf_use_s2()` is on.
+Unlike \code{\link[sf:st_filter]{sf::st_filter()}} on sf objects, \code{y} gets transformed to the crs of the geometry column if both have a
+crs. DuckDB treats coordinates as planar, also for longitude/latitude data, where sf uses spherical geometry
+(\code{\link[sf:sf_use_s2]{sf::sf_use_s2()}}), so results can differ near the edges of \code{y}, and \code{dist} is in degrees. The filter warns
+about this for longitude/latitude data while \code{\link[sf:sf_use_s2]{sf::sf_use_s2()}} is on.
 }
 \examples{
 \dontrun{

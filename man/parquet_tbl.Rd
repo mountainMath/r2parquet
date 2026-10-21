@@ -2,86 +2,112 @@
 % Please edit documentation in R/parquet.R
 \name{parquet_tbl}
 \alias{parquet_tbl}
-\title{lazy table to query parquet files at URLs, on R2 or at local paths}
+\title{lazy table to query parquet files at URLs, on R2 or S3, or at local paths}
 \usage{
 parquet_tbl(path, hive_partitioning = TRUE, con = NULL, cache = NULL)
 }
 \arguments{
-\item{path}{URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)
-parquet files, or a vector of these}
+\item{path}{URL, \verb{r2://bucket/path}, \verb{s3://bucket/path} or local path of a parquet file or a directory of
+(partitioned) parquet files, or a vector of these.}
 
-\item{hive_partitioning}{if `TRUE`, the default, partition columns get derived from `key=value` components of the
-file paths. This includes the directories above a single file, reading one file out of a partitioned
-directory, like `data/year=2021/data_0.parquet`, adds a `year` column.}
+\item{hive_partitioning}{\code{TRUE} (default) or \code{FALSE}: derive partition columns from \code{key=value} components
+of the file paths. This includes the directories above a single file, so reading
+\code{data/year=2021/data_0.parquet} adds a \code{year} column.}
 
-\item{con}{DuckDB connection to create the table on. Defaults to `parquet_connection`, the connection shared
-by all calls. Tables can only be joined when they are on the same connection, so pass your own connection to
-join with data that lives there. The `httpfs` and `spatial` extensions get installed and loaded on it as
-needed, and the R2 credentials get registered as a secret.}
+\item{con}{DuckDB connection to create the table on. Tables can only be joined when they are on the same
+connection.
+\itemize{
+\item \code{NULL} (default): \code{\link[=parquet_connection]{parquet_connection()}}, shared by all calls.
+\item a connection of your own, to join with data that lives there. The \code{httpfs} and \code{spatial} extensions
+get installed and loaded on it as needed, and the R2 or S3 credentials get registered as
+secrets.
+}}
 
-\item{cache}{`NULL`, the default, reads the copies in the local cache directory where they exist and are
-current, with a warning for copies that are out of date, and the remote files otherwise. A copy only gets
-checked against the remote files the first time its path is read in the session, later calls reuse the
-result (see `clear_cache_checks`). `TRUE` updates the
-copies first via `cache_parquet`, downloading the files on first use, and reads them. `FALSE` reads the remote
-files directly. `"offline"` reads the copies without checking them against the remote files, whether they are
-current or not, and fails for paths that have no copy. The cache directory is the one in the
-`R2PARQUET_CACHE_PATH` environment variable, or the user cache directory if that is not set.}
+\item{cache}{how to use the local cache (see the Cache section):
+\itemize{
+\item \code{NULL} (default): read the cached copy if it is current, else the remote files, with a warning for
+copies that are out of date. A copy only gets checked the first time its path is read in the session,
+later calls reuse the result (see \code{\link[=clear_cache_checks]{clear_cache_checks()}}).
+\item \code{TRUE}: update the copy first via \code{\link[=cache_parquet]{cache_parquet()}}, downloading the files on first use, and read it.
+\item \code{FALSE}: read the remote files directly.
+\item \code{"offline"}: read the copy without checking it against the remote files, current or not; fails for
+paths without a copy.
+}}
 }
 \value{
-a lazy `dplyr` table on DuckDB
+a lazy \code{dplyr} table on DuckDB.
 }
 \description{
-Lazy table for parquet files at public URLs, like files in public R2 buckets or presigned URLs, in private
-R2 buckets, given as `r2://bucket/path`, or at local paths. No data is downloaded until the query is
-executed, e.g. via `dplyr::collect()`, and only the parts of the files needed to answer the query get read.
-Filters on partition columns restrict which files are read, other filters and the selection of columns
-restrict which parts of the files are downloaded.
-
-Whole numbers in comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, `%in%`, `between`) are rendered as
-integers: a plain number like `2021` is a double in R, which `dplyr` renders as `2021.0`, and DuckDB
-resolves that against an integer column by casting the column, which defeats the statistics it uses to
-skip row groups, so the filter downloads the whole column instead of the matching row groups. The package
-renders `2021` as the integer `2021`, with a message the first time in a session, and comparisons with
-double columns are unaffected. Write integers as `2021L` to avoid the message. Arithmetic is not
-rewritten, `x * 1000` stays a double multiplication. Tables on a connection of your own passed as `con`
-keep DuckDB's own translation, so write integers as `2021L` there.
-
-Directories on R2 are often named like a parquet file,
-e.g. `r2://bucket/data.parquet`, these get resolved to all parquet files within them.
-Local directories get read as all parquet files within them. Directories can't be listed over https, so a
-directory at a URL gets read through the manifest next to its files (`_manifest.json`, which
-`upload_parquet`, `data_to_parquet` and `write_manifest` write), which lists the files to read. A URL
-ending in a slash is read as a directory; a URL without one is read as a file first and, if there is no
-file at it, as a directory, so a directory named like a parquet file works either way.
-
-The table is a lazy `dplyr` table on a DuckDB connection that is cached for the session (`parquet_connection`),
-so that tables from several calls can be joined, or on the connection given as `con`. `dplyr` verbs get
-translated to SQL. If the table has GEOMETRY columns, like GeoParquet files written by `data_to_parquet`,
-the `spatial` extension gets loaded so that spatial functions like `ST_Area` can be used in queries. Use
-`sf::st_filter` to filter by location and `collect_parquet` to collect the result with its metadata
-attached, as an sf object if it has geometry. `parquet_metadata` reads the metadata of the table's files
-and `list_parquet` lists the files.
-
-Remote files can be kept in a local cache directory via `cache_parquet`, for data that gets queried regularly,
-and the table then reads the local copies. By default (`cache = NULL`) a cached copy gets used if it is
-current, checked against the etags of the remote files, and the remote files get read otherwise, with a
-warning when the copy is out of date. Paths without a copy in the cache are read remotely without any
-request to check them, so the default costs nothing for them. `cache = TRUE` caches the files first, downloading what is
-new or changed, and `cache = FALSE` always reads the remote files. In both the default and `cache = TRUE`
-the cached copy gets used with a warning when the remote can't be reached, e.g. offline.
-`cache = "offline"` reads the cached copy as it is, without contacting the remote, for working without a
-network connection, or to compare the copy with the current remote files (`cache = FALSE`) before updating
-it. Directories at public URLs can only be cached if they have a manifest, see `upload_parquet`.
+Lazy \code{dplyr} table on DuckDB for parquet files at public URLs (like public buckets or presigned URLs), in
+private buckets on R2 as \verb{r2://bucket/path} or on S3 as \verb{s3://bucket/path}, or at local paths. Nothing gets
+downloaded until the query is executed, e.g. via \code{\link[dplyr:collect]{dplyr::collect()}}, and then only what the query needs:
+filters on partition columns restrict which files get read, other filters and the selected columns which
+parts of the files.
 }
+\details{
+\code{dplyr} verbs get translated to SQL. Use \code{\link[=st_filter.tbl_duckdb_connection]{sf::st_filter()}} to filter by
+location, \code{\link[=collect_parquet]{collect_parquet()}} to collect the result with its metadata attached (as an sf object if it has
+geometry), \code{\link[=parquet_metadata]{parquet_metadata()}} for the metadata of the files and \code{\link[=list_parquet]{list_parquet()}} to list them. Tables
+with GEOMETRY columns, like GeoParquet files written by \code{\link[=data_to_parquet]{data_to_parquet()}}, get the \code{spatial} extension
+loaded, so that spatial functions like \code{ST_Area} work in queries.
+}
+\section{Directories}{
+\itemize{
+\item Local directories and directories on R2 and S3 get read as all parquet files within them. Directories in
+buckets are often named like a parquet file, e.g. \verb{r2://bucket/data.parquet}, which works too.
+\item Directories at URLs can't be listed, they get read through the manifest next to their files
+(\verb{_manifest.json}, written by \code{\link[=upload_parquet]{upload_parquet()}}, \code{\link[=data_to_parquet]{data_to_parquet()}} and \code{\link[=write_manifest]{write_manifest()}}). A URL
+ending in a slash is read as a directory; a URL without one is read as a file first and, if there is no
+file at it, as a directory.
+}
+}
+
+\section{Integer literals}{
+Whole numbers in comparisons (\code{==}, \code{!=}, \code{<}, \code{<=}, \code{>}, \code{>=}, \code{\%in\%}, \code{between}) get rendered as
+integers, with a message the first time in a session. A plain number like \code{2021} is a double in R, which
+\code{dplyr} renders as \code{2021.0}, and DuckDB resolves that against an integer column by casting the column,
+which defeats the statistics it uses to skip row groups, so the filter downloads the whole column.
+Comparisons with double columns are unaffected, and arithmetic is not rewritten (\code{x * 1000} stays a double
+multiplication). Write integers as \code{2021L} to avoid the message, and on a connection of your own passed as
+\code{con}, which keeps DuckDB's own translation.
+}
+
+\section{Cache}{
+Remote files that get queried regularly can be kept in a local cache directory via \code{\link[=cache_parquet]{cache_parquet()}}, and
+the table then reads the local copies, see the \code{cache} argument. The default costs nothing for paths
+without a copy, they are read remotely without any request to check them. With the default and with
+\code{cache = TRUE} a cached copy gets used, with a warning, when the remote can't be reached, e.g. offline.
+\code{cache = "offline"} also allows comparing the copy with the current remote files (\code{cache = FALSE}) before
+updating it. Directories at public URLs can only be cached if they have a manifest. The cache directory is
+the one in the \code{R2PARQUET_CACHE_PATH} environment variable, or the user cache directory if that is not set.
+}
+
 \section{Credentials}{
 
-Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
-R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
-no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
-that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
-an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
-set.
+Credentials come from environment variables, e.g. set in \code{.Renviron}, read at call time. Public URLs and
+local paths need none.
+
+Paths on R2 (\verb{r2://bucket/path}):
+\itemize{
+\item \code{R2_ACCOUNT_ID}: the R2 account id.
+\item \code{R2_ACCESS_KEY_ID} and \code{R2_SECRET_ACCESS_KEY}: the access key id and secret access key of an R2 API
+token with access to the bucket.
+\item \code{R2_API_TOKEN}, optional: the value of an API token with Zone Cache Purge permission (see
+\code{\link[=create_r2_bucket]{create_r2_bucket()}}). Files that change on R2 then get purged from the Cloudflare cache of the bucket's
+custom domains, so that the new versions are served right away; the purge is skipped without it.
+}
+
+Paths on S3 (\verb{s3://bucket/path}), on Amazon S3 or another S3 compatible service like MinIO, use the
+variables AWS tools use:
+\itemize{
+\item \code{AWS_ACCESS_KEY_ID} and \code{AWS_SECRET_ACCESS_KEY}, and \code{AWS_SESSION_TOKEN} for temporary credentials.
+\item \code{AWS_REGION} or \code{AWS_DEFAULT_REGION}: the region, default \code{us-east-1}.
+\item \code{AWS_ENDPOINT_URL_S3} or \code{AWS_ENDPOINT_URL}: the endpoint of other S3 compatible services, like
+\verb{http://localhost:9000}, which get addressed with path style URLs (\code{endpoint/bucket/key}).
+\item \code{R2PARQUET_S3_URL_STYLE}: \code{path} or \code{vhost}, overrides the URL style.
+}
+
+AWS profiles and single sign-on are not read, \verb{aws configure export-credentials --format env} prints the
+variables for them.
 }
 

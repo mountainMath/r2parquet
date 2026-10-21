@@ -407,7 +407,7 @@ test_that("list_parquet_cache and remove_parquet_from_cache work on the cache di
   expect_equal(list_parquet_cache(c("r2://bucket/census/single.parquet","r2://bucket/census/data/year=2022"))$path,cached$path[c(2,3)])
   expect_equal(nrow(list_parquet_cache("r2://bucket/census/other.parquet")),0)
   expect_equal(nrow(list_parquet_cache("r2://other/census")),0)
-  expect_error(list_parquet_cache(fixture$dir),"r2://bucket/path or a URL")
+  expect_error(list_parquet_cache(fixture$dir),"s3://bucket/path or a URL")
   expect_error(list_parquet_cache("r2://bucket"),"specify the path")
   # the cache column of list_parquet compares the etags of the copies with the remote files
   expect_equal(list_parquet("r2://bucket/census/data")$cache,rep("current",2))
@@ -441,7 +441,7 @@ test_that("list_parquet_cache and remove_parquet_from_cache work on the cache di
   suppressMessages(cache_parquet("r2://bucket/census/single.parquet"))
   expect_error(remove_parquet_from_cache(c("r2://bucket/census/single.parquet","r2://bucket/census/data")),"Not in the cache: r2://bucket/census/data")
   expect_equal(nrow(list_parquet_cache()),1)
-  expect_error(remove_parquet_from_cache(fixture$dir),"r2://bucket/path or a URL")
+  expect_error(remove_parquet_from_cache(fixture$dir),"s3://bucket/path or a URL")
   expect_error(remove_parquet_from_cache(character()),"character vector")
 })
 

@@ -7,19 +7,21 @@
 parquet_connection()
 }
 \value{
-a DuckDB connection
+a DuckDB connection.
 }
 \description{
-The in-memory DuckDB connection that `parquet_tbl`, `parquet_metadata` and
-`data_to_parquet` use. It gets created on first use and is cached for the session, so that tables from
-different `parquet_tbl` calls can be joined with each other. Use it to bring other data onto the same
-connection, e.g. `dplyr::copy_to(parquet_connection(), df)` to join a data frame with a parquet table, or to
-change DuckDB settings via `DBI::dbExecute`, like `SET memory_limit = '4GB'` or `SET threads = 2`.
-Disconnecting it, e.g. to free memory, is fine, the next call creates a new connection, but tables from
-`parquet_tbl` created on the old connection stop working. `parquet_tbl` can also create its tables on a
-connection of your own via its `con` argument.
+The in-memory DuckDB connection that \code{\link[=parquet_tbl]{parquet_tbl()}}, \code{\link[=parquet_metadata]{parquet_metadata()}} and \code{\link[=data_to_parquet]{data_to_parquet()}} use. It gets
+created on first use and is cached for the session, so that tables from different \code{\link[=parquet_tbl]{parquet_tbl()}} calls can
+be joined with each other.
+}
+\details{
+Use it to bring other data onto the same connection, e.g. \code{dplyr::copy_to(parquet_connection(), df)} to
+join a data frame with a parquet table, or to change DuckDB settings via \code{\link[DBI:dbExecute]{DBI::dbExecute()}}, like
+\verb{SET memory_limit = '4GB'} or \verb{SET threads = 2}. Disconnecting it, e.g. to free memory, is fine, the next
+call creates a new connection, but tables created on the old connection stop working. \code{\link[=parquet_tbl]{parquet_tbl()}} can also
+create its tables on a connection of your own via its \code{con} argument.
 
 The connection is DuckDB's connection class extended with the package's SQL translation, which renders
-whole numbers in comparisons as integers, see `parquet_tbl`; everything else works as on any DuckDB
+whole numbers in comparisons as integers, see \code{\link[=parquet_tbl]{parquet_tbl()}}; everything else works as on any DuckDB
 connection.
 }

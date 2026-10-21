@@ -7,16 +7,19 @@
 remove_parquet_from_cache(path)
 }
 \arguments{
-\item{path}{`r2://bucket/path` or URL of a parquet file or directory with (partitioned) parquet files, or a
-vector of these. `r2://` paths need the `R2_ACCOUNT_ID` environment variable, since the cache is kept per account.}
+\item{path}{\verb{r2://bucket/path}, \verb{s3://bucket/path} or URL of a parquet file or a directory of (partitioned)
+parquet files, or a vector of these. Since the cache is kept per account and service, \verb{r2://} paths need
+the \code{R2_ACCOUNT_ID} environment variable and \verb{s3://} paths the endpoint variables they were cached with.}
 }
 \value{
-(invisibly) the removed files as `r2://bucket/path` or URL, as `list_parquet_cache` lists them
+(invisibly) the removed files as \verb{r2://bucket/path}, \verb{s3://bucket/path} or URL, as
+\code{\link[=list_parquet_cache]{list_parquet_cache()}} lists them.
 }
 \description{
-Removes the copies of parquet files or directories from the cache directory, the one in the
-`R2PARQUET_CACHE_PATH` environment variable or the user cache directory, and drops them from the manifests
-there. The remote files stay as they are, use `remove_parquet` for those. The next `cache_parquet` or
-`parquet_tbl(cache = TRUE)` on the paths downloads them again. All paths get resolved before anything is
-removed, a path without a copy in the cache is an error.
+Removes the copies of parquet files or directories from the cache directory (see \code{\link[=cache_parquet]{cache_parquet()}}) and drops
+them from the manifests there. The remote files stay as they are, use \code{\link[=remove_parquet]{remove_parquet()}} for those.
+}
+\details{
+All paths get resolved before anything is removed, a path without a copy in the cache is an error. The next
+\code{\link[=cache_parquet]{cache_parquet()}} or \code{parquet_tbl(cache = TRUE)} on the paths downloads them again.
 }

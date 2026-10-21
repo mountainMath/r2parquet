@@ -7,23 +7,26 @@
 collect_parquet(tbl, attach_metadata = TRUE)
 }
 \arguments{
-\item{tbl}{lazy DuckDB table, e.g. from `parquet_tbl` or `sf::st_filter`}
+\item{tbl}{lazy DuckDB table, e.g. from \code{\link[=parquet_tbl]{parquet_tbl()}} or \code{\link[=st_filter.tbl_duckdb_connection]{sf::st_filter()}}.}
 
-\item{attach_metadata}{if `TRUE`, the default, attach the metadata of the parquet files as attributes}
+\item{attach_metadata}{\code{TRUE} (default) or \code{FALSE}: attach the metadata of the parquet files as attributes.}
 }
 \value{
-a tibble, or an sf object if the table has GEOMETRY columns
+a tibble, or an sf object if the table has GEOMETRY columns.
 }
 \description{
-Executes the query and returns the result as a tibble, or as an sf object if the table has GEOMETRY columns,
-like GeoParquet files written by `data_to_parquet`, converting them to sf geometry columns with their crs.
-The active geometry column is the one named `geometry`, as `data_to_parquet` writes it, or else the first
-GEOMETRY column, use `sf::st_set_geometry` to switch to another one. Missing (`NULL`) geometries, e.g.
-from a left join, become empty geometries, since sf has no missing geometries.
+Executes the query and returns the result as a tibble, or as an sf object if the table has GEOMETRY
+columns, with the metadata of the parquet files attached.
+}
+\details{
+GEOMETRY columns, like those of GeoParquet files written by \code{\link[=data_to_parquet]{data_to_parquet()}}, become sf geometry columns
+with their crs. The active geometry column is the one named \code{geometry}, as \code{\link[=data_to_parquet]{data_to_parquet()}} writes it, or
+else the first GEOMETRY column, use \code{\link[sf:st_set_geometry]{sf::st_set_geometry()}} to switch to another one. Missing (\code{NULL})
+geometries, e.g. from a left join, become empty geometries, since sf has no missing geometries.
 
-For tables from `parquet_tbl` the metadata of the parquet files (see `parquet_metadata`) gets attached
-to the result: the whole list as the `metadata` attribute, and the `label` entries of `columns` as `label`
-attributes of the columns, as the haven and labelled packages use them. The files are looked up through
-the table, so the metadata follows the table through `dplyr` verbs and is the metadata of the left-hand
-table of joins.
+For tables from \code{\link[=parquet_tbl]{parquet_tbl()}} the metadata of the parquet files (see \code{\link[=parquet_metadata]{parquet_metadata()}}) gets attached to
+the result: the whole list as the \code{metadata} attribute, and the \code{label} entries of \code{columns} as \code{label}
+attributes of the columns, as the haven and labelled packages use them. The files are looked up through the
+table, so the metadata follows the table through \code{dplyr} verbs and is the metadata of the left-hand table of
+joins.
 }

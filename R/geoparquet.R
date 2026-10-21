@@ -125,33 +125,37 @@ duckdb_predicate <- function(predicate){
 #' spatially filter a lazy DuckDB table of GeoParquet data
 #'
 #' @description
-#' The `sf::st_filter` method for lazy DuckDB tables, like the ones from `parquet_tbl`: keeps the rows whose
-#' geometry relates to `y` by `.predicate`, intersecting it by default, translated to the DuckDB spatial function
-#' of the same name. Remote GeoParquet files only get read where needed:
-#' DuckDB skips row groups whose bounding box does not intersect the bounding box of `y`, using the
-#' statistics of the native GEOMETRY type. This only happens
-#' for the bounding box comparison, a plain `ST_Intersects` filter downloads the geometry of all rows,
-#' so the filter first compares bounding boxes and then, if `exact` is `TRUE`, applies the predicate
-#' to the remaining rows. How much gets skipped depends on the file being sorted spatially, like the files
-#' written by `data_to_parquet`. `sf::st_disjoint` can't skip anything.
+#' The [sf::st_filter()] method for lazy DuckDB tables, like the ones from [parquet_tbl()]: keeps the rows whose
+#' geometry relates to `y` by `.predicate`, translated to the DuckDB spatial function of the same name. Remote
+#' GeoParquet files only get read where needed, by comparing bounding boxes first.
 #'
-#' Unlike `sf::st_filter` on sf objects, `y` gets transformed to the crs of the geometry column if both have a crs.
-#' DuckDB treats coordinates as planar, also for longitude/latitude data, where sf uses spherical geometry
-#' (`sf::sf_use_s2()`), so results can differ near the edges of `y`, and `dist` is in degrees. The filter warns
-#' about this for longitude/latitude data while `sf::sf_use_s2()` is on.
+#' @details
+#' DuckDB skips row groups whose bounding box does not intersect the bounding box of `y`, using the statistics
+#' of the native GEOMETRY type. This only happens for the bounding box comparison, a plain `ST_Intersects`
+#' filter downloads the geometry of all rows, so the filter first compares bounding boxes and then, if `exact`
+#' is `TRUE`, applies the predicate to the remaining rows. How much gets skipped depends on the file being
+#' sorted spatially, like the files written by [data_to_parquet()]. [sf::st_disjoint()] can't skip anything.
 #'
-#' @param x lazy DuckDB table, e.g. from `parquet_tbl`
-#' @param y sf, sfc or bbox object to filter by
-#' @param ... `dist` for `sf::st_is_within_distance`, in the units of the crs or as a units object
-#' @param .predicate the sf predicate relating the geometry of `x` to `y`, one of `sf::st_intersects` (the default),
-#' `sf::st_within`, `sf::st_contains`, `sf::st_contains_properly`, `sf::st_covers`, `sf::st_covered_by`,
-#' `sf::st_touches`, `sf::st_overlaps`, `sf::st_crosses`, `sf::st_equals`, `sf::st_disjoint` and
-#' `sf::st_is_within_distance`; as for sf objects, rows are kept if the predicate holds for any feature of `y`
-#' @param geometry_column name of the geometry column, defaults to the column named `geometry`, as in files
-#' written by `data_to_parquet`, or else the first GEOMETRY column of `x`
-#' @param exact if `TRUE`, the default, keep rows for which the predicate holds, otherwise keep rows whose
-#' bounding box intersects the bounding box of `y` (grown by `dist`), a superset of these rows
-#' @return a lazy `dplyr` table
+#' Unlike [sf::st_filter()] on sf objects, `y` gets transformed to the crs of the geometry column if both have a
+#' crs. DuckDB treats coordinates as planar, also for longitude/latitude data, where sf uses spherical geometry
+#' ([sf::sf_use_s2()]), so results can differ near the edges of `y`, and `dist` is in degrees. The filter warns
+#' about this for longitude/latitude data while [sf::sf_use_s2()] is on.
+#'
+#' @param x lazy DuckDB table, e.g. from [parquet_tbl()].
+#' @param y sf, sfc or bbox object to filter by.
+#' @param ... `dist` for [sf::st_is_within_distance()], in the units of the crs or as a units object.
+#' @param .predicate sf predicate relating the geometry of `x` to `y`: [sf::st_intersects()] (default),
+#'   [sf::st_within()], [sf::st_contains()], [sf::st_contains_properly()], [sf::st_covers()],
+#'   [sf::st_covered_by()], [sf::st_touches()], [sf::st_overlaps()], [sf::st_crosses()], [sf::st_equals()],
+#'   [sf::st_disjoint()] or [sf::st_is_within_distance()]. As for sf objects, rows are kept if the predicate
+#'   holds for any feature of `y`.
+#' @param geometry_column name of the geometry column. `NULL` (default) takes the column named `geometry`, as
+#'   in files written by [data_to_parquet()], or else the first GEOMETRY column of `x`.
+#' @param exact which rows to keep:
+#'   * `TRUE` (default): the rows for which the predicate holds.
+#'   * `FALSE`: the rows whose bounding box intersects the bounding box of `y` (grown by `dist`), a superset
+#'     of these.
+#' @return a lazy `dplyr` table.
 #' @examples
 #' \dontrun{
 #' library(sf)
@@ -220,21 +224,24 @@ st_filter.tbl_r2parquet_connection <- st_filter.tbl_duckdb_connection
 #' collect a lazy DuckDB table of parquet data with its metadata
 #'
 #' @description
-#' Executes the query and returns the result as a tibble, or as an sf object if the table has GEOMETRY columns,
-#' like GeoParquet files written by `data_to_parquet`, converting them to sf geometry columns with their crs.
-#' The active geometry column is the one named `geometry`, as `data_to_parquet` writes it, or else the first
-#' GEOMETRY column, use `sf::st_set_geometry` to switch to another one. Missing (`NULL`) geometries, e.g.
-#' from a left join, become empty geometries, since sf has no missing geometries.
+#' Executes the query and returns the result as a tibble, or as an sf object if the table has GEOMETRY
+#' columns, with the metadata of the parquet files attached.
 #'
-#' For tables from `parquet_tbl` the metadata of the parquet files (see `parquet_metadata`) gets attached
-#' to the result: the whole list as the `metadata` attribute, and the `label` entries of `columns` as `label`
-#' attributes of the columns, as the haven and labelled packages use them. The files are looked up through
-#' the table, so the metadata follows the table through `dplyr` verbs and is the metadata of the left-hand
-#' table of joins.
+#' @details
+#' GEOMETRY columns, like those of GeoParquet files written by [data_to_parquet()], become sf geometry columns
+#' with their crs. The active geometry column is the one named `geometry`, as [data_to_parquet()] writes it, or
+#' else the first GEOMETRY column, use [sf::st_set_geometry()] to switch to another one. Missing (`NULL`)
+#' geometries, e.g. from a left join, become empty geometries, since sf has no missing geometries.
 #'
-#' @param tbl lazy DuckDB table, e.g. from `parquet_tbl` or `sf::st_filter`
-#' @param attach_metadata if `TRUE`, the default, attach the metadata of the parquet files as attributes
-#' @return a tibble, or an sf object if the table has GEOMETRY columns
+#' For tables from [parquet_tbl()] the metadata of the parquet files (see [parquet_metadata()]) gets attached to
+#' the result: the whole list as the `metadata` attribute, and the `label` entries of `columns` as `label`
+#' attributes of the columns, as the haven and labelled packages use them. The files are looked up through the
+#' table, so the metadata follows the table through `dplyr` verbs and is the metadata of the left-hand table of
+#' joins.
+#'
+#' @param tbl lazy DuckDB table, e.g. from [parquet_tbl()] or [`sf::st_filter()`][st_filter.tbl_duckdb_connection].
+#' @param attach_metadata `TRUE` (default) or `FALSE`: attach the metadata of the parquet files as attributes.
+#' @return a tibble, or an sf object if the table has GEOMETRY columns.
 #' @export
 collect_parquet <- function(tbl,attach_metadata=TRUE) {
   geometry_columns <- duckdb_geometry_columns(tbl)

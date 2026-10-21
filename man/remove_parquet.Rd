@@ -2,44 +2,70 @@
 % Please edit documentation in R/r2.R
 \name{remove_parquet}
 \alias{remove_parquet}
-\title{remove files from Cloudflare R2}
+\title{remove files from Cloudflare R2 or S3}
 \usage{
 remove_parquet(path, purge_cache = TRUE)
 }
 \arguments{
-\item{path}{file, or directory with (partitioned) parquet files, on R2 as `r2://bucket/path`, or a
-vector of these}
+\item{path}{file, or directory of (partitioned) parquet files, as \verb{r2://bucket/path} or \verb{s3://bucket/path},
+or a vector of these.}
 
-\item{purge_cache}{if `TRUE`, the default, purge the removed files from the Cloudflare cache of custom domains of the bucket}
+\item{purge_cache}{\code{TRUE} (default) or \code{FALSE}: purge the removed files from the Cloudflare cache of the
+bucket's custom domains. Ignored for S3.}
 }
 \value{
-(invisibly) the removed files as `r2://bucket/path`
+(invisibly) the removed files as \verb{r2://bucket/path} or \verb{s3://bucket/path}.
 }
 \description{
-Removes files, or all parquet files in directories of (partitioned) parquet files, together with the
-manifests (`_manifest.json`, see `write_manifest`) below the directories. The path of a file removes that
-file whatever its type, like a JSON index uploaded with `upload_parquet`, or a manifest, which takes the
-directory's manifest away until `write_manifest` or the next upload writes it again; a directory only loses
-its parquet files and manifests, other files in it are left in place. The existing manifests of the
-directories above removed parquet files and directories get updated, since a manifest lists all parquet files
-below its directory, so removing a file or a partition from a dataset keeps the dataset's manifest current:
-the removed files are dropped from what the manifests record, without listing their directories, and a
-manifest left without files is removed. The manifests are written conditionally, like `upload_parquet`
-writes them, and a manifest that could not be updated is reported with a warning after the files are gone.
-Removed files can't be recovered.
+Removes files, or all parquet files in directories of (partitioned) parquet files together with the
+manifests below them, and updates the manifests of the directories above. Removed files can't be recovered.
+}
+\details{
+\itemize{
+\item The path of a file removes that file whatever its type, like a JSON index uploaded with
+\code{\link[=upload_parquet]{upload_parquet()}}, or a manifest, which takes the directory's manifest away until \code{\link[=write_manifest]{write_manifest()}} or the
+next upload writes it again.
+\item The path of a directory removes its parquet files and the manifests (\verb{_manifest.json}, see
+\code{\link[=write_manifest]{write_manifest()}}) below it; other files in it are left in place.
+}
 
 All paths get resolved to files first, so a path that does not exist stops the call before anything is
-removed. The files are then removed in one batch per bucket. If the bucket is served via a custom domain,
-the removed files get purged from the Cloudflare cache, with the same requirements as for `upload_parquet`.
+removed. The files are then removed in one batch per bucket. If an R2 bucket is served via a custom domain,
+the removed files get purged from the Cloudflare cache, with the same requirements as for \code{\link[=upload_parquet]{upload_parquet()}}.
+
+Since a manifest lists all parquet files below its directory, the existing manifests of the directories
+above removed files get updated, so removing a file or a partition from a dataset keeps the dataset's
+manifest current: the removed files are dropped from what the manifests record, without listing their
+directories, and a manifest left without files is removed. The manifests are written conditionally, like
+\code{\link[=upload_parquet]{upload_parquet()}} writes them, and a manifest that could not be updated is reported with a warning after the
+files are gone.
 }
 \section{Credentials}{
 
-Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
-R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
-no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
-that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
-an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
-set.
+Credentials come from environment variables, e.g. set in \code{.Renviron}, read at call time. Public URLs and
+local paths need none.
+
+Paths on R2 (\verb{r2://bucket/path}):
+\itemize{
+\item \code{R2_ACCOUNT_ID}: the R2 account id.
+\item \code{R2_ACCESS_KEY_ID} and \code{R2_SECRET_ACCESS_KEY}: the access key id and secret access key of an R2 API
+token with access to the bucket.
+\item \code{R2_API_TOKEN}, optional: the value of an API token with Zone Cache Purge permission (see
+\code{\link[=create_r2_bucket]{create_r2_bucket()}}). Files that change on R2 then get purged from the Cloudflare cache of the bucket's
+custom domains, so that the new versions are served right away; the purge is skipped without it.
+}
+
+Paths on S3 (\verb{s3://bucket/path}), on Amazon S3 or another S3 compatible service like MinIO, use the
+variables AWS tools use:
+\itemize{
+\item \code{AWS_ACCESS_KEY_ID} and \code{AWS_SECRET_ACCESS_KEY}, and \code{AWS_SESSION_TOKEN} for temporary credentials.
+\item \code{AWS_REGION} or \code{AWS_DEFAULT_REGION}: the region, default \code{us-east-1}.
+\item \code{AWS_ENDPOINT_URL_S3} or \code{AWS_ENDPOINT_URL}: the endpoint of other S3 compatible services, like
+\verb{http://localhost:9000}, which get addressed with path style URLs (\code{endpoint/bucket/key}).
+\item \code{R2PARQUET_S3_URL_STYLE}: \code{path} or \code{vhost}, overrides the URL style.
+}
+
+AWS profiles and single sign-on are not read, \verb{aws configure export-credentials --format env} prints the
+variables for them.
 }
 

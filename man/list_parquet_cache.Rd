@@ -7,19 +7,32 @@
 list_parquet_cache(path = NULL)
 }
 \arguments{
-\item{path}{`r2://bucket/path` or URL of a parquet file or directory, or a vector of these, to list only
-the copies of these. `r2://` paths need the `R2_ACCOUNT_ID` environment variable, since the cache is kept
-per account. By default everything in the cache gets listed, which needs no credentials.}
+\item{path}{what to list:
+\itemize{
+\item \code{NULL} (default): everything in the cache, which needs no credentials.
+\item \verb{r2://bucket/path}, \verb{s3://bucket/path} or URL of a parquet file or directory, or a vector of these:
+only the copies of these. Since the cache is kept per account and service, \verb{r2://} paths need the
+\code{R2_ACCOUNT_ID} environment variable and \verb{s3://} paths the endpoint variables they were cached with.
+}}
 }
 \value{
-a tibble with one row per cached parquet file and the columns of `list_parquet`: `file`, the file
-name, `size`, formatted for reading, `sizeRaw`, the size in bytes, `modified`, the modification time of the
-remote file in UTC, and `etag`, the etag of the remote file when it was downloaded, followed by `local`,
-the path of the copy, and `path`, the `r2://bucket/path` or URL it is a copy of
+a tibble with one row per cached parquet file and the columns of \code{\link[=list_parquet]{list_parquet()}}
+\itemize{
+\item \code{file}: the file name;
+\item \code{size}: the size formatted for reading;
+\item \code{sizeRaw}: the size in bytes;
+\item \code{modified}: the modification time of the remote file in UTC;
+\item \code{etag}: the etag of the remote file when it was downloaded;
+}
+
+followed by
+\itemize{
+\item \code{local}: the path of the copy;
+\item \code{path}: the \verb{r2://bucket/path}, \verb{s3://bucket/path} or URL it is a copy of.
+}
 }
 \description{
-Lists the parquet files that `cache_parquet` and `parquet_tbl(cache = TRUE)` downloaded into the cache
-directory, the one in the `R2PARQUET_CACHE_PATH` environment variable or the user cache directory, with the
-remote path each is a copy of and the etag recorded when it was downloaded. `list_parquet` on the remote
-paths tells whether the copies are still current.
+Lists the parquet files that \code{\link[=cache_parquet]{cache_parquet()}} and \code{parquet_tbl(cache = TRUE)} downloaded into the cache
+directory (see \code{\link[=cache_parquet]{cache_parquet()}}), with the remote path each is a copy of and the etag recorded when it was
+downloaded. \code{\link[=list_parquet]{list_parquet()}} on the remote paths tells whether the copies are still current.
 }

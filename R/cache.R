@@ -31,7 +31,7 @@ forget_checks <- function(local){
 }
 
 remote_cache_location <- function(path,cache_dir){
-  if (!is_remote(path)) stop("Expected an r2://bucket/path or a URL, got ",path,".")
+  if (!is_remote(path)) stop("Expected an r2://bucket/path, s3://bucket/path or a URL, got ",path,".")
   cache_location(path,cache_dir)
 }
 
@@ -403,39 +403,46 @@ cached_copy <- function(location){
   NULL
 }
 
-#' local copies of parquet files on R2 or at URLs
+#' local copies of parquet files on R2, S3 or at URLs
 #'
 #' @description
 #' Downloads parquet files, or directories of (partitioned) parquet files, to a local cache directory and
-#' keeps them current, so that data used regularly can be queried locally instead of over the network.
-#' `parquet_tbl(cache = TRUE)` uses it to read from the cache. Each call checks the remote files and only
-#' downloads files whose etag changed or that are new, removes files from the cache that are gone remotely,
-#' and records the etags in a manifest (`_manifest.json`) in the cache directory. If the remote can't be
-#' reached, e.g. offline, an existing cached copy gets used with a warning. Once a dataset is cached,
-#' `parquet_tbl` reads the copy by default as long as it is current, and `parquet_tbl(cache = "offline")` reads
-#' it without checking, see its `cache` argument.
+#' keeps them current, so that data used regularly can be queried locally instead of over the network. Once a
+#' dataset is cached, [parquet_tbl()] reads the copy by default as long as it is current, see its `cache`
+#' argument.
+#'
+#' @details
+#' Each call checks the remote files and only downloads files whose etag changed or that are new, removes
+#' files from the cache that are gone remotely, and records the etags in a manifest (`_manifest.json`) in the
+#' cache directory. If the remote can't be reached, e.g. offline, an existing cached copy gets used with a
+#' warning. Local paths are returned as they are.
+#' * `r2://` and `s3://` paths get checked against a listing of the bucket.
+#' * Files at URLs, including presigned URLs, get checked with a request for their first byte, which returns
+#'   the etag.
+#' * Directories at URLs can't be listed, they need a manifest next to the files, which [upload_parquet()] and
+#'   [data_to_parquet()] write for directories uploaded to R2 or S3 and [write_manifest()] writes for existing
+#'   ones.
 #'
 #' The cache directory is the one in the `R2PARQUET_CACHE_PATH` environment variable, or the user cache
 #' directory (`tools::R_user_dir("r2parquet", "cache")`) if that is not set. Set the environment variable, e.g.
-#' in `.Renviron`, for a cache local to a project.
+#' in `.Renviron`, for a cache local to a project. The cache mirrors the remote layout, with bucket names
+#' only unique within an account or service:
+#' * `r2://bucket/path` as `r2/<account id>/bucket/path`;
+#' * `s3://bucket/path` as `s3/aws/bucket/path` on Amazon S3, and as `s3/<host>/bucket/path` (`<host>_<port>`
+#'   with a port) for a custom endpoint;
+#' * URLs as `<scheme>/<host>/<path>`.
+#' The package manages the files below the cache directory, files it does not know
+#' about get removed when a directory is synced. Downloads go through a temporary file, and files uploaded by
+#' this package get checked against their etag, which is the MD5 hash of the content, so an interrupted
+#' download never ends up in the cache.
 #'
-#' URLs of files, including presigned URLs, get checked with a request for their first byte, which returns the etag.
-#' Directories at URLs can't be listed, they need a manifest next to the files, which `upload_parquet` and
-#' `data_to_parquet` write for directories uploaded to R2 and `write_manifest` writes for existing ones.
-#' Local paths are returned as they are.
-#'
-#' The cache mirrors the remote layout: `r2://bucket/path` is stored as `r2/<account id>/bucket/path`, since bucket
-#' names are only unique within an account, and URLs as `<scheme>/<host>/<path>`. The package manages the
-#' files below the cache directory, files it does not know about get removed when a directory is synced.
-#' Downloads go through a temporary file, and files uploaded by this package get checked against their etag,
-#' which is the MD5 hash of the content, so an interrupted download never ends up in the cache.
-#' `list_parquet_cache` lists what is in the cache, `list_parquet` on the remote paths tells whether the copies are
-#' current, and `remove_parquet_from_cache` removes copies.
+#' [list_parquet_cache()] lists what is in the cache, [list_parquet()] on the remote paths tells whether the
+#' copies are current, and [remove_parquet_from_cache()] removes copies.
 #'
 #' @inheritSection upload_parquet Credentials
-#' @param path URL or `r2://bucket/path` of the parquet file or the directory with (partitioned) parquet
-#' files, or a vector of these
-#' @return the local paths of the cached files or directories, one per path, ready for `parquet_tbl`
+#' @param path URL, `r2://bucket/path` or `s3://bucket/path` of a parquet file or a directory of
+#'   (partitioned) parquet files, or a vector of these.
+#' @return the local paths of the cached files or directories, one per path, ready for [parquet_tbl()].
 #' @export
 cache_parquet <- function(path) {
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
@@ -510,15 +517,18 @@ cache_lookup <- function(path){
 #' forget the cache checks of the session
 #'
 #' @description
-#' `parquet_tbl` checks a cached copy against the remote files once per session, the first time it reads the
-#' path with the default `cache = NULL`, and reuses the result afterwards, so that reading a dataset repeatedly
-#' costs one request and not one per call. Remote data that changes during the session therefore goes
-#' unnoticed until the session is restarted or the checks are forgotten with this function, after which the next
-#' `parquet_tbl` call on each path checks the remote again. `cache_parquet` and `parquet_tbl(cache = TRUE)`
-#' always check, and update the remembered result along with the copy, and `remove_parquet_from_cache` forgets the
-#' checks of the paths it removes.
+#' Forgets which cached copies [parquet_tbl()] already checked against the remote files in this session, so
+#' that the next [parquet_tbl()] call on each path checks again and notices remote data that changed.
 #'
-#' @return (invisibly) `NULL`
+#' @details
+#' With the default `cache = NULL`, [parquet_tbl()] checks a cached copy once per session, the first time it
+#' reads the path, and reuses the result afterwards, so that reading a dataset repeatedly costs one request and
+#' not one per call. Remote data that changes during the session therefore goes unnoticed until the session is
+#' restarted or this function is called. [cache_parquet()] and `parquet_tbl(cache = TRUE)` always check, and
+#' update the remembered result along with the copy, and [remove_parquet_from_cache()] forgets the checks of the
+#' paths it removes.
+#'
+#' @return (invisibly) `NULL`.
 #' @export
 clear_cache_checks <- function(){
   rm(list=ls(cache_checks,all.names=TRUE),envir=cache_checks)
@@ -596,18 +606,25 @@ prune_manifests <- function(local,cache_dir){
 #' list the files in the local cache
 #'
 #' @description
-#' Lists the parquet files that `cache_parquet` and `parquet_tbl(cache = TRUE)` downloaded into the cache
-#' directory, the one in the `R2PARQUET_CACHE_PATH` environment variable or the user cache directory, with the
-#' remote path each is a copy of and the etag recorded when it was downloaded. `list_parquet` on the remote
-#' paths tells whether the copies are still current.
+#' Lists the parquet files that [cache_parquet()] and `parquet_tbl(cache = TRUE)` downloaded into the cache
+#' directory (see [cache_parquet()]), with the remote path each is a copy of and the etag recorded when it was
+#' downloaded. [list_parquet()] on the remote paths tells whether the copies are still current.
 #'
-#' @param path `r2://bucket/path` or URL of a parquet file or directory, or a vector of these, to list only
-#' the copies of these. `r2://` paths need the `R2_ACCOUNT_ID` environment variable, since the cache is kept
-#' per account. By default everything in the cache gets listed, which needs no credentials.
-#' @return a tibble with one row per cached parquet file and the columns of `list_parquet`: `file`, the file
-#' name, `size`, formatted for reading, `sizeRaw`, the size in bytes, `modified`, the modification time of the
-#' remote file in UTC, and `etag`, the etag of the remote file when it was downloaded, followed by `local`,
-#' the path of the copy, and `path`, the `r2://bucket/path` or URL it is a copy of
+#' @param path what to list:
+#'   * `NULL` (default): everything in the cache, which needs no credentials.
+#'   * `r2://bucket/path`, `s3://bucket/path` or URL of a parquet file or directory, or a vector of these:
+#'     only the copies of these. Since the cache is kept per account and service, `r2://` paths need the
+#'     `R2_ACCOUNT_ID` environment variable and `s3://` paths the endpoint variables they were cached with.
+#' @return a tibble with one row per cached parquet file and the columns of [list_parquet()]
+#'   * `file`: the file name;
+#'   * `size`: the size formatted for reading;
+#'   * `sizeRaw`: the size in bytes;
+#'   * `modified`: the modification time of the remote file in UTC;
+#'   * `etag`: the etag of the remote file when it was downloaded;
+#'
+#'   followed by
+#'   * `local`: the path of the copy;
+#'   * `path`: the `r2://bucket/path`, `s3://bucket/path` or URL it is a copy of.
 #' @export
 list_parquet_cache <- function(path=NULL) {
   cache_dir <- cache_directory()
@@ -625,15 +642,18 @@ list_parquet_cache <- function(path=NULL) {
 #' remove files from the local cache
 #'
 #' @description
-#' Removes the copies of parquet files or directories from the cache directory, the one in the
-#' `R2PARQUET_CACHE_PATH` environment variable or the user cache directory, and drops them from the manifests
-#' there. The remote files stay as they are, use `remove_parquet` for those. The next `cache_parquet` or
-#' `parquet_tbl(cache = TRUE)` on the paths downloads them again. All paths get resolved before anything is
-#' removed, a path without a copy in the cache is an error.
+#' Removes the copies of parquet files or directories from the cache directory (see [cache_parquet()]) and drops
+#' them from the manifests there. The remote files stay as they are, use [remove_parquet()] for those.
 #'
-#' @param path `r2://bucket/path` or URL of a parquet file or directory with (partitioned) parquet files, or a
-#' vector of these. `r2://` paths need the `R2_ACCOUNT_ID` environment variable, since the cache is kept per account.
-#' @return (invisibly) the removed files as `r2://bucket/path` or URL, as `list_parquet_cache` lists them
+#' @details
+#' All paths get resolved before anything is removed, a path without a copy in the cache is an error. The next
+#' [cache_parquet()] or `parquet_tbl(cache = TRUE)` on the paths downloads them again.
+#'
+#' @param path `r2://bucket/path`, `s3://bucket/path` or URL of a parquet file or a directory of (partitioned)
+#'   parquet files, or a vector of these. Since the cache is kept per account and service, `r2://` paths need
+#'   the `R2_ACCOUNT_ID` environment variable and `s3://` paths the endpoint variables they were cached with.
+#' @return (invisibly) the removed files as `r2://bucket/path`, `s3://bucket/path` or URL, as
+#' [list_parquet_cache()] lists them.
 #' @export
 remove_parquet_from_cache <- function(path) {
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")

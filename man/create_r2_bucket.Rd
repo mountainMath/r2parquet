@@ -7,27 +7,31 @@
 create_r2_bucket(r2_bucket, public = FALSE, custom_domain = NULL)
 }
 \arguments{
-\item{r2_bucket}{R2 bucket name, or the bucket as `r2://bucket` like the other functions address it}
+\item{r2_bucket}{bucket name, or the bucket as \verb{r2://bucket} like the other functions address it.}
 
-\item{public}{if `TRUE`, enable public read access to the bucket via the `r2.dev` URL, default is `FALSE`.
-Ignored if `custom_domain` is set.}
+\item{public}{\code{FALSE} (default) or \code{TRUE}: enable public read access via the \code{r2.dev} URL. Ignored if
+\code{custom_domain} is set.}
 
-\item{custom_domain}{optional domain, like `data.example.com`, to connect to the bucket for public read access.
-The `r2.dev` URL is not enabled in this case.}
+\item{custom_domain}{domain to connect to the bucket for public read access, like \code{data.example.com},
+optional. The \code{r2.dev} URL does not get enabled then.}
 }
 \value{
-(invisibly) the public base url of the bucket if it is publicly accessible, otherwise `NULL`
+(invisibly) the public base URL of the bucket if it is publicly accessible, otherwise \code{NULL}.
 }
 \description{
-Creates the bucket if it does not exist yet. Buckets are private by default. Public read access is granted
-either by connecting a custom domain to the bucket, or by enabling the `r2.dev` public development URL
-of the bucket. Cloudflare rate limits access via `r2.dev`, for heavier use connect a custom domain.
-Public access can also be enabled on existing buckets, but this function never turns off public access.
-
-Expects the R2 account id and the value of an R2 API token with admin read and write permissions
-to be available as `R2_ACCOUNT_ID` and `R2_API_TOKEN` environment variables. For connecting a custom
-domain the token also needs Zone Read permission for the domain's zone, which has to be an active zone
-in the same Cloudflare account. With Zone Cache Purge permission as well, `upload_parquet` and
-`remove_parquet` purge changed files from the cache. Each custom domain can only serve one bucket, use subdomains like
-`data.example.com` to serve several buckets from one zone.
+Creates the bucket if it does not exist yet. Buckets are private by default, public read access gets
+granted by connecting a custom domain or by enabling the \code{r2.dev} public development URL of the bucket.
+Public access can also be enabled on existing buckets, but this function never turns it off.
 }
+\details{
+Cloudflare rate limits access via \code{r2.dev}, for heavier use connect a custom domain. Each custom domain can
+only serve one bucket, use subdomains like \code{data.example.com} to serve several buckets from one zone.
+}
+\section{Credentials}{
+The R2 account id and the value of an R2 API token with admin read and write permissions have to be in the
+\code{R2_ACCOUNT_ID} and \code{R2_API_TOKEN} environment variables. For connecting a custom domain the token also
+needs Zone Read permission for the domain's zone, which has to be an active zone in the same Cloudflare
+account. With Zone Cache Purge permission as well, \code{\link[=upload_parquet]{upload_parquet()}} and \code{\link[=remove_parquet]{remove_parquet()}} purge changed files
+from the cache.
+}
+

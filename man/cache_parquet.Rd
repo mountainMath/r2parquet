@@ -2,52 +2,81 @@
 % Please edit documentation in R/cache.R
 \name{cache_parquet}
 \alias{cache_parquet}
-\title{local copies of parquet files on R2 or at URLs}
+\title{local copies of parquet files on R2, S3 or at URLs}
 \usage{
 cache_parquet(path)
 }
 \arguments{
-\item{path}{URL or `r2://bucket/path` of the parquet file or the directory with (partitioned) parquet
-files, or a vector of these}
+\item{path}{URL, \verb{r2://bucket/path} or \verb{s3://bucket/path} of a parquet file or a directory of
+(partitioned) parquet files, or a vector of these.}
 }
 \value{
-the local paths of the cached files or directories, one per path, ready for `parquet_tbl`
+the local paths of the cached files or directories, one per path, ready for \code{\link[=parquet_tbl]{parquet_tbl()}}.
 }
 \description{
 Downloads parquet files, or directories of (partitioned) parquet files, to a local cache directory and
-keeps them current, so that data used regularly can be queried locally instead of over the network.
-`parquet_tbl(cache = TRUE)` uses it to read from the cache. Each call checks the remote files and only
-downloads files whose etag changed or that are new, removes files from the cache that are gone remotely,
-and records the etags in a manifest (`_manifest.json`) in the cache directory. If the remote can't be
-reached, e.g. offline, an existing cached copy gets used with a warning. Once a dataset is cached,
-`parquet_tbl` reads the copy by default as long as it is current, and `parquet_tbl(cache = "offline")` reads
-it without checking, see its `cache` argument.
+keeps them current, so that data used regularly can be queried locally instead of over the network. Once a
+dataset is cached, \code{\link[=parquet_tbl]{parquet_tbl()}} reads the copy by default as long as it is current, see its \code{cache}
+argument.
+}
+\details{
+Each call checks the remote files and only downloads files whose etag changed or that are new, removes
+files from the cache that are gone remotely, and records the etags in a manifest (\verb{_manifest.json}) in the
+cache directory. If the remote can't be reached, e.g. offline, an existing cached copy gets used with a
+warning. Local paths are returned as they are.
+\itemize{
+\item \verb{r2://} and \verb{s3://} paths get checked against a listing of the bucket.
+\item Files at URLs, including presigned URLs, get checked with a request for their first byte, which returns
+the etag.
+\item Directories at URLs can't be listed, they need a manifest next to the files, which \code{\link[=upload_parquet]{upload_parquet()}} and
+\code{\link[=data_to_parquet]{data_to_parquet()}} write for directories uploaded to R2 or S3 and \code{\link[=write_manifest]{write_manifest()}} writes for existing
+ones.
+}
 
-The cache directory is the one in the `R2PARQUET_CACHE_PATH` environment variable, or the user cache
-directory (`tools::R_user_dir("r2parquet", "cache")`) if that is not set. Set the environment variable, e.g.
-in `.Renviron`, for a cache local to a project.
+The cache directory is the one in the \code{R2PARQUET_CACHE_PATH} environment variable, or the user cache
+directory (\code{tools::R_user_dir("r2parquet", "cache")}) if that is not set. Set the environment variable, e.g.
+in \code{.Renviron}, for a cache local to a project. The cache mirrors the remote layout, with bucket names
+only unique within an account or service:
+\itemize{
+\item \verb{r2://bucket/path} as \verb{r2/<account id>/bucket/path};
+\item \verb{s3://bucket/path} as \code{s3/aws/bucket/path} on Amazon S3, and as \verb{s3/<host>/bucket/path} (\verb{<host>_<port>}
+with a port) for a custom endpoint;
+\item URLs as \verb{<scheme>/<host>/<path>}.
+The package manages the files below the cache directory, files it does not know
+about get removed when a directory is synced. Downloads go through a temporary file, and files uploaded by
+this package get checked against their etag, which is the MD5 hash of the content, so an interrupted
+download never ends up in the cache.
+}
 
-URLs of files, including presigned URLs, get checked with a request for their first byte, which returns the etag.
-Directories at URLs can't be listed, they need a manifest next to the files, which `upload_parquet` and
-`data_to_parquet` write for directories uploaded to R2 and `write_manifest` writes for existing ones.
-Local paths are returned as they are.
-
-The cache mirrors the remote layout: `r2://bucket/path` is stored as `r2/<account id>/bucket/path`, since bucket
-names are only unique within an account, and URLs as `<scheme>/<host>/<path>`. The package manages the
-files below the cache directory, files it does not know about get removed when a directory is synced.
-Downloads go through a temporary file, and files uploaded by this package get checked against their etag,
-which is the MD5 hash of the content, so an interrupted download never ends up in the cache.
-`list_parquet_cache` lists what is in the cache, `list_parquet` on the remote paths tells whether the copies are
-current, and `remove_parquet_from_cache` removes copies.
+\code{\link[=list_parquet_cache]{list_parquet_cache()}} lists what is in the cache, \code{\link[=list_parquet]{list_parquet()}} on the remote paths tells whether the
+copies are current, and \code{\link[=remove_parquet_from_cache]{remove_parquet_from_cache()}} removes copies.
 }
 \section{Credentials}{
 
-Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
-R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
-no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
-that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
-an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
-set.
+Credentials come from environment variables, e.g. set in \code{.Renviron}, read at call time. Public URLs and
+local paths need none.
+
+Paths on R2 (\verb{r2://bucket/path}):
+\itemize{
+\item \code{R2_ACCOUNT_ID}: the R2 account id.
+\item \code{R2_ACCESS_KEY_ID} and \code{R2_SECRET_ACCESS_KEY}: the access key id and secret access key of an R2 API
+token with access to the bucket.
+\item \code{R2_API_TOKEN}, optional: the value of an API token with Zone Cache Purge permission (see
+\code{\link[=create_r2_bucket]{create_r2_bucket()}}). Files that change on R2 then get purged from the Cloudflare cache of the bucket's
+custom domains, so that the new versions are served right away; the purge is skipped without it.
+}
+
+Paths on S3 (\verb{s3://bucket/path}), on Amazon S3 or another S3 compatible service like MinIO, use the
+variables AWS tools use:
+\itemize{
+\item \code{AWS_ACCESS_KEY_ID} and \code{AWS_SECRET_ACCESS_KEY}, and \code{AWS_SESSION_TOKEN} for temporary credentials.
+\item \code{AWS_REGION} or \code{AWS_DEFAULT_REGION}: the region, default \code{us-east-1}.
+\item \code{AWS_ENDPOINT_URL_S3} or \code{AWS_ENDPOINT_URL}: the endpoint of other S3 compatible services, like
+\verb{http://localhost:9000}, which get addressed with path style URLs (\code{endpoint/bucket/key}).
+\item \code{R2PARQUET_S3_URL_STYLE}: \code{path} or \code{vhost}, overrides the URL style.
+}
+
+AWS profiles and single sign-on are not read, \verb{aws configure export-credentials --format env} prints the
+variables for them.
 }
 

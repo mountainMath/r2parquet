@@ -19,7 +19,7 @@ reference:
   - clear_cache_checks
   - parquet_connection
 - title: Uploading and managing data on R2 and S3
-  desc: Need the R2 credentials (see the README), or for `s3://bucket/path` the AWS ones (see `set_s3_public_access()`), except `data_to_parquet()` for local paths.
+  desc: Need the R2 credentials (see the README), or for `s3://bucket/path` the AWS ones (see the Credentials section of `upload_parquet()`), except `data_to_parquet()` for local paths.
 - subtitle: Buckets
   contents:
   - create_r2_bucket

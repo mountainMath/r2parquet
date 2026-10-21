@@ -19,47 +19,74 @@ parquet_metadata(x, ...)
 \method{parquet_metadata}{default}(x, ...)
 }
 \arguments{
-\item{x}{URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)
-parquet files, a vector of these, a lazy DuckDB table from `parquet_tbl`, or data collected with
-`collect_parquet`, which carries the metadata in its `metadata` attribute}
+\item{x}{what to read the metadata of:
+\itemize{
+\item URL, \verb{r2://bucket/path}, \verb{s3://bucket/path} or local path of a parquet file or of a directory of
+(partitioned) parquet files, or a vector of these;
+\item a lazy DuckDB table from \code{\link[=parquet_tbl]{parquet_tbl()}};
+\item data collected with \code{\link[=collect_parquet]{collect_parquet()}}, which carries the metadata in its \code{metadata} attribute.
+}}
 
-\item{...}{not used}
+\item{...}{not used.}
 
-\item{from_files}{if `TRUE`, read the footers of the parquet files on R2 and at URLs instead of the
-manifest, which may be out of date when the files were changed with other tools. The default `FALSE` reads
-the manifest where there is one}
+\item{from_files}{where to read the metadata of files on R2, S3 and at URLs from:
+\itemize{
+\item \code{FALSE} (default): the manifest, where there is one.
+\item \code{TRUE}: the footers of the parquet files, current even when the files were changed with other tools.
+}}
 }
 \value{
 a named list of the metadata entries, empty if the files have none (or the data was collected
-without attaching it), of class `parquet_metadata`, which only changes how it prints: one line per entry,
-lists as compact JSON, and the `columns` entry as a table of the columns with their labels and descriptions
+without attaching it), of class \code{parquet_metadata}, which only changes how it prints: one line per entry,
+lists as compact JSON, and the \code{columns} entry as a table of the columns with their labels and
+descriptions.
 }
 \description{
-Reads the key-value metadata from the footer of parquet files, like the `source`, `license`, `notes` and
-`columns` entries written by `data_to_parquet` with its `metadata` argument. Only metadata gets read, no
-data. Entries are strings in the footer, entries holding JSON objects or arrays, like `columns`, get parsed
-into lists. A directory of partitioned files has to have the same metadata in all its files, since they get
-written together, if the files disagree the values of the first file are used with a warning.
-The `geo` entry with the GeoParquet metadata is left out, the crs of geometry columns is available via
-the GEOMETRY column type and comes with the geometry when collecting via `collect_parquet`.
+Reads the key-value metadata from the footer of parquet files, like the \code{source}, \code{license}, \code{notes} and
+\code{columns} entries written by \code{\link[=data_to_parquet]{data_to_parquet()}} with its \code{metadata} argument. Only metadata gets read, no
+data.
+}
+\details{
+Entries are strings in the footer, entries holding JSON objects or arrays, like \code{columns}, get parsed into
+lists. The files of a partitioned directory get written together and should have the same metadata; where
+they disagree the values of the first file are used, with a warning. The \code{geo} entry with the GeoParquet
+metadata is left out, the crs of geometry columns is part of the GEOMETRY column type and comes with the
+geometry when collecting via \code{\link[=collect_parquet]{collect_parquet()}}.
 
-For paths on R2 and at URLs the metadata comes from the manifest (`_manifest.json`, see `write_manifest`)
-of the directory, or of the nearest directory above the path that has one, which records the footer
-metadata of every parquet file below it: one request for a whole dataset instead of a footer read per file.
-`upload_parquet` and `data_to_parquet` keep the manifests current, files changed with other tools are not
-reflected until `write_manifest` rebuilds the manifest. `from_files = TRUE` reads the footers of the files
-themselves instead, which is also what happens for paths without a manifest (or with one written before
-manifests recorded metadata), for presigned URLs, for local paths and for tables that read local copies from
-the cache.
+For paths on R2 or S3 and at URLs the metadata comes from the manifest (\verb{_manifest.json}, see
+\code{\link[=write_manifest]{write_manifest()}}) of the directory, or of the nearest directory above the path that has one, which
+records the footer metadata of every parquet file below it: one request for a whole dataset instead of a
+footer read per file. \code{\link[=upload_parquet]{upload_parquet()}} and \code{\link[=data_to_parquet]{data_to_parquet()}} keep the manifests current, files changed
+with other tools are not reflected until \code{\link[=write_manifest]{write_manifest()}} rebuilds the manifest. The footers of the files
+get read instead with \code{from_files = TRUE}, and for paths without a manifest (or with one written before
+manifests recorded metadata), presigned URLs, local paths and tables that read local copies from the cache.
 }
 \section{Credentials}{
 
-Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
-R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
-no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
-that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
-an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
-set.
+Credentials come from environment variables, e.g. set in \code{.Renviron}, read at call time. Public URLs and
+local paths need none.
+
+Paths on R2 (\verb{r2://bucket/path}):
+\itemize{
+\item \code{R2_ACCOUNT_ID}: the R2 account id.
+\item \code{R2_ACCESS_KEY_ID} and \code{R2_SECRET_ACCESS_KEY}: the access key id and secret access key of an R2 API
+token with access to the bucket.
+\item \code{R2_API_TOKEN}, optional: the value of an API token with Zone Cache Purge permission (see
+\code{\link[=create_r2_bucket]{create_r2_bucket()}}). Files that change on R2 then get purged from the Cloudflare cache of the bucket's
+custom domains, so that the new versions are served right away; the purge is skipped without it.
+}
+
+Paths on S3 (\verb{s3://bucket/path}), on Amazon S3 or another S3 compatible service like MinIO, use the
+variables AWS tools use:
+\itemize{
+\item \code{AWS_ACCESS_KEY_ID} and \code{AWS_SECRET_ACCESS_KEY}, and \code{AWS_SESSION_TOKEN} for temporary credentials.
+\item \code{AWS_REGION} or \code{AWS_DEFAULT_REGION}: the region, default \code{us-east-1}.
+\item \code{AWS_ENDPOINT_URL_S3} or \code{AWS_ENDPOINT_URL}: the endpoint of other S3 compatible services, like
+\verb{http://localhost:9000}, which get addressed with path style URLs (\code{endpoint/bucket/key}).
+\item \code{R2PARQUET_S3_URL_STYLE}: \code{path} or \code{vhost}, overrides the URL style.
+}
+
+AWS profiles and single sign-on are not read, \verb{aws configure export-credentials --format env} prints the
+variables for them.
 }
 

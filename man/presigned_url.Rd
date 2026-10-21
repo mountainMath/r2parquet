@@ -2,37 +2,60 @@
 % Please edit documentation in R/r2.R
 \name{presigned_url}
 \alias{presigned_url}
-\title{presigned URL for a file on Cloudflare R2}
+\title{presigned URL for a file on Cloudflare R2 or S3}
 \usage{
 presigned_url(path, expires = 3600, method = c("GET", "HEAD", "PUT"))
 }
 \arguments{
-\item{path}{file on R2 as `r2://bucket/path`, or a vector of these}
+\item{path}{file as \verb{r2://bucket/path} or \verb{s3://bucket/path}, or a vector of these.}
 
-\item{expires}{number of seconds the URLs are valid for, between 1 second and 7 days (604800 seconds),
-default is one hour}
+\item{expires}{seconds the URLs are valid for, from 1 to 604800 (7 days), default \code{3600} (one hour).}
 
-\item{method}{HTTP method the URLs are valid for, `"GET"` (the default) to download, `"HEAD"` to
-get the file's metadata, or `"PUT"` to upload}
+\item{method}{HTTP method the URLs are valid for:
+\itemize{
+\item \code{"GET"} (default): download the file;
+\item \code{"HEAD"}: get the file's metadata;
+\item \code{"PUT"}: upload a file.
+}}
 }
 \value{
-the presigned URLs, one per path
+the presigned URLs, one per path.
 }
 \description{
-URLs that grant time limited access to single files in a private bucket, without credentials.
-Anyone with the URL can download the file (`method="GET"`) or, for `method="PUT"`, upload a file
-to that path until the URL expires, so treat the URL like a password. The URLs are signed locally,
-creating them does not check that the files exist. The URLs stop working when the API token they were signed
-with is revoked.
+URLs that grant time limited access to single files in a private bucket, without credentials. Anyone with
+the URL can download the file or, for \code{method = "PUT"}, upload a file to that path until the URL expires, so
+treat the URL like a password.
+}
+\details{
+The URLs are signed locally, creating them does not check that the files exist. The URLs stop working when
+the credentials they were signed with are revoked, and for temporary S3 credentials when these expire.
 }
 \section{Credentials}{
 
-Paths on R2 (`r2://bucket/path`) need the R2 account id and the access key id and secret access key of an
-R2 API token with access to the bucket in the `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
-environment variables, e.g. set in `.Renviron`; they get read at call time. Public URLs and local paths need
-no credentials. Files that change on R2 get purged from the Cloudflare cache of the bucket's custom domains, so
-that the new versions are served right away, when the `R2_API_TOKEN` environment variable holds the value of
-an API token with Zone Cache Purge permission (see `create_r2_bucket`); the purge is skipped when it is not
-set.
+Credentials come from environment variables, e.g. set in \code{.Renviron}, read at call time. Public URLs and
+local paths need none.
+
+Paths on R2 (\verb{r2://bucket/path}):
+\itemize{
+\item \code{R2_ACCOUNT_ID}: the R2 account id.
+\item \code{R2_ACCESS_KEY_ID} and \code{R2_SECRET_ACCESS_KEY}: the access key id and secret access key of an R2 API
+token with access to the bucket.
+\item \code{R2_API_TOKEN}, optional: the value of an API token with Zone Cache Purge permission (see
+\code{\link[=create_r2_bucket]{create_r2_bucket()}}). Files that change on R2 then get purged from the Cloudflare cache of the bucket's
+custom domains, so that the new versions are served right away; the purge is skipped without it.
+}
+
+Paths on S3 (\verb{s3://bucket/path}), on Amazon S3 or another S3 compatible service like MinIO, use the
+variables AWS tools use:
+\itemize{
+\item \code{AWS_ACCESS_KEY_ID} and \code{AWS_SECRET_ACCESS_KEY}, and \code{AWS_SESSION_TOKEN} for temporary credentials.
+\item \code{AWS_REGION} or \code{AWS_DEFAULT_REGION}: the region, default \code{us-east-1}.
+\item \code{AWS_ENDPOINT_URL_S3} or \code{AWS_ENDPOINT_URL}: the endpoint of other S3 compatible services, like
+\verb{http://localhost:9000}, which get addressed with path style URLs (\code{endpoint/bucket/key}).
+\item \code{R2PARQUET_S3_URL_STYLE}: \code{path} or \code{vhost}, overrides the URL style.
+}
+
+AWS profiles and single sign-on are not read, \verb{aws configure export-credentials --format env} prints the
+variables for them.
 }
 

@@ -7,14 +7,17 @@
 clear_cache_checks()
 }
 \value{
-(invisibly) `NULL`
+(invisibly) \code{NULL}.
 }
 \description{
-`parquet_tbl` checks a cached copy against the remote files once per session, the first time it reads the
-path with the default `cache = NULL`, and reuses the result afterwards, so that reading a dataset repeatedly
-costs one request and not one per call. Remote data that changes during the session therefore goes
-unnoticed until the session is restarted or the checks are forgotten with this function, after which the next
-`parquet_tbl` call on each path checks the remote again. `cache_parquet` and `parquet_tbl(cache = TRUE)`
-always check, and update the remembered result along with the copy, and `remove_parquet_from_cache` forgets the
-checks of the paths it removes.
+Forgets which cached copies \code{\link[=parquet_tbl]{parquet_tbl()}} already checked against the remote files in this session, so
+that the next \code{\link[=parquet_tbl]{parquet_tbl()}} call on each path checks again and notices remote data that changed.
+}
+\details{
+With the default \code{cache = NULL}, \code{\link[=parquet_tbl]{parquet_tbl()}} checks a cached copy once per session, the first time it
+reads the path, and reuses the result afterwards, so that reading a dataset repeatedly costs one request and
+not one per call. Remote data that changes during the session therefore goes unnoticed until the session is
+restarted or this function is called. \code{\link[=cache_parquet]{cache_parquet()}} and \code{parquet_tbl(cache = TRUE)} always check, and
+update the remembered result along with the copy, and \code{\link[=remove_parquet_from_cache]{remove_parquet_from_cache()}} forgets the checks of the
+paths it removes.
 }

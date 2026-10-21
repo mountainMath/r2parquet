@@ -54,20 +54,22 @@ sql_translation.r2parquet_connection <- function(con){
 #' DuckDB connection shared by the parquet functions
 #'
 #' @description
-#' The in-memory DuckDB connection that `parquet_tbl`, `parquet_metadata` and
-#' `data_to_parquet` use. It gets created on first use and is cached for the session, so that tables from
-#' different `parquet_tbl` calls can be joined with each other. Use it to bring other data onto the same
-#' connection, e.g. `dplyr::copy_to(parquet_connection(), df)` to join a data frame with a parquet table, or to
-#' change DuckDB settings via `DBI::dbExecute`, like `SET memory_limit = '4GB'` or `SET threads = 2`.
-#' Disconnecting it, e.g. to free memory, is fine, the next call creates a new connection, but tables from
-#' `parquet_tbl` created on the old connection stop working. `parquet_tbl` can also create its tables on a
-#' connection of your own via its `con` argument.
+#' The in-memory DuckDB connection that [parquet_tbl()], [parquet_metadata()] and [data_to_parquet()] use. It gets
+#' created on first use and is cached for the session, so that tables from different [parquet_tbl()] calls can
+#' be joined with each other.
+#'
+#' @details
+#' Use it to bring other data onto the same connection, e.g. `dplyr::copy_to(parquet_connection(), df)` to
+#' join a data frame with a parquet table, or to change DuckDB settings via [DBI::dbExecute()], like
+#' `SET memory_limit = '4GB'` or `SET threads = 2`. Disconnecting it, e.g. to free memory, is fine, the next
+#' call creates a new connection, but tables created on the old connection stop working. [parquet_tbl()] can also
+#' create its tables on a connection of your own via its `con` argument.
 #'
 #' The connection is DuckDB's connection class extended with the package's SQL translation, which renders
-#' whole numbers in comparisons as integers, see `parquet_tbl`; everything else works as on any DuckDB
+#' whole numbers in comparisons as integers, see [parquet_tbl()]; everything else works as on any DuckDB
 #' connection.
 #'
-#' @return a DuckDB connection
+#' @return a DuckDB connection.
 #' @export
 parquet_connection <- function(){
   con <- parquet_cache$duckdb_connection
@@ -182,70 +184,69 @@ duckdb_parquet_paths <- function(con,path){
   as.character(unlist(lapply(seq_along(path),function(i)if (is_url_dir[i]) url_directory_files(path[i]) else path[i])))
 }
 
-#' lazy table to query parquet files at URLs, on R2 or at local paths
+#' lazy table to query parquet files at URLs, on R2 or S3, or at local paths
 #'
 #' @description
-#' Lazy table for parquet files at public URLs, like files in public R2 buckets or presigned URLs, in private
-#' R2 buckets, given as `r2://bucket/path`, or at local paths. No data is downloaded until the query is
-#' executed, e.g. via `dplyr::collect()`, and only the parts of the files needed to answer the query get read.
-#' Filters on partition columns restrict which files are read, other filters and the selection of columns
-#' restrict which parts of the files are downloaded.
+#' Lazy `dplyr` table on DuckDB for parquet files at public URLs (like public buckets or presigned URLs), in
+#' private buckets on R2 as `r2://bucket/path` or on S3 as `s3://bucket/path`, or at local paths. Nothing gets
+#' downloaded until the query is executed, e.g. via [dplyr::collect()], and then only what the query needs:
+#' filters on partition columns restrict which files get read, other filters and the selected columns which
+#' parts of the files.
 #'
-#' Whole numbers in comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, `%in%`, `between`) are rendered as
-#' integers: a plain number like `2021` is a double in R, which `dplyr` renders as `2021.0`, and DuckDB
-#' resolves that against an integer column by casting the column, which defeats the statistics it uses to
-#' skip row groups, so the filter downloads the whole column instead of the matching row groups. The package
-#' renders `2021` as the integer `2021`, with a message the first time in a session, and comparisons with
-#' double columns are unaffected. Write integers as `2021L` to avoid the message. Arithmetic is not
-#' rewritten, `x * 1000` stays a double multiplication. Tables on a connection of your own passed as `con`
-#' keep DuckDB's own translation, so write integers as `2021L` there.
+#' @details
+#' `dplyr` verbs get translated to SQL. Use [`sf::st_filter()`][st_filter.tbl_duckdb_connection] to filter by
+#' location, [collect_parquet()] to collect the result with its metadata attached (as an sf object if it has
+#' geometry), [parquet_metadata()] for the metadata of the files and [list_parquet()] to list them. Tables
+#' with GEOMETRY columns, like GeoParquet files written by [data_to_parquet()], get the `spatial` extension
+#' loaded, so that spatial functions like `ST_Area` work in queries.
 #'
-#' Directories on R2 are often named like a parquet file,
-#' e.g. `r2://bucket/data.parquet`, these get resolved to all parquet files within them.
-#' Local directories get read as all parquet files within them. Directories can't be listed over https, so a
-#' directory at a URL gets read through the manifest next to its files (`_manifest.json`, which
-#' `upload_parquet`, `data_to_parquet` and `write_manifest` write), which lists the files to read. A URL
-#' ending in a slash is read as a directory; a URL without one is read as a file first and, if there is no
-#' file at it, as a directory, so a directory named like a parquet file works either way.
+#' # Directories
+#' * Local directories and directories on R2 and S3 get read as all parquet files within them. Directories in
+#'   buckets are often named like a parquet file, e.g. `r2://bucket/data.parquet`, which works too.
+#' * Directories at URLs can't be listed, they get read through the manifest next to their files
+#'   (`_manifest.json`, written by [upload_parquet()], [data_to_parquet()] and [write_manifest()]). A URL
+#'   ending in a slash is read as a directory; a URL without one is read as a file first and, if there is no
+#'   file at it, as a directory.
 #'
-#' The table is a lazy `dplyr` table on a DuckDB connection that is cached for the session (`parquet_connection`),
-#' so that tables from several calls can be joined, or on the connection given as `con`. `dplyr` verbs get
-#' translated to SQL. If the table has GEOMETRY columns, like GeoParquet files written by `data_to_parquet`,
-#' the `spatial` extension gets loaded so that spatial functions like `ST_Area` can be used in queries. Use
-#' `sf::st_filter` to filter by location and `collect_parquet` to collect the result with its metadata
-#' attached, as an sf object if it has geometry. `parquet_metadata` reads the metadata of the table's files
-#' and `list_parquet` lists the files.
+#' # Integer literals
+#' Whole numbers in comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, `%in%`, `between`) get rendered as
+#' integers, with a message the first time in a session. A plain number like `2021` is a double in R, which
+#' `dplyr` renders as `2021.0`, and DuckDB resolves that against an integer column by casting the column,
+#' which defeats the statistics it uses to skip row groups, so the filter downloads the whole column.
+#' Comparisons with double columns are unaffected, and arithmetic is not rewritten (`x * 1000` stays a double
+#' multiplication). Write integers as `2021L` to avoid the message, and on a connection of your own passed as
+#' `con`, which keeps DuckDB's own translation.
 #'
-#' Remote files can be kept in a local cache directory via `cache_parquet`, for data that gets queried regularly,
-#' and the table then reads the local copies. By default (`cache = NULL`) a cached copy gets used if it is
-#' current, checked against the etags of the remote files, and the remote files get read otherwise, with a
-#' warning when the copy is out of date. Paths without a copy in the cache are read remotely without any
-#' request to check them, so the default costs nothing for them. `cache = TRUE` caches the files first, downloading what is
-#' new or changed, and `cache = FALSE` always reads the remote files. In both the default and `cache = TRUE`
-#' the cached copy gets used with a warning when the remote can't be reached, e.g. offline.
-#' `cache = "offline"` reads the cached copy as it is, without contacting the remote, for working without a
-#' network connection, or to compare the copy with the current remote files (`cache = FALSE`) before updating
-#' it. Directories at public URLs can only be cached if they have a manifest, see `upload_parquet`.
+#' # Cache
+#' Remote files that get queried regularly can be kept in a local cache directory via [cache_parquet()], and
+#' the table then reads the local copies, see the `cache` argument. The default costs nothing for paths
+#' without a copy, they are read remotely without any request to check them. With the default and with
+#' `cache = TRUE` a cached copy gets used, with a warning, when the remote can't be reached, e.g. offline.
+#' `cache = "offline"` also allows comparing the copy with the current remote files (`cache = FALSE`) before
+#' updating it. Directories at public URLs can only be cached if they have a manifest. The cache directory is
+#' the one in the `R2PARQUET_CACHE_PATH` environment variable, or the user cache directory if that is not set.
 #'
 #' @inheritSection upload_parquet Credentials
-#' @param path URL, `r2://bucket/path` or local path of the parquet file or the directory with (partitioned)
-#' parquet files, or a vector of these
-#' @param hive_partitioning if `TRUE`, the default, partition columns get derived from `key=value` components of the
-#' file paths. This includes the directories above a single file, reading one file out of a partitioned
-#' directory, like `data/year=2021/data_0.parquet`, adds a `year` column.
-#' @param con DuckDB connection to create the table on. Defaults to `parquet_connection`, the connection shared
-#' by all calls. Tables can only be joined when they are on the same connection, so pass your own connection to
-#' join with data that lives there. The `httpfs` and `spatial` extensions get installed and loaded on it as
-#' needed, and the R2 credentials get registered as a secret.
-#' @param cache `NULL`, the default, reads the copies in the local cache directory where they exist and are
-#' current, with a warning for copies that are out of date, and the remote files otherwise. A copy only gets
-#' checked against the remote files the first time its path is read in the session, later calls reuse the
-#' result (see `clear_cache_checks`). `TRUE` updates the
-#' copies first via `cache_parquet`, downloading the files on first use, and reads them. `FALSE` reads the remote
-#' files directly. `"offline"` reads the copies without checking them against the remote files, whether they are
-#' current or not, and fails for paths that have no copy. The cache directory is the one in the
-#' `R2PARQUET_CACHE_PATH` environment variable, or the user cache directory if that is not set.
-#' @return a lazy `dplyr` table on DuckDB
+#' @param path URL, `r2://bucket/path`, `s3://bucket/path` or local path of a parquet file or a directory of
+#'   (partitioned) parquet files, or a vector of these.
+#' @param hive_partitioning `TRUE` (default) or `FALSE`: derive partition columns from `key=value` components
+#'   of the file paths. This includes the directories above a single file, so reading
+#'   `data/year=2021/data_0.parquet` adds a `year` column.
+#' @param con DuckDB connection to create the table on. Tables can only be joined when they are on the same
+#'   connection.
+#'   * `NULL` (default): [parquet_connection()], shared by all calls.
+#'   * a connection of your own, to join with data that lives there. The `httpfs` and `spatial` extensions
+#'     get installed and loaded on it as needed, and the R2 or S3 credentials get registered as
+#'     secrets.
+#' @param cache how to use the local cache (see the Cache section):
+#'   * `NULL` (default): read the cached copy if it is current, else the remote files, with a warning for
+#'     copies that are out of date. A copy only gets checked the first time its path is read in the session,
+#'     later calls reuse the result (see [clear_cache_checks()]).
+#'   * `TRUE`: update the copy first via [cache_parquet()], downloading the files on first use, and read it.
+#'   * `FALSE`: read the remote files directly.
+#'   * `"offline"`: read the copy without checking it against the remote files, current or not; fails for
+#'     paths without a copy.
+#' @return a lazy `dplyr` table on DuckDB.
 #' @export
 parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL) {
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
@@ -315,23 +316,31 @@ local_parquet_files <- function(path){
 #' list parquet files
 #'
 #' @description
-#' Lists the parquet files at paths on R2, at URLs or at local paths with their size, modification time and
-#' etag, and whether the local cache holds a current copy, or the files a lazy table from `parquet_tbl` reads.
-#' Directories get listed recursively, so a directory of (partitioned) parquet files lists all the parquet
-#' files in it, and a path that does not exist lists nothing.
-#' Files at URLs, including presigned URLs, get their size and etag from a request for their
-#' first byte, directories at URLs from the manifest next to the files (see `upload_parquet`). A URL with
-#' neither, or one that can't be reached, is listed as it is with `NA`s.
+#' Lists the parquet files at paths on R2 or S3, at URLs or at local paths, or the files a lazy table from
+#' [parquet_tbl()] reads, with their size, modification time and etag, and whether the local cache holds a
+#' current copy. Directories get listed recursively, a path that does not exist lists nothing.
+#'
+#' @details
+#' Files at URLs, including presigned URLs, get their size and etag from a request for their first byte,
+#' directories at URLs from the manifest next to the files (see [upload_parquet()]). A URL with neither, or one
+#' that can't be reached, is listed as it is with `NA`s.
 #'
 #' @inheritSection upload_parquet Credentials
-#' @param x `r2://bucket/path`, URL or local path of a parquet file or of a directory with (partitioned)
-#' parquet files, a vector of these, or a lazy DuckDB table from `parquet_tbl`
-#' @return a tibble with one row per parquet file and the columns `file`, the file name, `size`, formatted for
-#' reading like `2.5 kB`, `sizeRaw`, the size in bytes, `modified`, the modification time in UTC, `cache`, the
-#' status of the file in the local cache directory of `cache_parquet`: `"not cached"`, `"current"` when the
-#' cached copy has the etag of the file, `"stale"` when it does not, and `NA` for local files and where the
-#' etag of the file is unknown, `etag`, the etag of the file, which is the MD5 hash of its content for files
-#' uploaded by this package, `NA` for local files, and `path`, the `r2://bucket/path`, URL or local path
+#' @param x what to list:
+#'   * `r2://bucket/path`, `s3://bucket/path`, URL or local path of a parquet file or of a directory of
+#'     (partitioned) parquet files, or a vector of these;
+#'   * a lazy DuckDB table from [parquet_tbl()].
+#' @return a tibble with one row per parquet file and the columns
+#'   * `file`: the file name;
+#'   * `size`: the size formatted for reading, like `2.5 kB`;
+#'   * `sizeRaw`: the size in bytes;
+#'   * `modified`: the modification time in UTC;
+#'   * `cache`: the status of the copy in the local cache directory of [cache_parquet()]: `"not cached"`,
+#'     `"current"` when the copy has the etag of the file, `"stale"` when it does not, and `NA` for local
+#'     files and where the etag is unknown;
+#'   * `etag`: the etag of the file, the MD5 hash of its content for files uploaded by this package, `NA` for
+#'     local files;
+#'   * `path`: the `r2://bucket/path`, `s3://bucket/path`, URL or local path.
 #' @export
 list_parquet <- function(x) UseMethod("list_parquet")
 

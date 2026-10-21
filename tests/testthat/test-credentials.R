@@ -16,7 +16,7 @@ test_that("r2 paths get split into bucket and path", {
   expect_equal(r2parquet:::r2_split_path("r2://bucket"),list(bucket="bucket",path="",directory=FALSE))
   expect_equal(r2parquet:::r2_split_path("r2://bucket//data/"),list(bucket="bucket",path="data",directory=TRUE))
   expect_error(r2parquet:::r2_split_path("r2:///data"),"r2://bucket/path")
-  expect_error(r2parquet:::r2_split_path(c("r2://bucket/a.parquet","r2://bucket/b.parquet")),"single R2 path")
+  expect_error(r2parquet:::r2_split_path(c("r2://bucket/a.parquet","r2://bucket/b.parquet")),"single r2:// or s3:// path")
 })
 
 test_that("s3 paths keep the scheme in the bucket", {
