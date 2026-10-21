@@ -63,7 +63,7 @@ With a custom endpoint the bucket goes into the path of the requests (`http://lo
 
 ## Private data
 
-By default all uploads the package makes are private. As an example we take the dissemination block level geographic attributes of Metro Vancouver from the public census bucket and write them to S3. `data_to_parquet()` writes lazy tables without collecting them, and carries the metadata of the source along, its attribution and licence, with a `derived` entry that lists the entries carried over, since they describe the source rather than the subset.
+By default all uploads the package makes are private. As an example we take the dissemination block level geographic attributes of Metro Vancouver from the public census bucket and write them to S3. `data_to_parquet()` writes lazy tables without collecting them. The metadata of the source doesn't get carried over by itself, it describes the source rather than the subset, so we pass on the entries that still apply, its attribution and licence; without `metadata` the write would warn that the source has metadata.
 
 ```{r}
 private_path <- paste0(params$s3_root, "/private/van_db_attributes.parquet")
@@ -73,7 +73,8 @@ geo_attributes <- parquet_tbl("https://data.mountainmath.xyz/census/2021/2021_92
 geo_attributes |>
   filter(CMAUID == "933") |>
   select(DBUID, DAUID, CSDUID, CSDNAME, Population = DBPOP2021, Dwellings = DBTDWELL2021) |>
-  data_to_parquet(private_path, sort_by = "DBUID")
+  data_to_parquet(private_path, sort_by = "DBUID",
+                  metadata = parquet_metadata(geo_attributes)[c("title", "attribution", "licence", "licence_url")])
 ```
 
 With credentials the file reads like any other.
@@ -109,7 +110,8 @@ Whether a file is public is then decided by where it gets uploaded. Here we copy
 cma_source <- parquet_tbl("https://data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet")
 
 cma_source |>
-  data_to_parquet(paste0(public_prefix, "/cma"), partition_by = "PRUID", sort_by = "CMAUID")
+  data_to_parquet(paste0(public_prefix, "/cma"), partition_by = "PRUID", sort_by = "CMAUID",
+                  metadata = parquet_metadata(cma_source))
 ```
 
 ```{r wait-for-policy, include = FALSE}

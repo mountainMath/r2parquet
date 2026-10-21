@@ -12,7 +12,6 @@ data_to_parquet(
   row_group_size = 10000L,
   remove_stale = TRUE,
   metadata = NULL,
-  inherit_metadata = TRUE,
   compression = c("zstd", "snappy", "gzip", "brotli", "lz4", "lz4_raw", "uncompressed"),
   purge_cache = TRUE
 )
@@ -35,10 +34,8 @@ partition columns changed. Other files below `path` are kept. With `FALSE` writt
 same path and other files are kept, e.g. to add partitions. Files at the paths being written always get replaced.}
 
 \item{metadata}{optional named list of metadata to write into the parquet footer, see description. The entry
-`geo` is reserved for the GeoParquet metadata. Entries replace inherited ones, a `NULL` entry drops one.}
-
-\item{inherit_metadata}{if `TRUE`, the default, carry over the metadata of the parquet files the data was
-read from, see description}
+`geo` is reserved for the GeoParquet metadata. `list()` writes none without the warning about the metadata of
+the source.}
 
 \item{compression}{parquet compression codec, `"zstd"` (the default), `"snappy"`, `"gzip"`, `"brotli"`,
 `"lz4"`, `"lz4_raw"` or `"uncompressed"`. zstd compresses well and decompresses fast, which suits files
@@ -108,18 +105,14 @@ packages, get their label added automatically. Parquet footers hold strings, so 
 as they are and anything else, like `columns`, as JSON; `NULL` and `NA` entries get dropped with a warning.
 Changing the metadata means writing the data again.
 
-Data read from parquet files carries their metadata along: lazy tables from `parquet_tbl` (the files of
-the left-hand table for joins) and data collected with `collect_parquet`, which keeps it in its `metadata`
-attribute, write it again unless `inherit_metadata` is `FALSE`. Entries given in `metadata` replace inherited
-ones, a `NULL` entry drops one, and `columns` gets merged by column, keeping inherited entries for the columns
-the data still has, with `label` attributes of data frame columns taking precedence over inherited labels.
-An inherited `primary_key` gets dropped when its columns are gone, and with a warning when it no longer
-identifies the rows. Inherited entries describe the data as it was read, so when inherited entries are left
-and the data may have changed, which is the case for lazy tables after `dplyr` verbs and always for data
-frames, since there is no telling, a `derived` entry gets added: an object with `inherited`, the entries
-that were carried over, and `from`, the remote paths the lazy table read, without query strings, local paths
-are left out. A verified primary key is not listed. Repaired geometries replace inherited `processing` and
-`geometry_repairs` entries.
+Metadata doesn't get carried over by itself, data read from parquet files describes something else once it
+got changed. Without `metadata`, writing a lazy table from `parquet_tbl` (the files of the left-hand table
+for joins) or data collected with `collect_parquet` warns when the files it was read from have metadata. Pass
+`metadata = parquet_metadata(data)` to write it again, `modifyList(parquet_metadata(data), list(...))` to
+change entries (a `NULL` drops one), or `metadata = list()` to write none. Metadata read with
+`parquet_metadata` describes the source, so its `columns` entries for columns the data no longer has get
+dropped, and repaired geometries replace its `processing` and `geometry_repairs` entries. A `primary_key`
+gets checked like any other.
 
 A `primary_key` entry declares the columns that together identify the rows, one column like `"DBUID"` or
 several for long tables, like `c("DAUID", "characteristic")`. The columns have to exist, have no missing
