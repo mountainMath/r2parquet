@@ -12,6 +12,7 @@ data_to_parquet(
   row_group_size = 10000L,
   remove_stale = TRUE,
   metadata = NULL,
+  inherit_metadata = TRUE,
   compression = c("zstd", "snappy", "gzip", "brotli", "lz4", "lz4_raw", "uncompressed"),
   purge_cache = TRUE
 )
@@ -34,7 +35,10 @@ partition columns changed. Other files below `path` are kept. With `FALSE` writt
 same path and other files are kept, e.g. to add partitions. Files at the paths being written always get replaced.}
 
 \item{metadata}{optional named list of metadata to write into the parquet footer, see description. The entry
-`geo` is reserved for the GeoParquet metadata.}
+`geo` is reserved for the GeoParquet metadata. Entries replace inherited ones, a `NULL` entry drops one.}
+
+\item{inherit_metadata}{if `TRUE`, the default, carry over the metadata of the parquet files the data was
+read from, see description}
 
 \item{compression}{parquet compression codec, `"zstd"` (the default), `"snappy"`, `"gzip"`, `"brotli"`,
 `"lz4"`, `"lz4_raw"` or `"uncompressed"`. zstd compresses well and decompresses fast, which suits files
@@ -79,7 +83,9 @@ row groups of 2048 rows, so data with fewer rows ends up in a single row group a
 With `partition_by`, `path` is a directory that gets one subdirectory per value, like `year=2021/data_0.parquet`.
 The partition values are only stored in the directory names, readers recover them from there with hive partitioning,
 DuckDB keeps string values like `"001"` as strings. Partitioned files get written single threaded, as multi
-threaded writes don't keep the sort order within partitions.
+threaded writes don't keep the sort order within partitions. They get written to a new directory next to
+`path` first and moved into place once complete, so a dataset can be rewritten from a lazy table reading it,
+and a failed write leaves the existing files as they were. A file at `path` gets replaced by the directory.
 
 Destinations on R2 get written to a temporary directory and uploaded via `upload_parquet`. The bucket has to
 exist, use `create_r2_bucket` to create it. Each file is uploaded in a single request from memory, so the
@@ -101,6 +107,19 @@ short for the label. Columns of data frames with a `label` attribute, as set by 
 packages, get their label added automatically. Parquet footers hold strings, so single values get written
 as they are and anything else, like `columns`, as JSON; `NULL` and `NA` entries get dropped with a warning.
 Changing the metadata means writing the data again.
+
+Data read from parquet files carries their metadata along: lazy tables from `parquet_tbl` (the files of
+the left-hand table for joins) and data collected with `collect_parquet`, which keeps it in its `metadata`
+attribute, write it again unless `inherit_metadata` is `FALSE`. Entries given in `metadata` replace inherited
+ones, a `NULL` entry drops one, and `columns` gets merged by column, keeping inherited entries for the columns
+the data still has, with `label` attributes of data frame columns taking precedence over inherited labels.
+An inherited `primary_key` gets dropped when its columns are gone, and with a warning when it no longer
+identifies the rows. Inherited entries describe the data as it was read, so when inherited entries are left
+and the data may have changed, which is the case for lazy tables after `dplyr` verbs and always for data
+frames, since there is no telling, a `derived` entry gets added: an object with `inherited`, the entries
+that were carried over, and `from`, the remote paths the lazy table read, without query strings, local paths
+are left out. A verified primary key is not listed. Repaired geometries replace inherited `processing` and
+`geometry_repairs` entries.
 
 A `primary_key` entry declares the columns that together identify the rows, one column like `"DBUID"` or
 several for long tables, like `c("DAUID", "characteristic")`. The columns have to exist, have no missing

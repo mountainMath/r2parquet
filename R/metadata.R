@@ -182,6 +182,65 @@ attach_parquet_metadata <- function(data,metadata){
   data
 }
 
+# the metadata of the parquet files data was read from, for data_to_parquet to carry over: the footers (or
+# manifests) a lazy table from parquet_tbl reads, the metadata attribute collect_parquet attaches. altered says
+# whether the data may differ from the files, which can't be told for data frames, from the remote paths a lazy
+# table read, without query strings since presigned URLs carry their signature there. NULL without metadata
+source_metadata <- function(data){
+  if (inherits(data,"tbl_lazy")) {
+    if (is.null(attr(data,"r2parquet_paths"))) return(NULL)
+    metadata <- unclass(parquet_metadata(data))
+    from <- attr(data,"r2parquet_source")
+    cache_dir <- cache_directory()
+    cached <- startsWith(from,paste0(cache_dir,"/"))
+    from[cached] <- cache_remote_path(from[cached],cache_dir)
+    from <- unique(sub("[?#].*$","",from[is_remote(from)]))
+    altered <- !inherits(data$lazy_query,"lazy_base_query")
+  } else {
+    metadata <- attr(data,"metadata")
+    # only metadata in the form parquet_metadata returns it
+    if (!is.list(metadata) || is.null(names(metadata)) || any(names(metadata)=="") || "geo" %in% names(metadata) ||
+        (!is.null(metadata$columns) && (!is.list(metadata$columns) || is.null(names(metadata$columns))))) return(NULL)
+    metadata <- unclass(metadata)
+    from <- NULL
+    altered <- TRUE
+  }
+  if (length(metadata)==0) return(NULL)
+  list(metadata=metadata,from=unname(from),altered=altered)
+}
+
+# the metadata given to data_to_parquet with the inherited entries it doesn't replace: NULL entries drop inherited
+# ones, columns get merged by column for the columns the data has, label attributes taking precedence over
+# inherited labels. Returns the merged metadata, the names of the inherited entries left in it, and the given metadata
+merge_inherited_metadata <- function(metadata,inherited,columns,labels=NULL){
+  given <- metadata
+  # metadata that isn't a named list gets rejected by metadata_strings()
+  if (length(inherited)==0 || (!is.null(metadata) && (!is.list(metadata) || is.null(names(metadata))))) {
+    return(list(metadata=metadata,inherited=character(),given=given))
+  }
+  dropped <- names(metadata)[vapply(metadata,is.null,logical(1))]
+  inherited_keys <- setdiff(names(inherited),names(metadata))
+  # given entries replace inherited ones in place, the NULL entries that drop one go, metadata_strings() warns about the others
+  merged <- inherited[setdiff(names(inherited),dropped)]
+  for (key in setdiff(names(metadata),intersect(dropped,names(inherited)))) merged[key] <- list(metadata[[key]])
+  inherited_columns <- if (is.list(inherited$columns) && !"columns" %in% dropped) {
+    inherited$columns[intersect(names(inherited$columns),setdiff(columns,names(metadata$columns)))]
+  }
+  inherited_columns <- lapply(inherited_columns,function(entry)if (is.character(entry) && length(entry)==1) list(label=entry) else entry)
+  for (column in intersect(names(inherited_columns),names(labels))) {
+    if (!is.null(labels[[column]])) inherited_columns[[column]]$label <- as.character(labels[[column]])
+  }
+  if (length(inherited_columns)>0) {
+    all_columns <- c(metadata$columns,inherited_columns)
+    merged$columns <- all_columns[c(intersect(columns,names(all_columns)),setdiff(names(all_columns),columns))]
+    inherited_keys <- union(inherited_keys,"columns")
+  } else if (!"columns" %in% names(metadata)) {
+    merged$columns <- NULL
+    inherited_keys <- setdiff(inherited_keys,"columns")
+  }
+  list(metadata=merged,inherited=setdiff(inherited_keys,"derived"),given=given)
+}
+
 #' metadata of parquet files
 #'
 #' @description

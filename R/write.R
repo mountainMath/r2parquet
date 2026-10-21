@@ -37,7 +37,9 @@
 #' With `partition_by`, `path` is a directory that gets one subdirectory per value, like `year=2021/data_0.parquet`.
 #' The partition values are only stored in the directory names, readers recover them from there with hive partitioning,
 #' DuckDB keeps string values like `"001"` as strings. Partitioned files get written single threaded, as multi
-#' threaded writes don't keep the sort order within partitions.
+#' threaded writes don't keep the sort order within partitions. They get written to a new directory next to
+#' `path` first and moved into place once complete, so a dataset can be rewritten from a lazy table reading it,
+#' and a failed write leaves the existing files as they were. A file at `path` gets replaced by the directory.
 #'
 #' Destinations on R2 get written to a temporary directory and uploaded via `upload_parquet`. The bucket has to
 #' exist, use `create_r2_bucket` to create it. Each file is uploaded in a single request from memory, so the
@@ -60,6 +62,19 @@
 #' as they are and anything else, like `columns`, as JSON; `NULL` and `NA` entries get dropped with a warning.
 #' Changing the metadata means writing the data again.
 #'
+#' Data read from parquet files carries their metadata along: lazy tables from `parquet_tbl` (the files of
+#' the left-hand table for joins) and data collected with `collect_parquet`, which keeps it in its `metadata`
+#' attribute, write it again unless `inherit_metadata` is `FALSE`. Entries given in `metadata` replace inherited
+#' ones, a `NULL` entry drops one, and `columns` gets merged by column, keeping inherited entries for the columns
+#' the data still has, with `label` attributes of data frame columns taking precedence over inherited labels.
+#' An inherited `primary_key` gets dropped when its columns are gone, and with a warning when it no longer
+#' identifies the rows. Inherited entries describe the data as it was read, so when inherited entries are left
+#' and the data may have changed, which is the case for lazy tables after `dplyr` verbs and always for data
+#' frames, since there is no telling, a `derived` entry gets added: an object with `inherited`, the entries
+#' that were carried over, and `from`, the remote paths the lazy table read, without query strings, local paths
+#' are left out. A verified primary key is not listed. Repaired geometries replace inherited `processing` and
+#' `geometry_repairs` entries.
+#'
 #' A `primary_key` entry declares the columns that together identify the rows, one column like `"DBUID"` or
 #' several for long tables, like `c("DAUID", "characteristic")`. The columns have to exist, have no missing
 #' values and identify the rows, which gets checked before writing, at the cost of an extra pass over a lazy
@@ -77,7 +92,9 @@
 #' partition columns changed. Other files below `path` are kept. With `FALSE` written files replace files with the
 #' same path and other files are kept, e.g. to add partitions. Files at the paths being written always get replaced.
 #' @param metadata optional named list of metadata to write into the parquet footer, see description. The entry
-#' `geo` is reserved for the GeoParquet metadata.
+#' `geo` is reserved for the GeoParquet metadata. Entries replace inherited ones, a `NULL` entry drops one.
+#' @param inherit_metadata if `TRUE`, the default, carry over the metadata of the parquet files the data was
+#' read from, see description
 #' @param compression parquet compression codec, `"zstd"` (the default), `"snappy"`, `"gzip"`, `"brotli"`,
 #' `"lz4"`, `"lz4_raw"` or `"uncompressed"`. zstd compresses well and decompresses fast, which suits files
 #' that get read remotely.
@@ -87,22 +104,30 @@
 #' with the parquet files that were written, local paths or `r2://bucket/path`, in the `files` attribute
 #' @export
 data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,remove_stale=TRUE,metadata=NULL,
-                            compression=c("zstd","snappy","gzip","brotli","lz4","lz4_raw","uncompressed"),purge_cache=TRUE) {
+                            inherit_metadata=TRUE,compression=c("zstd","snappy","gzip","brotli","lz4","lz4_raw","uncompressed"),purge_cache=TRUE) {
   if (!is.character(path) || length(path)!=1) stop("Expected a single path, got ",length(path),".")
   compression <- match.arg(compression)
   if (is_bucket_path(path)) {
     r2_data_to_parquet(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,
-                       remove_stale=remove_stale,metadata=metadata,compression=compression,purge_cache=purge_cache)
+                       remove_stale=remove_stale,metadata=metadata,inherit_metadata=inherit_metadata,
+                       compression=compression,purge_cache=purge_cache)
   } else {
     local_data_to_parquet(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,
-                          remove_stale=remove_stale,metadata=metadata,compression=compression)
+                          remove_stale=remove_stale,metadata=metadata,inherit_metadata=inherit_metadata,compression=compression)
   }
 }
 
 # write data to a local parquet file or directory of partitioned files
-local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,remove_stale=TRUE,metadata=NULL,compression="zstd") {
+local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,remove_stale=TRUE,metadata=NULL,
+                                  inherit_metadata=TRUE,compression="zstd") {
   if (inherits(metadata,"parquet_metadata")) metadata <- unclass(metadata)
   if (row_group_size<2048) warning("DuckDB writes row groups of at least 2048 rows, row_group_size has no effect below that.",call.=FALSE)
+  partitioned <- length(partition_by)>0
+  if (partitioned && !remove_stale && file.exists(path) && !dir.exists(path)) {
+    stop("There is a file at ",path,", which remove_stale = FALSE keeps, so the partitions can't be written there.")
+  }
+  # read before writing, the write may replace the files a lazy table reads
+  source_metadata <- if (isTRUE(inherit_metadata)) source_metadata(data)
   repaired <- FALSE
   if (inherits(data,"tbl_lazy")) {
     if (!methods::is(dbplyr::remote_con(data),"duckdb_connection")) stop("Lazy tables have to be DuckDB tables.")
@@ -152,9 +177,33 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
   missing_columns <- setdiff(c(sort_by,partition_by),columns)
   if (length(missing_columns)>0) stop(paste0("Columns ",paste0(missing_columns,collapse=", ")," not found in data."))
   labels <- if (is.data.frame(data)) lapply(data,attr,"label")
-  primary_key <- check_primary_key(con,source,metadata,columns)
-  # repairs change the data, so they get recorded in the metadata
-  if (any(repaired)) metadata <- record_geometry_repairs(metadata,df,repaired,sf::st_geometry(data),primary_key)
+  merged <- merge_inherited_metadata(metadata,source_metadata$metadata,columns,labels)
+  metadata <- merged$metadata
+  inherited <- merged$inherited
+  if ("primary_key" %in% inherited) {
+    # an inherited key that held for the source may not hold any more, the data is checked against it like a given one
+    inherited <- setdiff(inherited,"primary_key")
+    primary_key <- if (all(metadata$primary_key %in% columns)) tryCatch(check_primary_key(con,source,metadata,columns),error=function(e){
+      warning("Dropping the inherited primary key: ",conditionMessage(e),call.=FALSE)
+      NULL
+    })
+    if (is.null(primary_key)) metadata$primary_key <- NULL
+  } else {
+    primary_key <- check_primary_key(con,source,metadata,columns)
+  }
+  # repairs change the data, so they get recorded in the metadata, replacing what was recorded for the source
+  if (any(repaired)) {
+    replaced <- intersect(inherited,c("processing","geometry_repairs"))
+    metadata[replaced] <- NULL
+    inherited <- setdiff(inherited,replaced)
+    metadata <- record_geometry_repairs(metadata,df,repaired,sf::st_geometry(data),primary_key)
+  }
+  # an inherited derived entry stays with an unchanged copy, changed data gets its own
+  if (isTRUE(source_metadata$altered) && !"derived" %in% names(merged$given)) {
+    metadata$derived <- if (length(inherited)>0) {
+      c(if (length(source_metadata$from)>0) list(from=I(source_metadata$from)),list(inherited=I(inherited)))
+    }
+  }
   metadata <- metadata_strings(metadata,columns,labels)
 
   order <- if (length(sort_by)>0) DBI::dbQuoteIdentifier(con,sort_by)
@@ -179,31 +228,50 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
     }
     options <- c(options,"GEOPARQUET_VERSION 'V2'")
   }
-  if (length(partition_by)>0) {
-    # DuckDB's OVERWRITE keeps partitions that are not in the new data
-    if (remove_stale && dir.exists(path)) {
-      files <- dir(path,"\\.parquet$",recursive=TRUE)
-      unlink(file.path(path,files[is_partition_file(files)]))
-      directories <- rev(list.dirs(path,recursive=TRUE)[-1])
-      for (directory in directories) if (length(dir(directory,all.files=TRUE,no..=TRUE))==0) unlink(directory,recursive=TRUE)
-    }
-    options <- c(options,paste0("PARTITION_BY (",paste0(DBI::dbQuoteIdentifier(con,partition_by),collapse=", "),")"),"OVERWRITE_OR_IGNORE")
+  # DuckDB does not create missing directories
+  dir.create(dirname(path),recursive=TRUE,showWarnings=FALSE)
+  target <- path
+  if (partitioned) {
+    # partitions get written to a new directory and moved into place afterwards: the data may be read from path,
+    # where stale partitions get removed, and a failed write leaves the existing files alone
+    target <- tempfile(paste0(".",basename(path),"-"),tmpdir=dirname(path))
+    dir.create(target)
+    on.exit(unlink(target,recursive=TRUE),add=TRUE)
+    options <- c(options,paste0("PARTITION_BY (",paste0(DBI::dbQuoteIdentifier(con,partition_by),collapse=", "),")"))
     # multi threaded partitioned writes interleave chunks of rows within each partition file
     threads <- DBI::dbGetQuery(con,"SELECT current_setting('threads') AS threads")$threads
     DBI::dbExecute(con,"SET threads = 1")
     on.exit(if (DBI::dbIsValid(con)) DBI::dbExecute(con,paste0("SET threads = ",threads)),add=TRUE,after=FALSE)
   }
-  # DuckDB does not create missing directories
-  dir.create(if (length(partition_by)>0) path else dirname(path),recursive=TRUE,showWarnings=FALSE)
   DBI::dbExecute(con,paste0("COPY (SELECT * FROM ",source,
                             if (length(order)>0) paste0(" ORDER BY ",paste0(order,collapse=", ")),
-                            ") TO ",DBI::dbQuoteString(con,path)," (",paste0(options,collapse=", "),")"))
-  files <- if (length(partition_by)>0) dir(path,"\\.parquet$",recursive=TRUE,full.names=TRUE) else path
-  invisible(structure(path,files=files))
+                            ") TO ",DBI::dbQuoteString(con,target)," (",paste0(options,collapse=", "),")"))
+  if (!partitioned) return(invisible(structure(path,files=path)))
+  move_partitions(target,path,remove_stale)
+  invisible(structure(path,files=dir(path,"\\.parquet$",recursive=TRUE,full.names=TRUE)))
+}
+
+# move the partition files written to directory from into the dataset directory to, replacing files with the
+# same path, after removing the parquet files of earlier writes in hive partition directories if remove_stale
+move_partitions <- function(from,to,remove_stale){
+  # a file at to would shadow the directory
+  if (file.exists(to) && !dir.exists(to)) unlink(to)
+  if (remove_stale && dir.exists(to)) {
+    files <- dir(to,"\\.parquet$",recursive=TRUE)
+    unlink(file.path(to,files[is_partition_file(files)]))
+    directories <- rev(list.dirs(to,recursive=TRUE)[-1])
+    for (directory in directories) if (length(dir(directory,all.files=TRUE,no..=TRUE))==0) unlink(directory,recursive=TRUE)
+  }
+  for (file in dir(from,recursive=TRUE)) {
+    destination <- file.path(to,file)
+    dir.create(dirname(destination),recursive=TRUE,showWarnings=FALSE)
+    if (!file.rename(file.path(from,file),destination)) stop("Could not move the written file ",file," into ",to,".")
+  }
 }
 
 # write data to parquet in a temporary directory and upload it to R2
-r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,remove_stale=TRUE,metadata=NULL,compression="zstd",purge_cache=TRUE) {
+r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_size=10000L,remove_stale=TRUE,metadata=NULL,
+                               inherit_metadata=TRUE,compression="zstd",purge_cache=TRUE) {
   p <- r2_split_path(path)
   r2_bucket <- p$bucket
   r2_path <- p$path
@@ -216,7 +284,7 @@ r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_grou
   on.exit(unlink(tmp_dir,recursive=TRUE))
   local_path <- local_data_to_parquet(data,file.path(tmp_dir,basename(r2_path)),sort_by=sort_by,
                                       partition_by=partition_by,row_group_size=row_group_size,metadata=metadata,
-                                      compression=compression)
+                                      inherit_metadata=inherit_metadata,compression=compression)
   # what r2_upload removes first, given the listing of the path and the keys of the upload
   stale <- if (remove_stale) function(objects,r2_paths){
     # a file at r2_path would shadow the directory of partitions, a file is replaced by the upload anyway

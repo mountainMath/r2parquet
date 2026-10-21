@@ -189,7 +189,7 @@ test_that("lazy tables get written with metadata", {
   data_to_parquet(df,path,metadata=list(source="s",columns=list(value="Value")))
   path2 <- withr::local_tempfile(fileext=".parquet")
   data_to_parquet(dplyr::filter(parquet_tbl(path),value>1),path2,metadata=list(source="s2"))
-  expect_equal(unclass(parquet_metadata(path2)),list(source="s2"))
+  expect_equal(unclass(parquet_metadata(path2)),list(source="s2",columns=list(value=list(label="Value")),derived=list(inherited="columns")))
   expect_error(data_to_parquet(parquet_tbl(path),path2,metadata=list(columns=list(other="x"))),"Columns other")
 })
 
@@ -266,4 +266,52 @@ test_that("footer reads stay out of RStudio's Connections pane", {
   con <- DBI::dbConnect(duckdb::duckdb())
   DBI::dbDisconnect(con,shutdown=TRUE)
   expect_equal(events,c("opened :memory:","closed :memory:"))
+})
+
+test_that("metadata gets inherited from lazy tables, with given entries replacing it", {
+  df <- data.frame(id=1:4,value=c(3,1,2,4))
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(df,path,metadata=list(source="s",license="l",primary_key="id",columns=list(id="Identifier",value="Value")))
+  # an unchanged copy keeps the metadata as it is
+  copy <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(parquet_tbl(path),copy)
+  expect_equal(unclass(parquet_metadata(copy)),unclass(parquet_metadata(path)))
+  # changed data records what got carried over, the verified primary key isn't listed
+  data_to_parquet(dplyr::mutate(parquet_tbl(path),double=value*2),copy,
+                  metadata=list(source="t",license=NULL,columns=list(double="Doubled")))
+  expect_equal(unclass(parquet_metadata(copy)),
+               list(source="t",primary_key="id",columns=list(id=list(label="Identifier"),value=list(label="Value"),double=list(label="Doubled")),
+                    derived=list(inherited="columns")))
+  # entries of dropped columns go, so does a primary key without its columns
+  data_to_parquet(dplyr::select(parquet_tbl(path),value),copy)
+  expect_equal(unclass(parquet_metadata(copy)),
+               list(source="s",license="l",columns=list(value=list(label="Value")),derived=list(inherited=c("source","license","columns"))))
+  # a primary key that stops holding gets dropped with a warning
+  doubled <- dplyr::union_all(parquet_tbl(path),parquet_tbl(path))
+  expect_warning(data_to_parquet(doubled,copy),"Dropping the inherited primary key: The primary key id does not identify rows")
+  expect_null(parquet_metadata(copy)$primary_key)
+  # an inherited derived entry gets replaced, and dropped when nothing is inherited any more
+  data_to_parquet(dplyr::select(parquet_tbl(copy),value),path,metadata=list(source="u",license="m",columns=list(value="V")))
+  expect_equal(unclass(parquet_metadata(path)),list(source="u",license="m",columns=list(value=list(label="V"))))
+  # or not inherited at all
+  data_to_parquet(dplyr::filter(parquet_tbl(copy),value>1),path,inherit_metadata=FALSE)
+  expect_equal(unclass(parquet_metadata(path)),list())
+})
+
+test_that("metadata gets inherited from collected data", {
+  df <- data.frame(id=1:3,value=c(3,1,2))
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(df,path,metadata=list(source="s",primary_key="id",columns=list(id="Identifier",value=list(label="Value",description="d"))))
+  collected <- collect_parquet(parquet_tbl(path))
+  attr(collected$value,"label") <- "New value"
+  copy <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(collected,copy)
+  # label attributes win over inherited labels, data frames always count as changed
+  expect_equal(unclass(parquet_metadata(copy)),
+               list(source="s",primary_key="id",columns=list(id=list(label="Identifier"),value=list(label="New value",description="d")),
+                    derived=list(inherited=c("source","columns"))))
+  # attributes that don't look like parquet_metadata() get ignored
+  attr(df,"metadata") <- "not metadata"
+  data_to_parquet(df,copy)
+  expect_equal(unclass(parquet_metadata(copy)),list())
 })

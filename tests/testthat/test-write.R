@@ -188,3 +188,35 @@ test_that("missing directories get created", {
   expect_equal(nrow(dplyr::collect(parquet_tbl(data_to_parquet(df,file.path(dir,"new","file.parquet"))))),2)
   expect_equal(nrow(dplyr::collect(parquet_tbl(data_to_parquet(df,file.path(dir,"deeper","new","data"),partition_by="year")))),2)
 })
+
+test_that("partitioned datasets can be rewritten from a lazy table reading them", {
+  dir <- withr::local_tempdir()
+  path <- file.path(dir,"data")
+  data_to_parquet(data.frame(id=1:10,group=rep(c("a","b"),5)),path,partition_by="group")
+  data_to_parquet(dplyr::mutate(parquet_tbl(path),value=id*2L),path,partition_by="group")
+  result <- dplyr::collect(dplyr::arrange(parquet_tbl(path),id))
+  expect_equal(result$value,(1:10)*2L)
+  expect_setequal(dir(path,recursive=TRUE),c("group=a/data_0.parquet","group=b/data_0.parquet"))
+  # also into fewer partitions, the stale one goes
+  data_to_parquet(dplyr::filter(parquet_tbl(path),group=="a"),path,partition_by="group")
+  expect_equal(dir(path,recursive=TRUE),"group=a/data_0.parquet")
+  # nothing of the temporary directory is left
+  expect_equal(dir(dir,all.files=TRUE,no..=TRUE),"data")
+})
+
+test_that("failed partitioned writes leave the dataset alone and files get replaced by directories", {
+  dir <- withr::local_tempdir()
+  path <- file.path(dir,"data")
+  data_to_parquet(data.frame(id=1:4,group=c("a","b")),path,partition_by="group")
+  con <- dbplyr::remote_con(parquet_tbl(path))
+  failing <- dplyr::tbl(con,dplyr::sql("SELECT 'x' AS \"group\", error('fails') AS id"))
+  expect_error(data_to_parquet(failing,path,partition_by="group"),"fails")
+  expect_setequal(dir(path,recursive=TRUE),c("group=a/data_0.parquet","group=b/data_0.parquet"))
+  expect_equal(dir(dir,all.files=TRUE,no..=TRUE),"data")
+  file <- file.path(dir,"file.parquet")
+  data_to_parquet(data.frame(id=1:4,group=c("a","b")),file)
+  expect_error(data_to_parquet(parquet_tbl(file),file,partition_by="group",remove_stale=FALSE),"There is a file")
+  data_to_parquet(parquet_tbl(file),file,partition_by="group")
+  expect_equal(sort(dplyr::pull(parquet_tbl(file),id)),1:4)
+  expect_true(dir.exists(file))
+})
