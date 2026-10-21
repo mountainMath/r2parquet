@@ -11,7 +11,7 @@ test_that("parquet files can be uploaded, queried and removed", {
   r2_path <- paste0(prefix,"/nc.parquet")
   expect_message(data_to_parquet(data,r2_path),"Uploading")
   y <- sf::st_buffer(sf::st_centroid(sf::st_geometry(data[data$NAME=="Wake",])),20000)
-  result <- collect_parquet(filter_spatial(parquet_tbl(r2_path),y))
+  result <- collect_parquet(suppressWarnings(sf::st_filter(parquet_tbl(r2_path),y)))
   expect_equal(sort(result$NAME),sort(data$NAME[lengths(sf::st_intersects(data,y))>0]))
   expect_true(sf::st_crs(result)==sf::st_crs(data))
 

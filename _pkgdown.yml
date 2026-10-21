@@ -9,7 +9,7 @@ reference:
   desc: No credentials needed for public URLs, presigned URLs and local files. `parquet_tbl()` also reads private buckets as `r2://bucket/path`.
   contents:
   - parquet_tbl
-  - filter_spatial
+  - st_filter.tbl_duckdb_connection
   - collect_parquet
   - parquet_metadata
   - list_parquet

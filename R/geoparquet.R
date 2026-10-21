@@ -109,48 +109,113 @@ record_geometry_repairs <- function(metadata,data,repaired,geometry,primary_key=
   metadata
 }
 
+# sf binary predicates and the DuckDB functions they translate to
+duckdb_predicates <- c(st_intersects="ST_Intersects",st_within="ST_Within",st_contains="ST_Contains",
+                       st_contains_properly="ST_ContainsProperly",st_covers="ST_Covers",st_covered_by="ST_CoveredBy",
+                       st_touches="ST_Touches",st_overlaps="ST_Overlaps",st_crosses="ST_Crosses",st_equals="ST_Equals",
+                       st_disjoint="ST_Disjoint",st_is_within_distance="ST_DWithin")
+
+duckdb_predicate <- function(predicate){
+  for (name in names(duckdb_predicates)) {
+    if (identical(predicate,getExportedValue("sf",name))) return(duckdb_predicates[[name]])
+  }
+  stop(paste0(".predicate has to be one of the sf predicates ",paste0("sf::",names(duckdb_predicates),collapse=", "),"."))
+}
+
 #' spatially filter a lazy DuckDB table of GeoParquet data
 #'
 #' @description
-#' Keeps the rows whose geometry intersects `y`. Remote GeoParquet files only get read where needed:
+#' The `sf::st_filter` method for lazy DuckDB tables, like the ones from `parquet_tbl`: keeps the rows whose
+#' geometry relates to `y` by `.predicate`, intersecting it by default, translated to the DuckDB spatial function
+#' of the same name. Remote GeoParquet files only get read where needed:
 #' DuckDB skips row groups whose bounding box does not intersect the bounding box of `y`, using the
 #' statistics of the native GEOMETRY type. This only happens
 #' for the bounding box comparison, a plain `ST_Intersects` filter downloads the geometry of all rows,
-#' so the filter first compares bounding boxes and then, if `exact` is `TRUE`, checks for actual intersection
-#' on the remaining rows. How much gets skipped depends on the file being sorted spatially, like the files
-#' written by `data_to_parquet`.
-#' `y` gets transformed to the crs of the geometry column if both have a crs.
+#' so the filter first compares bounding boxes and then, if `exact` is `TRUE`, applies the predicate
+#' to the remaining rows. How much gets skipped depends on the file being sorted spatially, like the files
+#' written by `data_to_parquet`. `sf::st_disjoint` can't skip anything.
 #'
-#' @param tbl lazy DuckDB table, e.g. from `parquet_tbl`
+#' Unlike `sf::st_filter` on sf objects, `y` gets transformed to the crs of the geometry column if both have a crs.
+#' DuckDB treats coordinates as planar, also for longitude/latitude data, where sf uses spherical geometry
+#' (`sf::sf_use_s2()`), so results can differ near the edges of `y`, and `dist` is in degrees. The filter warns
+#' about this for longitude/latitude data while `sf::sf_use_s2()` is on.
+#'
+#' @param x lazy DuckDB table, e.g. from `parquet_tbl`
 #' @param y sf, sfc or bbox object to filter by
+#' @param ... `dist` for `sf::st_is_within_distance`, in the units of the crs or as a units object
+#' @param .predicate the sf predicate relating the geometry of `x` to `y`, one of `sf::st_intersects` (the default),
+#' `sf::st_within`, `sf::st_contains`, `sf::st_contains_properly`, `sf::st_covers`, `sf::st_covered_by`,
+#' `sf::st_touches`, `sf::st_overlaps`, `sf::st_crosses`, `sf::st_equals`, `sf::st_disjoint` and
+#' `sf::st_is_within_distance`; as for sf objects, rows are kept if the predicate holds for any feature of `y`
 #' @param geometry_column name of the geometry column, defaults to the column named `geometry`, as in files
-#' written by `data_to_parquet`, or else the first GEOMETRY column of `tbl`
-#' @param exact if `TRUE`, the default, keep rows whose geometry intersects `y`, otherwise keep rows whose
-#' bounding box intersects the bounding box of `y`
+#' written by `data_to_parquet`, or else the first GEOMETRY column of `x`
+#' @param exact if `TRUE`, the default, keep rows for which the predicate holds, otherwise keep rows whose
+#' bounding box intersects the bounding box of `y` (grown by `dist`), a superset of these rows
 #' @return a lazy `dplyr` table
-#' @export
-filter_spatial <- function(tbl,y,geometry_column=NULL,exact=TRUE) {
-  con <- dbplyr::remote_con(tbl)
+#' @examples
+#' \dontrun{
+#' library(sf)
+#' nc <- read_sf(system.file("shape/nc.shp", package = "sf"))
+#' parquet_tbl("https://data.example.com/nc/counties.parquet") |>
+#'   st_filter(nc[nc$NAME == "Wake", ]) |>
+#'   collect_parquet()
+#' }
+#' @exportS3Method sf::st_filter
+st_filter.tbl_duckdb_connection <- function(x,y,...,.predicate=sf::st_intersects,geometry_column=NULL,exact=TRUE) {
+  predicate <- duckdb_predicate(.predicate)
+  args <- list(...)
+  dist <- NULL
+  if (predicate=="ST_DWithin") {
+    if (is.null(args$dist)) stop("sf::st_is_within_distance needs dist.")
+    dist <- args$dist
+    args$dist <- NULL
+  }
+  if (length(args)>0) stop(paste0("Unsupported arguments for st_filter on a DuckDB table: ",paste0(names(args),collapse=", "),"."))
+  if (predicate=="ST_Disjoint" && !exact) stop("exact = FALSE does not work with sf::st_disjoint.")
+  con <- dbplyr::remote_con(x)
   load_extension(con,"spatial")
-  geometry_column <- duckdb_geometry_column(tbl,geometry_column)
+  geometry_column <- duckdb_geometry_column(x,geometry_column)
   if (inherits(y,"bbox")) y <- sf::st_as_sfc(y)
   y <- sf::st_geometry(y)
   if (!is.na(geometry_column$crs) && !is.na(sf::st_crs(y)) && sf::st_crs(y)!=geometry_column$crs) {
     y <- sf::st_transform(y,geometry_column$crs)
   }
-  y <- sf::st_union(y)
-  bbox <- sf::st_bbox(y)
+  crs <- if (is.na(geometry_column$crs)) sf::st_crs(y) else geometry_column$crs
+  if (isTRUE(sf::st_is_longlat(crs)) && sf::sf_use_s2()) {
+    warning("DuckDB treats the longitude/latitude coordinates as planar, unlike sf with sf_use_s2() on, ",
+            "results can differ",if (!is.null(dist)) " and dist is in degrees",
+            ". Turn s2 off via sf::sf_use_s2(FALSE) to silence this warning.",call.=FALSE)
+  }
+  if (inherits(dist,"units")) {
+    if (is.na(crs) || is.null(crs$ud_unit)) stop("dist has units but the crs of the data has none.")
+    units(dist) <- units(crs$ud_unit)
+    dist <- as.numeric(dist)
+  }
+  if (length(y)==0 || (predicate!="ST_Disjoint" && all(sf::st_is_empty(y)))) return(dplyr::filter(x,dplyr::sql("FALSE")))
+  # intersecting or being within distance of any feature is the same as for their union, which makes for one test
+  if (predicate %in% c("ST_Intersects","ST_DWithin")) y <- sf::st_union(y)
   crs <- duckdb_crs(geometry_column$crs)
   with_crs <- function(sql)if (is.null(crs)) sql else paste0("ST_SetCRS(",sql,", ",DBI::dbQuoteString(con,crs),")")
   geometry <- DBI::dbQuoteIdentifier(con,geometry_column$name)
-  envelope <- with_crs(paste0("ST_MakeEnvelope(",paste0(sprintf("%.17g",bbox[c("xmin","ymin","xmax","ymax")]),collapse=", "),")"))
-  conditions <- paste0(geometry," && ",envelope)
-  if (exact) {
-    conditions <- c(conditions,paste0("ST_Intersects(",geometry,", ",
-                                      with_crs(paste0("ST_GeomFromHEXWKB('",sf::st_as_binary(y,hex=TRUE)[[1]],"')")),")"))
+  conditions <- character(0)
+  if (predicate!="ST_Disjoint") {
+    bbox <- as.numeric(sf::st_bbox(y)[c("xmin","ymin","xmax","ymax")])+c(-1,-1,1,1)*(if (is.null(dist)) 0 else dist)
+    envelope <- with_crs(paste0("ST_MakeEnvelope(",paste0(sprintf("%.17g",bbox),collapse=", "),")"))
+    conditions <- paste0(geometry," && ",envelope)
   }
-  dplyr::filter(tbl,dplyr::sql(paste0(conditions,collapse=" AND ")))
+  if (exact) {
+    tests <- paste0(predicate,"(",geometry,", ",
+                    with_crs(paste0("ST_GeomFromHEXWKB('",sf::st_as_binary(y,hex=TRUE),"')")),
+                    if (!is.null(dist)) paste0(", ",sprintf("%.17g",dist)),")")
+    conditions <- c(conditions,paste0("(",paste0(tests,collapse=" OR "),")"))
+  }
+  dplyr::filter(x,dplyr::sql(paste0(conditions,collapse=" AND ")))
 }
+
+# tables on parquet_connection() have their own class, see r2parquet_connection
+#' @rdname st_filter.tbl_duckdb_connection
+#' @exportS3Method sf::st_filter
+st_filter.tbl_r2parquet_connection <- st_filter.tbl_duckdb_connection
 
 #' collect a lazy DuckDB table of parquet data with its metadata
 #'
@@ -167,7 +232,7 @@ filter_spatial <- function(tbl,y,geometry_column=NULL,exact=TRUE) {
 #' the table, so the metadata follows the table through `dplyr` verbs and is the metadata of the left-hand
 #' table of joins.
 #'
-#' @param tbl lazy DuckDB table, e.g. from `parquet_tbl` or `filter_spatial`
+#' @param tbl lazy DuckDB table, e.g. from `parquet_tbl` or `sf::st_filter`
 #' @param attach_metadata if `TRUE`, the default, attach the metadata of the parquet files as attributes
 #' @return a tibble, or an sf object if the table has GEOMETRY columns
 #' @export

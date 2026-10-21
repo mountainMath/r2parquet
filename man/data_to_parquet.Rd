@@ -56,7 +56,7 @@ row groups they need when reading remotely.
 sf objects get written as GeoParquet 2.0 using the native parquet GEOMETRY type, which stores the crs with
 the column and a bounding box per row group. After the `sort_by` columns, rows get sorted along a Hilbert curve
 so that each row group covers a compact area and spatial filters can skip row groups based on their bounding
-box, see `filter_spatial`. Invalid geometries get fixed via `sf::st_make_valid`, keeping multi geometries multi,
+box, see `sf::st_filter` on lazy tables. Invalid geometries get fixed via `sf::st_make_valid`, keeping multi geometries multi,
 and the geometry column is always named `geometry`, following the GeoParquet convention, independent of its
 name in `data`. Both emit a message when they change the data. Repairs also get recorded in the metadata: a
 `processing` entry says how many geometries were repaired and with which version of GEOS (or s2 for

@@ -9,7 +9,7 @@ Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloud
 ## Reading public Parquet and GeoParquet data from R2
 
 - **Reading public URLs and local files**: `parquet_tbl()`, no credentials needed. Returns a lazy DuckDB table, only the parts of the files a query needs get downloaded.
-- **Spatial queries**: `filter_spatial()` on any lazy DuckDB table, `collect_parquet()` collects as sf if the table has geometry.
+- **Spatial queries**: `sf::st_filter()` on any lazy DuckDB table, skipping row groups outside the query, `collect_parquet()` collects as sf if the table has geometry.
 - **Metadata**: `parquet_metadata()` reads source, license, notes and column labels from the parquet footer, `collect_parquet()` attaches them to the collected data, where `parquet_metadata()` reads them back too.
 - **Working locally**: `parquet_tbl(cache = TRUE)` downloads the files once into a local cache directory and keeps them current via their etags, for data queried regularly. Once cached, `parquet_tbl()` reads the local copy by default as long as it is current (checked once per session, `clear_cache_checks()` forgets the checks), warns when it is out of date, and reads it without checking with `cache = "offline"`. `cache_parquet()` syncs the cache on its own, `list_cache()` and `remove_from_cache()` show and prune it, and `list_parquet()` tells whether the cached copies are current. See [Caching](https://mountainmath.github.io/r2parquet/articles/caching.html).
 - **Joining with other data**: all tables share one DuckDB connection, `parquet_connection()`, so they can be joined with each other and with data frames copied there via `dplyr::copy_to()`. `parquet_tbl(con = )` puts a table on a connection of your own instead.
@@ -84,7 +84,7 @@ counties <- parquet_tbl("https://<account id>.r2.cloudflarestorage.com/census-da
 nc <- sf::read_sf(system.file("shape/nc.shp", package = "sf"))
 wake <- nc[nc$NAME == "Wake", ]
 counties |>
-  filter_spatial(wake) |>
+  sf::st_filter(wake) |>
   dplyr::select(NAME, BIR74, geometry) |>
   collect_parquet()
 ```

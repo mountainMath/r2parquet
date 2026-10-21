@@ -7,7 +7,7 @@
 collect_parquet(tbl, attach_metadata = TRUE)
 }
 \arguments{
-\item{tbl}{lazy DuckDB table, e.g. from `parquet_tbl` or `filter_spatial`}
+\item{tbl}{lazy DuckDB table, e.g. from `parquet_tbl` or `sf::st_filter`}
 
 \item{attach_metadata}{if `TRUE`, the default, attach the metadata of the parquet files as attributes}
 }

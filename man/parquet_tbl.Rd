@@ -59,7 +59,7 @@ The table is a lazy `dplyr` table on a DuckDB connection that is cached for the 
 so that tables from several calls can be joined, or on the connection given as `con`. `dplyr` verbs get
 translated to SQL. If the table has GEOMETRY columns, like GeoParquet files written by `data_to_parquet`,
 the `spatial` extension gets loaded so that spatial functions like `ST_Area` can be used in queries. Use
-`filter_spatial` to filter by location and `collect_parquet` to collect the result with its metadata
+`sf::st_filter` to filter by location and `collect_parquet` to collect the result with its metadata
 attached, as an sf object if it has geometry. `parquet_metadata` reads the metadata of the table's files
 and `list_parquet` lists the files.
 
