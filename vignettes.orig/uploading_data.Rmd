@@ -131,9 +131,7 @@ data_to_parquet(cma_geos, "r2://test/census/2021/lcma000b21f_e.parquet",
 Repairing geometries changes the data, so `data_to_parquet()` records it in the metadata: `processing` says how many geometries were repaired and with which version of the geometry library, and `geometry_repairs` lists the repaired rows by their primary key. Without a declared primary key it uses the first column or a column whose name ends in `ID` if one of them identifies the rows, and records just the number with a warning otherwise.
 
 ```{r}
-cma_metadata <- parquet_metadata("r2://test/census/2021/lcma000b21f_e.parquet")
-cma_metadata$processing
-str(cma_metadata$geometry_repairs)
+parquet_metadata("r2://test/census/2021/lcma000b21f_e.parquet")
 ```
 
 The uploaded file can be queried lazily right away, here we read the Montréal CMA.

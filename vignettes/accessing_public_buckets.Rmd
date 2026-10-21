@@ -37,21 +37,21 @@ db_table |> colnames()
 #> [13] "geometry"
 ```
 
-This only reads the parquet metadata, the file carries several geographic identifiers as well as the geography. The table also carries custom metadata that gives more information about data provenance and licence, the primary key, and which geometries were repaired when the file was written, here we leave out the list of the repaired rows.
+This only reads the parquet metadata, the file carries several geographic identifiers as well as the geography. The table also carries custom metadata that gives more information about data provenance and licence, the primary key, and which geometries were repaired when the file was written.
 
 
 ``` r
-db_metadata <- db_table |> parquet_metadata()
-db_metadata[names(db_metadata) != "geometry_repairs"]
-#> <parquet metadata: 8 entries>
-#> licence          Statistics Canada Open Licence
-#> licence_url      https://www.statcan.gc.ca/en/terms-conditions/open-licence
-#> title            2021 Census – Boundary files - Dissemination blocks
-#> attribution      Statistics Canada Product ldb_000b21f_e
-#> processing       Repaired 830 of 498,547 geometries that were invalid, via sf::…
-#> primary_key      DBUID
-#> source_url       https://www12.statcan.gc.ca/census-recensement/alternative_alt…
-#> reference_guide  https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/gu…
+db_table |> parquet_metadata()
+#> <parquet metadata: 9 entries>
+#> licence           Statistics Canada Open Licence
+#> licence_url       https://www.statcan.gc.ca/en/terms-conditions/open-licence
+#> title             2021 Census – Boundary files - Dissemination blocks
+#> attribution       Statistics Canada Product ldb_000b21f_e
+#> processing        Repaired 830 of 498,547 geometries that were invalid, via sf:…
+#> geometry_repairs  {"columns":"DBUID","rows":["10010273010","10010667008","10010…
+#> primary_key       DBUID
+#> source_url        https://www12.statcan.gc.ca/census-recensement/alternative_al…
+#> reference_guide   https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/g…
 ```
 
 A simple query would be to fetch the data for just the City of Vancouver.

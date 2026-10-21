@@ -42,11 +42,10 @@ db_table <- parquet_tbl(census_db_url)
 db_table |> colnames()
 ```
 
-This only reads the parquet metadata, the file carries several geographic identifiers as well as the geography. The table also carries custom metadata that gives more information about data provenance and licence, the primary key, and which geometries were repaired when the file was written, here we leave out the list of the repaired rows.
+This only reads the parquet metadata, the file carries several geographic identifiers as well as the geography. The table also carries custom metadata that gives more information about data provenance and licence, the primary key, and which geometries were repaired when the file was written.
 
 ```{r}
-db_metadata <- db_table |> parquet_metadata()
-db_metadata[names(db_metadata) != "geometry_repairs"]
+db_table |> parquet_metadata()
 ```
 
 A simple query would be to fetch the data for just the City of Vancouver.

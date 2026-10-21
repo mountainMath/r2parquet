@@ -170,15 +170,17 @@ Repairing geometries changes the data, so `data_to_parquet()` records it in the 
 
 
 ``` r
-cma_metadata <- parquet_metadata("r2://test/census/2021/lcma000b21f_e.parquet")
-cma_metadata$processing
-#> [1] "Repaired 2 of 156 geometries that were invalid, via sf::st_make_valid (GEOS 3.13.0), keeping multi geometry types. The repaired rows are listed in geometry_repairs by CMAUID, PRUID."
-str(cma_metadata$geometry_repairs)
-#> List of 2
-#>  $ columns: chr [1:2] "CMAUID" "PRUID"
-#>  $ rows   :List of 2
-#>   ..$ : chr [1:2] "571" "35"
-#>   ..$ : chr [1:2] "705" "47"
+parquet_metadata("r2://test/census/2021/lcma000b21f_e.parquet")
+#> <parquet metadata: 9 entries>
+#> title             2021 Census – Boundary files - Census metropolitan areas and …
+#> source_url        https://www12.statcan.gc.ca/census-recensement/alternative_al…
+#> reference_guide   https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/g…
+#> licence           Statistics Canada Open Licence
+#> licence_url       https://www.statcan.gc.ca/en/terms-conditions/open-licence
+#> attribution       Statistics Canada Product lcma000b21f_e
+#> primary_key       CMAUID, PRUID
+#> geometry_repairs  {"columns":["CMAUID","PRUID"],"rows":[["571","35"],["705","47…
+#> processing        Repaired 2 of 156 geometries that were invalid, via sf::st_ma…
 ```
 
 The uploaded file can be queried lazily right away, here we read the Montréal CMA.
