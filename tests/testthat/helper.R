@@ -18,6 +18,26 @@ skip_if_no_r2 <- function(){
   }
 }
 
+skip_if_no_s3 <- function(){
+  skip_on_cran()
+  if (Sys.getenv("S3_TEST_BUCKET")=="" || Sys.getenv("AWS_ACCESS_KEY_ID")=="" || Sys.getenv("AWS_SECRET_ACCESS_KEY")=="") {
+    skip("S3_TEST_BUCKET and AWS credentials not set")
+  }
+}
+
+# Amazon S3 applies bucket policy changes with a delay, anonymous GET requests intermittently get 403 for a few
+# minutes, so wait for a run of successful requests to a public file; HEAD requests succeed earlier, so the probe
+# is a GET of the first byte
+wait_until_public <- function(url,successes=60,timeout=900){
+  run <- 0
+  start <- Sys.time()
+  while (run<successes) {
+    if (difftime(Sys.time(),start,units="secs")>timeout) stop(paste0(url," did not become public within ",timeout," seconds."))
+    run <- if (httr::status_code(httr::GET(url,httr::add_headers(Range="bytes=0-0")))<300) run+1 else 0
+    if (run<successes) Sys.sleep(1)
+  }
+}
+
 # a temporary cache directory with forward slashes, as cache_directory() returns them, so paths compare on Windows
 local_cache_dir <- function(envir=parent.frame()){
   gsub("\\\\","/",withr::local_tempdir(.local_envir=envir))

@@ -90,7 +90,7 @@ data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_s
                             compression=c("zstd","snappy","gzip","brotli","lz4","lz4_raw","uncompressed"),purge_cache=TRUE) {
   if (!is.character(path) || length(path)!=1) stop("Expected a single path, got ",length(path),".")
   compression <- match.arg(compression)
-  if (startsWith(path,"r2://")) {
+  if (is_bucket_path(path)) {
     r2_data_to_parquet(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,
                        remove_stale=remove_stale,metadata=metadata,compression=compression,purge_cache=purge_cache)
   } else {
@@ -206,7 +206,7 @@ r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_grou
   p <- r2_split_path(path)
   r2_bucket <- p$bucket
   r2_path <- p$path
-  r2_url <- paste0("r2://",r2_bucket,"/",r2_path)
+  r2_url <- bucket_url(r2_bucket,r2_path)
   partitioned <- length(partition_by)>0
   if (r2_path=="") stop("Please specify the path in the bucket.")
   if (!partitioned && !grepl("\\.parquet$",r2_path)) stop("The path has to be the path of a parquet file ending in .parquet.")
@@ -228,7 +228,7 @@ r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_grou
   message("Uploading ",format_size(sum(file.size(files)))," in ",length(files)," parquet file",if (length(files)>1) "s"," to ",r2_url,".")
   uploaded <- r2_upload(local_path,r2_bucket,r2_path,stale=stale)
   if (purge_cache) r2_purge_cache_after_change(r2_bucket,union(uploaded$stale,c(uploaded$files,uploaded$manifests)))
-  invisible(structure(r2_url,files=paste0("r2://",r2_bucket,"/",uploaded$files)))
+  invisible(structure(r2_url,files=bucket_url(r2_bucket,uploaded$files)))
 }
 
 # whether paths relative to a dataset directory are in hive partition directories (key=value), as partitioned writes produce them

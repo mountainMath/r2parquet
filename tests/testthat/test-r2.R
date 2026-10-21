@@ -1,10 +1,11 @@
-# integration tests against a real R2 bucket, the bucket has to exist
-# all files get written under a random prefix that is removed at the end
+# integration tests against a real R2 bucket and an S3 compatible bucket, like a local MinIO, the buckets have
+# to exist; all files get written under a random prefix that is removed at the end
 
-test_that("parquet files can be uploaded, queried and removed", {
-  skip_if_no_r2()
-  bucket <- Sys.getenv("R2_TEST_BUCKET")
-  prefix <- paste0("r2://",bucket,"/r2parquet-tests/",format(Sys.time(),"%Y%m%d%H%M%S"),"-",sample.int(1e6,1))
+# upload, query, cache and remove files in the bucket at r2://bucket or s3://bucket
+bucket_round_trip <- function(bucket_root){
+  bucket <- r2parquet:::r2_split_path(bucket_root)$bucket
+  key <- function(path)r2parquet:::r2_split_path(path)$path
+  prefix <- paste0(bucket_root,"/r2parquet-tests/",format(Sys.time(),"%Y%m%d%H%M%S"),"-",sample.int(1e6,1))
   data <- nc_data()
 
   # single GeoParquet file
@@ -130,9 +131,45 @@ test_that("parquet files can be uploaded, queried and removed", {
 
   # several paths at once, a file inside the directory only gets removed once
   expect_message(removed <- remove_parquet(c(put_path,prefix),purge_cache=FALSE),"Removed 5 files")
-  expect_false(r2parquet:::r2_object_exists(bucket,sub(paste0("^r2://",bucket,"/"),"",paste0(prefix,"/_manifest.json"))))
+  expect_false(r2parquet:::r2_object_exists(bucket,key(paste0(prefix,"/_manifest.json"))))
   expect_setequal(removed,c(r2_path,put_path,uploaded,paste0(mirror_path,"/a.parquet")))
   expect_equal(nrow(list_parquet(prefix)),0)
-  expect_false(r2parquet:::r2_object_exists(bucket,sub(paste0("^r2://",bucket,"/"),"",manifest_path)))
+  expect_false(r2parquet:::r2_object_exists(bucket,key(manifest_path)))
   expect_error(remove_parquet(prefix,purge_cache=FALSE),"does not exist")
+}
+
+test_that("parquet files can be uploaded, queried and removed on R2", {
+  skip_if_no_r2()
+  bucket_round_trip(paste0("r2://",Sys.getenv("R2_TEST_BUCKET")))
+})
+
+test_that("parquet files can be uploaded, queried and removed on S3", {
+  skip_if_no_s3()
+  bucket_round_trip(paste0("s3://",Sys.getenv("S3_TEST_BUCKET")))
+})
+
+test_that("files below a public prefix can be read without credentials, the others not", {
+  skip_if_no_s3()
+  root <- paste0("s3://",Sys.getenv("S3_TEST_BUCKET"),"/r2parquet-tests/",format(Sys.time(),"%Y%m%d%H%M%S"),"-",sample.int(1e6,1))
+  public <- paste0(root,"/public")
+  private <- paste0(root,"/private")
+  on.exit({
+    suppressMessages(set_s3_public_access(public,public=FALSE))
+    suppressMessages(try(remove_parquet(root),silent=TRUE))
+  })
+  expect_message(url <- set_s3_public_access(public),"publicly readable")
+  df <- sf::st_drop_geometry(nc_data())[,c("NAME","SID74","BIR74")]
+  df$group <- as.integer(df$BIR74>5000)
+  suppressMessages({
+    data_to_parquet(df,paste0(public,"/partitioned"),partition_by="group",metadata=list(source="r2parquet tests"))
+    data_to_parquet(df,paste0(private,"/df.parquet"))
+  })
+  withr::local_envvar(AWS_ACCESS_KEY_ID=NA,AWS_SECRET_ACCESS_KEY=NA,AWS_SESSION_TOKEN=NA,
+                      R2PARQUET_CACHE_PATH=withr::local_tempdir())
+  wait_until_public(paste0(url,"partitioned/_manifest.json"))
+  expect_equal(httr::status_code(httr::GET(sub("/public/$","/private/df.parquet",url))),403)
+  expect_equal(dplyr::pull(dplyr::count(parquet_tbl(paste0(url,"partitioned")))),nrow(df))
+  expect_equal(parquet_metadata(paste0(url,"partitioned/")),list(source="r2parquet tests"))
+  expect_message(cache_parquet(paste0(url,"partitioned/")),"Downloading 2 files")
+  expect_equal(list_parquet(paste0(url,"partitioned/"))$cache,rep("current",2))
 })

@@ -109,6 +109,27 @@ duckdb_r2_secret <- function(con){
                             ", REGION 'auto')"))
 }
 
+# the same for s3:// paths, from the settings of the S3 service; a custom endpoint is given as host and port,
+# without the scheme, which decides about SSL
+duckdb_s3_secret <- function(con){
+  store <- s3_settings()
+  endpoint <- if (store$custom) paste0(", ENDPOINT ",DBI::dbQuoteString(con,sub("^https?://","",store$endpoint)),
+                                       ", USE_SSL ",if (startsWith(store$endpoint,"http://")) "false" else "true")
+  DBI::dbExecute(con,paste0("CREATE OR REPLACE SECRET s3 (TYPE s3",
+                            ", KEY_ID ",DBI::dbQuoteString(con,store$access_key),
+                            ", SECRET ",DBI::dbQuoteString(con,store$secret),
+                            if (store$token!="") paste0(", SESSION_TOKEN ",DBI::dbQuoteString(con,store$token)),
+                            ", REGION ",DBI::dbQuoteString(con,store$region),
+                            ", URL_STYLE ",DBI::dbQuoteString(con,store$url_style),
+                            endpoint,")"))
+}
+
+# the secrets for the buckets that paths are in
+duckdb_bucket_secrets <- function(con,path){
+  if (any(startsWith(path,"r2://"))) duckdb_r2_secret(con)
+  if (any(startsWith(path,"s3://"))) duckdb_s3_secret(con)
+}
+
 # install and load a DuckDB extension, the R package turns autoinstall off, so extensions get installed
 # explicitly, and spatial functions do not autoload
 load_extension <- function(con,name){
@@ -135,7 +156,7 @@ local_parquet_glob <- function(path){
 r2_parquet_url <- function(path){
   vapply(path,function(p){
     p <- r2_split_path(p)
-    paste0("r2://",p$bucket,"/",r2_parquet_glob(p$bucket,p$path,p$directory))
+    bucket_url(p$bucket,r2_parquet_glob(p$bucket,p$path,p$directory))
   },character(1),USE.NAMES=FALSE)
 }
 
@@ -150,13 +171,13 @@ url_directory_files <- function(url,missing_ok=FALSE){
 # paths resolved to files or glob patterns DuckDB can read, with the httpfs extension and R2 credentials in place;
 # directory URLs, ending in a slash, resolve to the files their manifest lists
 duckdb_parquet_paths <- function(con,path){
-  is_r2 <- startsWith(path,"r2://")
+  is_r2 <- is_bucket_path(path)
   is_url <- !is_r2 & grepl("^[a-z0-9]+://",path)
   is_url_dir <- is_url & grepl("^https?://",path) & grepl("/$",sub("[?#].*$","",path))
   path[is_r2] <- r2_parquet_url(path[is_r2])
   path[!is_r2 & !is_url] <- local_parquet_glob(path[!is_r2 & !is_url])
   if (any(is_r2 | is_url)) load_extension(con,"httpfs")
-  if (any(is_r2)) duckdb_r2_secret(con)
+  duckdb_bucket_secrets(con,path[is_r2])
   if (!any(is_url_dir)) return(path)
   as.character(unlist(lapply(seq_along(path),function(i)if (is_url_dir[i]) url_directory_files(path[i]) else path[i])))
 }
@@ -317,7 +338,7 @@ list_parquet <- function(x) UseMethod("list_parquet")
 #' @rdname list_parquet
 #' @export
 list_parquet.character <- function(x) {
-  is_r2 <- startsWith(x,"r2://")
+  is_r2 <- is_bucket_path(x)
   is_url <- !is_r2 & grepl("^[a-z0-9]+://",x)
   files <- lapply(seq_along(x),function(i){
     if (is_r2[i]) r2_parquet_files(x[i]) else if (is_url[i]) url_parquet_files(x[i]) else local_parquet_files(x[i])

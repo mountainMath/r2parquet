@@ -2,12 +2,13 @@
 # presigning URLs via the S3 compatible API with the package's own signature version 4 implementation, and
 # bucket settings via the Cloudflare API.
 
-# read R2 credentials from environment variables
+# read credentials from environment variables
 r2_credentials <- function(env_vars){
   credentials <- Sys.getenv(env_vars,names=TRUE)
   missing_vars <- env_vars[credentials==""]
   if (length(missing_vars)>0) {
-    stop(paste0("Missing environment variables for R2 access: ",paste0(missing_vars,collapse = ", "),"."))
+    stop(paste0("Missing environment variables for ",if (all(startsWith(env_vars,"R2_"))) "R2" else "S3"," access: ",
+                paste0(missing_vars,collapse = ", "),"."))
   }
   credentials
 }
@@ -15,6 +16,72 @@ r2_credentials <- function(env_vars){
 # endpoint of the S3 compatible API
 r2_endpoint <- function(){
   paste0("https://",r2_credentials("R2_ACCOUNT_ID")[["R2_ACCOUNT_ID"]],".r2.cloudflarestorage.com")
+}
+
+# whether paths are in a bucket, r2://bucket/path on R2 or s3://bucket/path on Amazon S3 or another S3 compatible service
+is_bucket_path <- function(path){
+  grepl("^(r2|s3)://",path)
+}
+
+# internally a bucket on R2 is its name and a bucket on an S3 service is s3://name, so the code written for R2
+# serves both; the path of keys in a bucket as r2://bucket/key or s3://bucket/key
+bucket_url <- function(r2_bucket,key=""){
+  paste0(if (!startsWith(r2_bucket,"s3://")) "r2://",r2_bucket,"/",key)
+}
+
+# the bucket for messages, "R2 bucket name" or "S3 bucket name"
+bucket_label <- function(r2_bucket){
+  if (startsWith(r2_bucket,"s3://")) paste0("S3 bucket ",sub("^s3://","",r2_bucket)) else paste0("R2 bucket ",r2_bucket)
+}
+
+# the first of the environment variables that is set, "" if none is
+first_env <- function(env_vars){
+  values <- Sys.getenv(env_vars)
+  c(values[values!=""],"")[[1]]
+}
+
+# settings of the S3 service for s3:// paths from the environment variables AWS SDKs use: the credentials,
+# AWS_SESSION_TOKEN for temporary ones, the region, and AWS_ENDPOINT_URL_S3 or AWS_ENDPOINT_URL for services
+# other than Amazon S3, like MinIO, which get path style addressing unless R2PARQUET_S3_URL_STYLE is vhost
+s3_settings <- function(){
+  credentials <- r2_credentials(c("AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY"))
+  region <- first_env(c("AWS_REGION","AWS_DEFAULT_REGION"))
+  if (region=="") region <- "us-east-1"
+  endpoint <- sub("/+$","",first_env(c("AWS_ENDPOINT_URL_S3","AWS_ENDPOINT_URL")))
+  url_style <- first_env("R2PARQUET_S3_URL_STYLE")
+  if (url_style=="") url_style <- if (endpoint=="") "vhost" else "path"
+  if (!(url_style %in% c("path","vhost"))) stop("R2PARQUET_S3_URL_STYLE has to be path or vhost, got ",url_style,".")
+  list(endpoint=if (endpoint=="") paste0("https://s3.",region,".amazonaws.com") else endpoint,custom=endpoint!="",
+       region=region,url_style=url_style,access_key=credentials[["AWS_ACCESS_KEY_ID"]],
+       secret=credentials[["AWS_SECRET_ACCESS_KEY"]],token=Sys.getenv("AWS_SESSION_TOKEN"))
+}
+
+# endpoint, region, addressing and credentials for requests to a bucket; virtual host addressing puts the
+# bucket into the endpoint, except for bucket names with dots, which don't match the TLS certificates
+bucket_store <- function(r2_bucket){
+  if (!startsWith(r2_bucket,"s3://")) {
+    credentials <- r2_credentials(c("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
+    return(list(endpoint=r2_endpoint(),bucket=r2_bucket,region="auto",url_style="path",
+                access_key=credentials[["R2_ACCESS_KEY_ID"]],secret=credentials[["R2_SECRET_ACCESS_KEY"]],token=""))
+  }
+  store <- s3_settings()
+  store$bucket <- sub("^s3://","",r2_bucket)
+  if (store$url_style=="vhost" && grepl(".",store$bucket,fixed=TRUE)) store$url_style <- "path"
+  if (store$url_style=="vhost") store$endpoint <- sub("://",paste0("://",store$bucket,"."),store$endpoint,fixed=TRUE)
+  store
+}
+
+# the directory below the cache directory that s3:// paths get cached in, per service since bucket names are
+# only unique within one: aws for Amazon S3, the host (and port) of the endpoint otherwise
+s3_cache_host <- function(){
+  endpoint <- first_env(c("AWS_ENDPOINT_URL_S3","AWS_ENDPOINT_URL"))
+  if (endpoint=="") return("aws")
+  cache_host(httr::parse_url(endpoint))
+}
+
+# the directory a host gets cached in, with the port as host_port since colons aren't allowed in Windows paths
+cache_host <- function(url){
+  paste0(url$hostname,if (!is.null(url$port)) paste0("_",url$port))
 }
 
 # current time in the format used by AWS signature version 4
@@ -32,7 +99,8 @@ uri_encode <- function(x){
   vapply(x,utils::URLencode,"",reserved=TRUE,repeated=TRUE,USE.NAMES=FALSE)
 }
 
-# canonical path of an object in a bucket for path style access, slashes in the object path are kept
+# canonical path of an object in a bucket for path style access, slashes in the object path are kept, without
+# the bucket (NULL) for virtual host access
 r2_canonical_path <- function(r2_bucket,r2_path=""){
   segments <- c(r2_bucket,if (r2_path!="") strsplit(r2_path,"/",fixed=TRUE)[[1]])
   paste0("/",paste0(uri_encode(segments),collapse="/"))
@@ -75,13 +143,14 @@ sigv4_headers <- function(verb,host,path,query=list(),headers=list(),body=raw(),
 }
 
 # url with the signature in the query string, valid for expires seconds
-sigv4_presigned_url <- function(verb,base_url,path,expires,access_key,secret,region,datetime=sigv4_datetime()){
+sigv4_presigned_url <- function(verb,base_url,path,expires,access_key,secret,region,datetime=sigv4_datetime(),token=""){
   host <- sub("^https?://","",base_url)
-  query <- list("X-Amz-Algorithm"="AWS4-HMAC-SHA256",
-                "X-Amz-Credential"=paste(access_key,substr(datetime,1,8),region,"s3","aws4_request",sep="/"),
-                "X-Amz-Date"=datetime,
-                "X-Amz-Expires"=as.character(as.integer(expires)),
-                "X-Amz-SignedHeaders"="host")
+  query <- c(list("X-Amz-Algorithm"="AWS4-HMAC-SHA256",
+                  "X-Amz-Credential"=paste(access_key,substr(datetime,1,8),region,"s3","aws4_request",sep="/"),
+                  "X-Amz-Date"=datetime,
+                  "X-Amz-Expires"=as.character(as.integer(expires)),
+                  "X-Amz-SignedHeaders"="host"),
+             if (token!="") list("X-Amz-Security-Token"=token))
   query_string <- sigv4_query_string(query)
   canonical_request <- paste(verb,path,query_string,paste0("host:",host,"\n"),"host","UNSIGNED-PAYLOAD",sep="\n")
   signature <- sigv4_signature(canonical_request,secret,datetime,region)
@@ -91,17 +160,16 @@ sigv4_presigned_url <- function(verb,base_url,path,expires,access_key,secret,reg
 # signed request via the S3 compatible API, the body is a raw vector or a string, config is further httr
 # configuration like httr::write_disk
 r2_request <- function(verb,r2_bucket,r2_path="",query=list(),headers=list(),body=raw(),config=NULL){
-  credentials <- r2_credentials(c("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
-  endpoint <- r2_endpoint()
-  path <- r2_canonical_path(r2_bucket,r2_path)
+  store <- bucket_store(r2_bucket)
+  path <- r2_canonical_path(if (store$url_style=="path") store$bucket,r2_path)
   if (is.character(body)) body <- charToRaw(enc2utf8(body))
-  headers <- sigv4_headers(verb,sub("^https?://","",endpoint),path,query=query,headers=headers,body=body,
-                           access_key=credentials[["R2_ACCESS_KEY_ID"]],
-                           secret=credentials[["R2_SECRET_ACCESS_KEY"]],region="auto")
+  if (store$token!="") headers <- c(headers,list("x-amz-security-token"=store$token))
+  headers <- sigv4_headers(verb,sub("^https?://","",store$endpoint),path,query=query,headers=headers,body=body,
+                           access_key=store$access_key,secret=store$secret,region=store$region)
   query_string <- sigv4_query_string(query)
   request_config <- do.call(httr::add_headers,headers)
   if (!is.null(config)) request_config <- c(request_config,config)
-  httr::VERB(verb,paste0(endpoint,path,if (query_string!="") "?",query_string),request_config,
+  httr::VERB(verb,paste0(store$endpoint,path,if (query_string!="") "?",query_string),request_config,
              body=if (length(body)>0) body)
 }
 
@@ -112,10 +180,20 @@ xml_escape <- function(x){
 }
 xml_entities <- c("&"="&amp;","<"="&lt;",">"="&gt;","\""="&quot;","'"="&apos;")
 
-# undo xml escaping
+# undo xml escaping, the named entities and numeric character references like &#34;, which MinIO uses for the
+# quotes around etags
 xml_unescape <- function(x){
-  for (i in rev(seq_along(xml_entities))) x <- gsub(xml_entities[[i]],names(xml_entities)[i],x,fixed=TRUE)
-  x
+  for (i in rev(seq_along(xml_entities)[-1])) x <- gsub(xml_entities[[i]],names(xml_entities)[i],x,fixed=TRUE)
+  x <- vapply(x,function(s){
+    if (is.na(s) || !grepl("&#",s,fixed=TRUE)) return(s)
+    m <- gregexpr("&#(x[0-9a-fA-F]+|[0-9]+);",s,perl=TRUE)
+    regmatches(s,m) <- list(vapply(regmatches(s,m)[[1]],function(r){
+      code <- sub("^&#(.*);$","\\1",r)
+      intToUtf8(if (startsWith(code,"x")) strtoi(substring(code,2),16L) else as.integer(code))
+    },""))
+    s
+  },"",USE.NAMES=FALSE)
+  gsub("&amp;","&",x,fixed=TRUE)
 }
 
 # text of the first <name> element in each xml snippet, NA where there is none
@@ -141,13 +219,13 @@ r2_delete_objects <- function(r2_bucket,r2_paths){
                            headers=list("content-md5"=base64_md5(body),"content-type"="application/xml"))
     content <- httr::content(response,"text",encoding="UTF-8")
     if (httr::status_code(response)>=400) {
-      stop(paste0("Removing files from R2 bucket ",r2_bucket," failed with status ",httr::status_code(response),". ",content))
+      stop(paste0("Removing files from ",bucket_label(r2_bucket)," failed with status ",httr::status_code(response),". ",content))
     }
     # with quiet mode the response only lists the objects that could not be deleted
     errors <- xml_elements(content,"Error")
     if (length(errors)>0) {
       error_messages <- paste0(xml_field(errors,"Key"),": ",xml_field(errors,"Message")," (",xml_field(errors,"Code"),")")
-      stop(paste0("Removing ",length(errors)," file",if (length(errors)>1) "s"," from R2 bucket ",r2_bucket," failed. ",
+      stop(paste0("Removing ",length(errors)," file",if (length(errors)>1) "s"," from ",bucket_label(r2_bucket)," failed. ",
                   paste0(error_messages,collapse=", ")))
     }
   }
@@ -162,7 +240,7 @@ base64_md5 <- function(body){
 r2_object_exists <- function(r2_bucket,r2_path){
   status <- httr::status_code(r2_request("HEAD",r2_bucket,r2_path))
   if (status>=400 && status!=404) {
-    stop(paste0("Checking ",r2_path," in R2 bucket ",r2_bucket," failed with status ",status,"."))
+    stop(paste0("Checking ",r2_path," in ",bucket_label(r2_bucket)," failed with status ",status,"."))
   }
   status<400
 }
@@ -252,7 +330,7 @@ r2_purge_cache <- function(r2_bucket,r2_paths){
 # purge cache after writing or removing objects, failure to purge only warrants a warning
 # as the objects have already been changed at this point
 r2_purge_cache_after_change <- function(r2_bucket,r2_paths){
-  if (Sys.getenv("R2_API_TOKEN")=="") return(invisible())
+  if (Sys.getenv("R2_API_TOKEN")=="" || startsWith(r2_bucket,"s3://")) return(invisible())
   tryCatch(r2_purge_cache(r2_bucket,r2_paths),
            error=function(e)warning(paste0("Purging the Cloudflare cache for R2 bucket ",r2_bucket," failed, ",
                                            "cached copies of the changed files may be served until they expire. ",
@@ -279,7 +357,7 @@ r2_put_body <- function(r2_bucket,r2_path,body,content_type,what="the file",head
   response <- r2_request("PUT",r2_bucket,r2_path,body=body,headers=c(list("content-type"=content_type),headers))
   status <- httr::status_code(response)
   if (status>=400 && !(status==412 && length(headers)>0)) {
-    stop(paste0("Uploading ",what," to r2://",r2_bucket,"/",r2_path," failed with status ",status,". ",
+    stop(paste0("Uploading ",what," to ",bucket_url(r2_bucket,r2_path)," failed with status ",status,". ",
                 httr::content(response,"text",encoding="UTF-8")))
   }
   invisible(response)
@@ -311,9 +389,9 @@ r2_get_manifest <- function(r2_bucket,key){
   response <- r2_request("GET",r2_bucket,key)
   status <- httr::status_code(response)
   if (status==404) return(NULL)
-  if (status>=400) stop(paste0("Reading r2://",r2_bucket,"/",key," failed with status ",status,"."))
+  if (status>=400) stop(paste0("Reading ",bucket_url(r2_bucket,key)," failed with status ",status,"."))
   manifest <- tryCatch(parse_manifest(httr::content(response,"text",encoding="UTF-8")),error=function(e){
-    warning(paste0("r2://",r2_bucket,"/",key," is not a valid manifest and gets rewritten."),call.=FALSE)
+    warning(paste0(bucket_url(r2_bucket,key)," is not a valid manifest and gets rewritten."),call.=FALSE)
     structure(manifest_files(),directory=TRUE,has_metadata=FALSE)
   })
   etag <- clean_etag(httr::headers(response)$etag)
@@ -347,7 +425,7 @@ r2_manifest_from_listing <- function(r2_bucket,r2_dir,objects,known=manifest_fil
   carry[is.na(carry)] <- FALSE
   metadata <- rep(list(NULL),length(keys))
   metadata[carry] <- known$metadata[j[carry]]
-  if (any(!carry)) metadata[!carry] <- unname(parquet_footers(paste0("r2://",r2_bucket,"/",keys[!carry])))
+  if (any(!carry)) metadata[!carry] <- unname(parquet_footers(bucket_url(r2_bucket,keys[!carry])))
   manifest_files(paths,files$size,files$etag,files$modified,metadata)
 }
 
@@ -394,7 +472,7 @@ r2_update_manifest <- function(r2_bucket,r2_dir,create=FALSE,objects=NULL,upload
     response <- r2_put_body(r2_bucket,key,manifest_json(files),"application/json",what="the manifest",headers=condition)
     if (httr::status_code(response)!=412) return(key)
   }
-  stop(paste0("r2://",r2_bucket,"/",key," kept changing while it was being updated."))
+  stop(paste0(bucket_url(r2_bucket,key)," kept changing while it was being updated."))
 }
 
 # update the manifests of several directories, the ones that have a manifest and the ones in create, for
@@ -411,7 +489,7 @@ r2_update_manifests <- function(r2_bucket,r2_dirs,create=character(),objects=NUL
     manifest <- tryCatch(r2_update_manifest(r2_bucket,r2_dir,create=r2_dir %in% create,objects=if (covered) objects,
                                             uploaded=uploaded,removed=removed),
                          error=function(e){
-                           failed <<- c(failed,paste0("r2://",r2_bucket,"/",r2_manifest_key(r2_dir),": ",conditionMessage(e)))
+                           failed <<- c(failed,paste0(bucket_url(r2_bucket,r2_manifest_key(r2_dir)),": ",conditionMessage(e)))
                            NULL
                          })
     manifests <- c(manifests,manifest)
@@ -445,7 +523,7 @@ r2_upload <- function(path,r2_bucket,r2_path,stale=NULL,directory=FALSE){
     if (length(files)==0) stop(paste0("No parquet files found in ",path,"."))
     r2_dir <- r2_path
     if (r2_dir=="") {
-      stop(paste0("Please specify the directory in R2 bucket ",r2_bucket," to upload the directory into, ",
+      stop(paste0("Please specify the directory in ",bucket_label(r2_bucket)," to upload the directory into, ",
                   "write_manifest writes a manifest for the whole bucket."))
     }
     r2_paths <- paste0(r2_dir,"/",files)
@@ -478,7 +556,7 @@ r2_upload <- function(path,r2_bucket,r2_path,stale=NULL,directory=FALSE){
   objects <- if (create || !is.null(stale)) r2_objects(r2_bucket,listed)
   removed <- as.character(if (!is.null(stale)) stale(objects,r2_paths))
   if (length(removed)>0) {
-    message("Removing ",length(removed)," stale parquet file",if (length(removed)>1) "s"," from r2://",r2_bucket,"/",listed,".")
+    message("Removing ",length(removed)," stale parquet file",if (length(removed)>1) "s"," from ",bucket_url(r2_bucket,listed),".")
     r2_delete_objects(r2_bucket,removed)
   }
   for (i in seq_along(files)) {
@@ -506,7 +584,7 @@ r2_list_objects <- function(r2_bucket,prefix=""){
     response <- r2_request("GET",r2_bucket,query=query)
     content <- httr::content(response,"text",encoding="UTF-8")
     if (httr::status_code(response)>=400) {
-      stop(paste0("Listing R2 bucket ",r2_bucket," failed with status ",httr::status_code(response),". ",content))
+      stop(paste0("Listing ",bucket_label(r2_bucket)," failed with status ",httr::status_code(response),". ",content))
     }
     objects <- xml_elements(content,"Contents")
     pages[[length(pages)+1]] <- data.frame(key=xml_field(objects,"Key"),
@@ -541,7 +619,7 @@ r2_dataset_objects <- function(r2_bucket,r2_path){
 r2_parquet_files <- function(path){
   path <- r2_split_path(path)
   objects <- r2_dataset_objects(path$bucket,path$path)$objects
-  parquet_files(paste0("r2://",path$bucket,"/",objects$key),objects$size,objects$modified,objects$etag)
+  parquet_files(bucket_url(path$bucket,objects$key),objects$size,objects$modified,objects$etag)
 }
 
 #' create Cloudflare R2 bucket with private or public access
@@ -657,7 +735,7 @@ upload_parquet <- function(path,destination,purge_cache=TRUE,remove_stale=FALSE)
   uploaded <- r2_upload(path,r2_bucket,destination$path,stale=if (remove_stale && dir.exists(path)) r2_stale_mirror,
                         directory=destination$directory)
   if (purge_cache) r2_purge_cache_after_change(r2_bucket,c(uploaded$files,uploaded$stale,uploaded$manifests))
-  invisible(paste0("r2://",r2_bucket,"/",uploaded$files))
+  invisible(bucket_url(r2_bucket,uploaded$files))
 }
 
 #' write manifests for directories of parquet files on Cloudflare R2
@@ -709,11 +787,11 @@ write_manifest <- function(path,purge_cache=TRUE) {
     p <- r2_split_path(p)
     r2_dir <- p$path
     objects <- r2_objects(p$bucket,r2_dir)
-    if (r2_dir %in% objects$key) stop(paste0("r2://",p$bucket,"/",r2_dir," is a file, manifests describe directories."))
-    if (!any(grepl("\\.parquet$",objects$key))) stop(paste0("No parquet files found in ",r2_dir," in R2 bucket ",p$bucket,"."))
+    if (r2_dir %in% objects$key) stop(paste0(bucket_url(p$bucket,r2_dir)," is a file, manifests describe directories."))
+    if (!any(grepl("\\.parquet$",objects$key))) stop(paste0("No parquet files found in ",r2_dir," in ",bucket_label(p$bucket),"."))
     key <- r2_update_manifest(p$bucket,r2_dir,create=TRUE,objects=objects)
     if (purge_cache) r2_purge_cache_after_change(p$bucket,key)
-    paste0("r2://",p$bucket,"/",key)
+    bucket_url(p$bucket,key)
   },character(1),USE.NAMES=FALSE)
   invisible(manifests)
 }
@@ -749,7 +827,7 @@ remove_parquet <- function(path,purge_cache=TRUE) {
     p <- r2_split_path(p)
     r2_bucket <- p$bucket
     r2_path <- p$path
-    if (r2_path=="") stop("Please specify the path of the parquet file or directory to remove in R2 bucket ",r2_bucket,".")
+    if (r2_path=="") stop("Please specify the path of the parquet file or directory to remove in ",bucket_label(r2_bucket),".")
     objects <- r2_objects(r2_bucket,r2_path)
     manifests <- character()
     directories <- character()
@@ -759,12 +837,12 @@ remove_parquet <- function(path,purge_cache=TRUE) {
       if (grepl("\\.parquet$",r2_path)) directories <- r2_ancestors(r2_path)
     } else if (nrow(objects)>0) {
       r2_paths <- objects$key[grepl("\\.parquet$",objects$key)]
-      if (length(r2_paths)==0) stop(paste0("No parquet files found in ",r2_path," in R2 bucket ",r2_bucket,"."))
+      if (length(r2_paths)==0) stop(paste0("No parquet files found in ",r2_path," in ",bucket_label(r2_bucket),"."))
       # the manifests above the directory list its files, the ones below go with it
       manifests <- objects$key[basename(objects$key)==manifest_name]
       directories <- r2_ancestors(r2_path)
     } else {
-      stop(paste0("File or directory ",r2_path," does not exist in R2 bucket ",r2_bucket,"."))
+      stop(paste0("File or directory ",r2_path," does not exist in ",bucket_label(r2_bucket),"."))
     }
     list(bucket=r2_bucket,paths=r2_paths,manifests=manifests,directories=directories)
   })
@@ -779,8 +857,8 @@ remove_parquet <- function(path,purge_cache=TRUE) {
     directories <- setdiff(unlist(lapply(in_bucket,`[[`,"directories")),r2_dirname(manifests))
     manifests <- c(manifests,r2_update_manifests(r2_bucket,directories,removed=r2_paths))
     if (purge_cache) r2_purge_cache_after_change(r2_bucket,c(r2_paths,manifests))
-    message(paste0("Removed ",length(r2_paths)," file",if (length(r2_paths)>1) "s" else ""," from R2 bucket ",r2_bucket,"."))
-    removed <- c(removed,paste0("r2://",r2_bucket,"/",r2_paths))
+    message(paste0("Removed ",length(r2_paths)," file",if (length(r2_paths)>1) "s" else ""," from ",bucket_label(r2_bucket),"."))
+    removed <- c(removed,bucket_url(r2_bucket,r2_paths))
   }
   invisible(removed)
 }
@@ -808,26 +886,23 @@ presigned_url <- function(path,expires=3600,method=c("GET","HEAD","PUT")) {
     stop("expires has to be between 1 and 604800 seconds (7 days).")
   }
   if (!is.character(path)) stop("path has to be one or more R2 paths of the form r2://bucket/path.")
-  credentials <- r2_credentials(c("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"))
-  endpoint <- r2_endpoint()
   vapply(path,function(p){
     p <- r2_split_path(p)
-    if (p$path=="" || p$directory) stop("The path has to be the path of a file, got r2://",p$bucket,"/",p$path,".")
-    sigv4_presigned_url(method,endpoint,r2_canonical_path(p$bucket,p$path),expires,
-                        access_key=credentials[["R2_ACCESS_KEY_ID"]],
-                        secret=credentials[["R2_SECRET_ACCESS_KEY"]],region="auto")
+    if (p$path=="" || p$directory) stop("The path has to be the path of a file, got ",bucket_url(p$bucket,p$path),".")
+    store <- bucket_store(p$bucket)
+    sigv4_presigned_url(method,store$endpoint,r2_canonical_path(if (store$url_style=="path") store$bucket,p$path),expires,
+                        access_key=store$access_key,secret=store$secret,region=store$region,token=store$token)
   },character(1),USE.NAMES=FALSE)
 }
 
-# split r2://bucket/path into bucket and path
 # bucket and path of r2://bucket/path, the path without leading or trailing slashes, and whether the path was
-# given as a directory with a trailing slash
+# given as a directory with a trailing slash; the bucket of s3://bucket/path is s3://bucket, see bucket_url
 r2_split_path <- function(path){
   if (!is.character(path) || length(path)!=1) stop("Expected a single R2 path, got ",length(path),".")
-  parts <- regmatches(path,regexec("^r2://([^/]+)/?(.*)$",path))[[1]]
-  if (length(parts)!=3) stop("R2 paths have to be of the form r2://bucket/path, got ",path,".")
-  r2_path <- sub("^/+","",parts[3])
-  list(bucket=parts[2],path=sub("/+$","",r2_path),directory=endsWith(r2_path,"/"))
+  parts <- regmatches(path,regexec("^(r2|s3)://([^/]+)/?(.*)$",path))[[1]]
+  if (length(parts)!=4) stop("R2 paths have to be of the form r2://bucket/path (or s3://bucket/path), got ",path,".")
+  r2_path <- sub("^/+","",parts[4])
+  list(bucket=paste0(if (parts[2]=="s3") "s3://",parts[3]),path=sub("/+$","",r2_path),directory=endsWith(r2_path,"/"))
 }
 
 # path or glob pattern matching the parquet file or all parquet files in the directory

@@ -132,35 +132,48 @@ url_path_encode <- function(path){
   gsub("?","%3F",gsub("#","%23",vapply(path,utils::URLencode,"",USE.NAMES=FALSE),fixed=TRUE),fixed=TRUE)
 }
 
-# download from a public URL to a local file
+# whether the etag of a response is the MD5 hash of the content as far as the headers tell: S3 encrypted with
+# KMS or customer keys assigns etags that look like MD5 hashes but aren't
+etag_is_md5 <- function(response){
+  headers <- httr::headers(response)
+  !startsWith(headers[["x-amz-server-side-encryption"]] %||% "","aws:kms") &&
+    is.null(headers[["x-amz-server-side-encryption-customer-algorithm"]])
+}
+
+# download from a public URL to a local file, with whether its etag is an MD5 hash as an attribute
 http_download <- function(url,file){
   response <- httr::GET(url,httr::write_disk(file,overwrite=TRUE))
   if (httr::status_code(response)>=400) {
     unlink(file)
     stop(paste0("Downloading ",url," failed with status ",httr::status_code(response),"."))
   }
-  invisible(file)
+  invisible(structure(file,etag_is_md5=etag_is_md5(response)))
 }
 
-# download an object from R2 to a local file
+# download an object from R2 to a local file, with whether its etag is an MD5 hash as an attribute
 r2_get_object <- function(r2_bucket,r2_path,file){
   response <- r2_request("GET",r2_bucket,r2_path,config=httr::write_disk(file,overwrite=TRUE))
   if (httr::status_code(response)>=400) {
     unlink(file)
-    stop(paste0("Downloading r2://",r2_bucket,"/",r2_path," failed with status ",httr::status_code(response),"."))
+    stop(paste0("Downloading ",bucket_url(r2_bucket,r2_path)," failed with status ",httr::status_code(response),"."))
   }
-  invisible(file)
+  invisible(structure(file,etag_is_md5=etag_is_md5(response)))
 }
 
 # where a path on R2 or a URL gets cached, the local path mirrors r2://bucket/path as r2/<account id>/bucket/path,
-# since bucket names are only unique within an account, and URLs as <scheme>/<host>/<path> without the query string
+# since bucket names are only unique within an account, s3://bucket/path as s3/<service>/bucket/path (see
+# s3_cache_host), and URLs as <scheme>/<host>/<path> without the query string
 cache_location <- function(path,cache_dir){
-  if (startsWith(path,"r2://")) {
+  if (is_bucket_path(path)) {
     p <- r2_split_path(path)
     r2_path <- p$path
-    if (r2_path=="") stop("Please specify the path of the parquet file or directory to cache in R2 bucket ",p$bucket,".")
-    account <- r2_credentials("R2_ACCOUNT_ID")[["R2_ACCOUNT_ID"]]
-    return(list(local=file.path(cache_dir,"r2",account,p$bucket,r2_path),bucket=p$bucket,path=r2_path,url=NULL,cache_dir=cache_dir))
+    if (r2_path=="") stop("Please specify the path of the parquet file or directory to cache in bucket ",p$bucket,".")
+    local <- if (startsWith(p$bucket,"s3://")) {
+      file.path(cache_dir,"s3",s3_cache_host(),sub("^s3://","",p$bucket),r2_path)
+    } else {
+      file.path(cache_dir,"r2",r2_credentials("R2_ACCOUNT_ID")[["R2_ACCOUNT_ID"]],p$bucket,r2_path)
+    }
+    return(list(local=local,bucket=p$bucket,path=r2_path,url=NULL,cache_dir=cache_dir))
   }
   url <- httr::parse_url(path)
   segments <- strsplit(url$path %||% "","/",fixed=TRUE)[[1]]
@@ -168,7 +181,7 @@ cache_location <- function(path,cache_dir){
   if (length(segments)==0 || any(segments %in% c(".","..")) || is.null(url$hostname)) {
     stop("The URL has to point to a parquet file or a directory on a host, got ",path,".")
   }
-  list(local=do.call(file.path,as.list(c(cache_dir,url$scheme,url$hostname,segments))),bucket=NULL,path=NULL,url=path,
+  list(local=do.call(file.path,as.list(c(cache_dir,url$scheme,cache_host(url),segments))),bucket=NULL,path=NULL,url=path,
        cache_dir=cache_dir)
 }
 
@@ -177,7 +190,7 @@ r2_cache_source <- function(location){
   dataset <- r2_dataset_objects(location$bucket,location$path)
   is_file <- dataset$is_file
   objects <- dataset$objects
-  if (nrow(objects)==0) stop("File or directory ",location$path," does not exist in R2 bucket ",location$bucket,".")
+  if (nrow(objects)==0) stop("File or directory ",location$path," does not exist in ",bucket_label(location$bucket),".")
   files <- manifest_files(if (is_file) basename(location$path) else substring(objects$key,nchar(location$path)+2),
                           objects$size,objects$etag,objects$modified)
   files$key <- objects$key
@@ -225,8 +238,8 @@ cache_download <- function(source,file,target){
   dir.create(dirname(target),recursive=TRUE,showWarnings=FALSE)
   tmp <- paste0(target,".download")
   on.exit(unlink(tmp))
-  source$download(file$key,tmp)
-  if (grepl("^[0-9a-f]{32}$",file$etag) && digest::digest(file=tmp,algo="md5")!=file$etag) {
+  downloaded <- source$download(file$key,tmp)
+  if (!isFALSE(attr(downloaded,"etag_is_md5")) && grepl("^[0-9a-f]{32}$",file$etag) && digest::digest(file=tmp,algo="md5")!=file$etag) {
     stop(paste0("The download of ",file$key," does not match its etag, the file may have changed while downloading. ",
                 "Try again."))
   }
@@ -235,7 +248,7 @@ cache_download <- function(source,file,target){
 
 # whether paths are on R2 or at URLs, which is what the cache mirrors, as opposed to local paths
 is_remote <- function(path){
-  startsWith(path,"r2://") | grepl("^https?://",path)
+  is_bucket_path(path) | grepl("^https?://",path)
 }
 
 # the directory holding the manifest of a cached path, a file is listed in the manifest of its directory
@@ -428,7 +441,7 @@ cache_parquet <- function(path) {
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
   cache_dir <- cache_directory()
   vapply(path,function(p){
-    is_r2 <- startsWith(p,"r2://")
+    is_r2 <- is_bucket_path(p)
     if (!is_r2 && !grepl("^https?://",p)) return(p)
     location <- cache_location(p,cache_dir)
     source <- tryCatch(cache_source(location),error=function(e)e)
@@ -516,10 +529,10 @@ clear_cache_checks <- function(){
 cache_remote_path <- function(local,cache_dir){
   vapply(local,function(l){
     segments <- strsplit(substring(l,nchar(cache_dir)+2),"/",fixed=TRUE)[[1]]
-    if (segments[1]=="r2") {
-      paste0("r2://",segments[3],"/",paste0(segments[-(1:3)],collapse="/"))
+    if (segments[1] %in% c("r2","s3")) {
+      paste0(segments[1],"://",segments[3],"/",paste0(segments[-(1:3)],collapse="/"))
     } else {
-      paste0(segments[1],"://",segments[2],"/",url_path_encode(paste0(segments[-(1:2)],collapse="/")))
+      paste0(segments[1],"://",sub("_([0-9]+)$",":\\1",segments[2]),"/",url_path_encode(paste0(segments[-(1:2)],collapse="/")))
     }
   },"",USE.NAMES=FALSE)
 }

@@ -4,7 +4,7 @@
 [![R-CMD-check](https://github.com/mountainMath/r2parquet/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/mountainMath/r2parquet/actions/workflows/R-CMD-check.yaml)
 <!-- badges: end -->
 
-Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloudflare.com/r2/) and query them lazily from R.
+Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloudflare.com/r2/) and query them lazily from R. Amazon S3 and other S3 compatible services like MinIO work too, see [Amazon S3 and other S3 compatible services](https://mountainmath.github.io/r2parquet/articles/s3.html).
 
 ## Reading public Parquet and GeoParquet data from R2
 
@@ -21,6 +21,7 @@ Publish parquet and GeoParquet files on [Cloudflare R2](https://developers.cloud
 - **Writing**: `data_to_parquet()` writes data frames, sf objects and lazy DuckDB tables to parquet, optionally sorted (`sort_by`) and partitioned (`partition_by`), so remote queries only download the row groups they need. sf objects become GeoParquet 2.0 files sorted along a Hilbert curve. Given an `r2://bucket/path` destination it writes and uploads in one go, replacing earlier uploads including stale partitions. `metadata` like the source URL, license, column labels and the primary key goes into the parquet footer. Invalid geometries get repaired, and the repairs recorded in the metadata.
 - **Reading private buckets**: `parquet_tbl("r2://bucket/path")`.
 - **Sharing private files**: `presigned_url()` creates time limited download (or upload) URLs for files in private buckets.
+- **Amazon S3 and other S3 compatible services**: all of the above works on `s3://bucket/path` as well, with the usual AWS environment variables. `set_s3_public_access()` makes a prefix of an S3 bucket public, so public and private data can share a bucket. See [Amazon S3 and other S3 compatible services](https://mountainmath.github.io/r2parquet/articles/s3.html).
 
 ## Installation
 
@@ -40,7 +41,7 @@ Set these environment variables, e.g. in `~/.Renviron` (`usethis::edit_r_environ
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | reading, uploading and removing files (S3 API credentials of an R2 API token) |
 | `R2_API_TOKEN` | `create_r2_bucket()` (Admin Read & Write); Zone Read for custom domains; Zone Cache Purge for cache purging on upload/removal |
 
-See [Setting up R2](https://mountainmath.github.io/r2parquet/articles/setting_up_r2.html) for the token permissions, caching and rate limiting of public buckets on a custom domain.
+See [Setting up R2](https://mountainmath.github.io/r2parquet/articles/setting_up_r2.html) for the token permissions, caching and rate limiting of public buckets on a custom domain. `s3://` paths use the standard AWS variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, and `AWS_ENDPOINT_URL` for services other than Amazon S3), see [Amazon S3 and other S3 compatible services](https://mountainmath.github.io/r2parquet/articles/s3.html).
 
 ## Documentation
 

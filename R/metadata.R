@@ -95,9 +95,9 @@ parquet_footers <- function(path){
   if (length(path)==0) return(metadata)
   con <- duckdb_connect_quietly()
   on.exit(attr(con,"disconnect")())
-  if (any(startsWith(path,"r2://"))) {
+  if (any(is_bucket_path(path))) {
     load_extension(con,"httpfs")
-    duckdb_r2_secret(con)
+    duckdb_bucket_secrets(con,path)
   }
   footers <- read_parquet_footers(con,path)
   metadata[names(footers)] <- footers
@@ -140,10 +140,10 @@ duckdb_parquet_metadata <- function(con,path){
 # manifest covers the path, the nearest one predates the metadata, or the path is a presigned URL, so the
 # footers have to be read
 manifest_footers <- function(path){
-  if (startsWith(path,"r2://")) {
+  if (is_bucket_path(path)) {
     location <- r2_split_path(path)
     key <- location$path
-    prefix <- paste0("r2://",location$bucket,"/")
+    prefix <- bucket_url(location$bucket)
     encode <- identity
     read <- function(directory)r2_get_manifest(location$bucket,paste0(directory,if (directory!="") "/",manifest_name))
   } else {

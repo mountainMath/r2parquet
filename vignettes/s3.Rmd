@@ -1,0 +1,200 @@
+---
+title: "Amazon S3 and other S3 compatible services"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Amazon S3 and other S3 compatible services}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+params:
+  s3_root: "s3://mountainmath/test/vignette"
+---
+<!-- Generated from vignettes.orig/s3.Rmd -- do not edit. -->
+<!-- Rebuild with: Rscript vignettes.orig/precompute.R -->
+
+
+
+
+``` r
+library(r2parquet)
+library(dplyr)
+library(ggplot2)
+```
+
+`r2parquet` is designed around Cloudflare R2, but it can also interact with the S3 API. Buckets on Amazon S3, and on other services with an S3 compatible API like MinIO, are addressed as `s3://bucket/path` and work with the same functions as `r2://bucket/path`: `data_to_parquet()` and `upload_parquet()` write, `parquet_tbl()` reads, `list_parquet()` lists, `cache_parquet()` caches, `presigned_url()` shares, `remove_parquet()` removes, and directory uploads get their `_manifest.json` like on R2 (see the [Metadata and manifests](metadata.html) article). This article walks through uploading private and public data to S3.
+
+## Credentials
+
+`s3://` paths use the environment variables that the AWS command line tools and SDKs use, so a machine that is already set up for AWS needs nothing new. Set them in `~/.Renviron` (`usethis::edit_r_environ()` opens it, restart R afterwards):
+
+```sh
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_DEFAULT_REGION=ca-central-1   # or AWS_REGION, the region of the bucket, default us-east-1
+```
+
+Temporary credentials come with an `AWS_SESSION_TOKEN` as well. The package does not read AWS profiles in `~/.aws/` itself, but the AWS command line tool prints the variables for the current profile:
+
+```sh
+eval "$(aws configure export-credentials --format env)"
+```
+
+The credentials need the `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` and `s3:ListBucket` permissions on the bucket, and `s3:GetBucketPolicy`, `s3:PutBucketPolicy` and `s3:DeleteBucketPolicy` for public access as described below.
+
+### Other S3 compatible services
+
+Services other than Amazon S3 get their endpoint from `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL`, again the variables AWS tools use. A local MinIO server, for example:
+
+```sh
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+AWS_ENDPOINT_URL=http://localhost:9000
+```
+
+With a custom endpoint the bucket goes into the path of the requests (`http://localhost:9000/bucket/key`), on Amazon S3 into the host name (`https://bucket.s3.ca-central-1.amazonaws.com/key`); `R2PARQUET_S3_URL_STYLE` set to `path` or `vhost` overrides that for services that want the other style. The package relies on two parts of the S3 API that not every service implements: conditional writes (`If-Match` and `If-None-Match`), which keep concurrent uploads from overwriting each other's manifest updates, and batch deletes. Amazon S3 and MinIO support both.
+
+## Private data
+
+By default all uploads the package makes are private. As an example we take the dissemination block level geographic attributes of Metro Vancouver from the public census bucket and write them to S3. `data_to_parquet()` writes lazy tables without collecting them, the metadata of the source, its attribution and licence, gets carried along.
+
+
+``` r
+private_path <- paste0(params$s3_root, "/private/van_db_attributes.parquet")
+
+geo_attributes <- parquet_tbl("https://data.mountainmath.xyz/census/2021/2021_92-151_X.parquet")
+
+geo_attributes |>
+  filter(CMAUID == "933") |>
+  select(DBUID, DAUID, CSDUID, CSDNAME, Population = DBPOP2021, Dwellings = DBTDWELL2021) |>
+  data_to_parquet(private_path, sort_by = "DBUID",
+                  metadata = parquet_metadata(geo_attributes)[c("title", "attribution", "licence", "licence_url")])
+#> Uploading 85.5 kB in 1 parquet file to s3://mountainmath/test/vignette/private/van_db_attributes.parquet.
+```
+
+With credentials the file reads like any other.
+
+
+``` r
+parquet_tbl(private_path) |>
+  group_by(CSDNAME) |>
+  summarize(Population = sum(Population, na.rm = TRUE), .groups = "drop") |>
+  arrange(desc(Population)) |>
+  head(5) |>
+  collect()
+#> # A tibble: 5 × 2
+#>   CSDNAME   Population
+#>   <chr>          <dbl>
+#> 1 Vancouver     662248
+#> 2 Surrey        568322
+#> 3 Burnaby       249125
+#> 4 Richmond      209937
+#> 5 Langley       161566
+```
+
+Without credentials the file is out of reach, see below. To share a private file without sharing credentials, `presigned_url()` signs a URL that grants access to that one file for a limited time, at most a week. Anyone with the URL can read the file until it expires, so treat it like a password; we don't print it here.
+
+
+``` r
+shared_url <- presigned_url(private_path, expires = 3600)
+nrow(collect(parquet_tbl(shared_url)))
+#> [1] 15406
+```
+
+## Public data
+
+On R2 public access is a property of a bucket, granted by connecting a custom domain with `create_r2_bucket()`. On S3 it is granted by the bucket policy, which can make part of a bucket public: `set_s3_public_access()` adds a statement to the policy that lets everyone download the files below a prefix, and leaves the rest of the bucket, and other statements of the policy, as they were. It returns the public URL of the prefix. Amazon S3 takes a while to apply policy changes everywhere, so for a few minutes anonymous requests may still get 403 Forbidden now and then.
+
+
+``` r
+public_prefix <- paste0(params$s3_root, "/public")
+public_url <- set_s3_public_access(public_prefix)
+#> The files below s3://mountainmath/test/vignette/public are publicly readable at https://mountainmath.s3.ca-central-1.amazonaws.com/test/vignette/public/.
+```
+
+Whether a file is public is then decided by where it gets uploaded. Here we copy the census metropolitan area boundaries from the public census bucket, partitioned by province, into the public prefix. The policy only grants downloads, not listing the bucket, so readers find the files of the dataset through the `_manifest.json` that the upload writes next to them.
+
+
+``` r
+cma_source <- parquet_tbl("https://data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet")
+
+cma_source |>
+  data_to_parquet(paste0(public_prefix, "/cma"), partition_by = "PRUID", sort_by = "CMAUID",
+                  metadata = parquet_metadata(cma_source)[c("title", "attribution", "licence", "licence_url")])
+#> Uploading 13 MB in 12 parquet files to s3://mountainmath/test/vignette/public/cma.
+```
+
+
+
+Anyone can now read the dataset from its URL, no credentials involved, here the CMAs in British Columbia.
+
+
+``` r
+cma_url <- paste0(public_url, "cma/")
+bc_cmas <- parquet_tbl(cma_url) |>
+  filter(PRUID == "59") |>
+  collect_parquet()
+
+ggplot(bc_cmas) +
+  geom_sf(aes(fill = CMATYPE)) +
+  labs(title = "Census metropolitan areas and agglomerations in BC",
+       fill = "Type", caption = parquet_metadata(bc_cmas)$attribution)
+```
+
+<div class="figure">
+<img src="s3-bc-cmas-1.png" alt="plot of chunk bc-cmas" width="100%" />
+<p class="caption">plot of chunk bc-cmas</p>
+</div>
+
+Next to it the private file stays out of reach: requests without credentials get 403 Forbidden for it, while the manifest of the public dataset is served.
+
+
+``` r
+httr::status_code(httr::HEAD(sub("/public/$", "/private/van_db_attributes.parquet", public_url)))
+#> [1] 403
+httr::status_code(httr::HEAD(paste0(cma_url, "_manifest.json")))
+#> [1] 200
+```
+
+The manifest carries the metadata of the dataset, so `parquet_metadata()` reads it with a single request, and `list_parquet()` lists the files from it.
+
+
+``` r
+parquet_metadata(cma_url)
+#> $licence_url
+#> [1] "https://www.statcan.gc.ca/en/terms-conditions/open-licence"
+#> 
+#> $licence
+#> [1] "Statistics Canada Open Licence"
+#> 
+#> $attribution
+#> [1] "Statistics Canada Product lcma000b21f_e"
+#> 
+#> $title
+#> [1] "2021 Census – Boundary files - Census metropolitan areas and census agglomerations"
+
+list_parquet(cma_url) |>
+  mutate(path = sub(cma_url, "", path, fixed = TRUE)) |>
+  select(path, size, cache) |>
+  head(3)
+#> # A tibble: 3 × 3
+#>   path                    size     cache     
+#>   <chr>                   <chr>    <chr>     
+#> 1 PRUID=10/data_0.parquet 167.9 kB not cached
+#> 2 PRUID=11/data_0.parquet 127.9 kB not cached
+#> 3 PRUID=12/data_0.parquet 844.9 kB not cached
+```
+
+Public URLs can be cached like any other, see the [Caching](caching.html) article. Keep public and private data under separate prefixes: a manifest lists every parquet file below its directory, so a public manifest above private files would publish their names and metadata. Manifests of directories above the public prefix, like the one `write_manifest()` writes for a whole bucket, stay private.
+
+Unlike R2, Amazon S3 charges for data downloaded to the internet, and there is no CDN in front of the bucket. For widely used public data that is worth weighing, CloudFront in front of the bucket, or R2, which charges nothing for downloads, are the alternatives.
+
+## Cleaning up
+
+`remove_parquet()` removes files and directories on S3 like on R2, and `set_s3_public_access()` with `public = FALSE` removes the public access again; the bucket policy goes when nothing else is left in it.
+
+
+``` r
+remove_parquet(c(private_path, paste0(public_prefix, "/cma")))
+#> Removed 13 files from S3 bucket mountainmath.
+set_s3_public_access(public_prefix, public = FALSE)
+#> Removed public access to the files below s3://mountainmath/test/vignette/public.
+```
