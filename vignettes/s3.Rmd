@@ -54,7 +54,7 @@ With a custom endpoint the bucket goes into the path of the requests (`http://lo
 
 ## Private data
 
-By default all uploads the package makes are private. As an example we take the dissemination block level geographic attributes of Metro Vancouver from the public census bucket and write them to S3. `data_to_parquet()` writes lazy tables without collecting them, the metadata of the source, its attribution and licence, gets carried along.
+By default all uploads the package makes are private. As an example we take the dissemination block level geographic attributes of Metro Vancouver from the public census bucket and write them to S3. `data_to_parquet()` writes lazy tables without collecting them, and carries the metadata of the source along, its attribution and licence, with a `derived` entry that lists the entries carried over, since they describe the source rather than the subset.
 
 
 ``` r
@@ -65,9 +65,8 @@ geo_attributes <- parquet_tbl("https://data.mountainmath.xyz/census/2021/2021_92
 geo_attributes |>
   filter(CMAUID == "933") |>
   select(DBUID, DAUID, CSDUID, CSDNAME, Population = DBPOP2021, Dwellings = DBTDWELL2021) |>
-  data_to_parquet(private_path, sort_by = "DBUID",
-                  metadata = parquet_metadata(geo_attributes)[c("title", "attribution", "licence", "licence_url")])
-#> Uploading 85.5 kB in 1 parquet file to s3://mountainmath/test/vignette/private/van_db_attributes.parquet.
+  data_to_parquet(private_path, sort_by = "DBUID")
+#> Uploading 86 kB in 1 parquet file to s3://mountainmath/test/vignette/private/van_db_attributes.parquet.
 ```
 
 With credentials the file reads like any other.
@@ -117,9 +116,8 @@ Whether a file is public is then decided by where it gets uploaded. Here we copy
 cma_source <- parquet_tbl("https://data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet")
 
 cma_source |>
-  data_to_parquet(paste0(public_prefix, "/cma"), partition_by = "PRUID", sort_by = "CMAUID",
-                  metadata = parquet_metadata(cma_source)[c("title", "attribution", "licence", "licence_url")])
-#> Uploading 13 MB in 12 parquet files to s3://mountainmath/test/vignette/public/cma.
+  data_to_parquet(paste0(public_prefix, "/cma"), partition_by = "PRUID", sort_by = "CMAUID")
+#> Uploading 13.1 MB in 12 parquet files to s3://mountainmath/test/vignette/public/cma.
 ```
 
 
@@ -159,11 +157,16 @@ The manifest carries the metadata of the dataset, so `parquet_metadata()` reads 
 
 ``` r
 parquet_metadata(cma_url)
-#> <parquet metadata: 4 entries>
-#> title        2021 Census – Boundary files - Census metropolitan areas and censu…
-#> attribution  Statistics Canada Product lcma000b21f_e
-#> licence      Statistics Canada Open Licence
-#> licence_url  https://www.statcan.gc.ca/en/terms-conditions/open-licence
+#> <parquet metadata: 9 entries>
+#> reference_guide   https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/g…
+#> source_url        https://www12.statcan.gc.ca/census-recensement/alternative_al…
+#> primary_key       CMAPUID
+#> attribution       Statistics Canada Product lcma000b21f_e
+#> title             2021 Census – Boundary files - Census metropolitan areas and …
+#> geometry_repairs  {"columns":"CMAPUID","rows":["35571","47705"]}
+#> processing        Repaired 2 of 156 geometries that were invalid, via sf::st_ma…
+#> licence_url       https://www.statcan.gc.ca/en/terms-conditions/open-licence
+#> licence           Statistics Canada Open Licence
 
 list_parquet(cma_url) |>
   mutate(path = sub(cma_url, "", path, fixed = TRUE)) |>
@@ -172,9 +175,9 @@ list_parquet(cma_url) |>
 #> # A tibble: 3 × 3
 #>   path                    size     cache     
 #>   <chr>                   <chr>    <chr>     
-#> 1 PRUID=10/data_0.parquet 167.9 kB not cached
-#> 2 PRUID=11/data_0.parquet 127.9 kB not cached
-#> 3 PRUID=12/data_0.parquet 844.9 kB not cached
+#> 1 PRUID=10/data_0.parquet 168.6 kB not cached
+#> 2 PRUID=11/data_0.parquet 128.5 kB not cached
+#> 3 PRUID=12/data_0.parquet 845.5 kB not cached
 ```
 
 Public URLs can be cached like any other, see the [Caching](caching.html) article. Keep public and private data under separate prefixes: a manifest lists every parquet file below its directory, so a public manifest above private files would publish their names and metadata. Manifests of directories above the public prefix, like the one `write_manifest()` writes for a whole bucket, stay private.
