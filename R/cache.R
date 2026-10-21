@@ -429,8 +429,8 @@ cached_copy <- function(location){
 #' files below the cache directory, files it does not know about get removed when a directory is synced.
 #' Downloads go through a temporary file, and files uploaded by this package get checked against their etag,
 #' which is the MD5 hash of the content, so an interrupted download never ends up in the cache.
-#' `list_cache` lists what is in the cache, `list_parquet` on the remote paths tells whether the copies are
-#' current, and `remove_from_cache` removes copies.
+#' `list_parquet_cache` lists what is in the cache, `list_parquet` on the remote paths tells whether the copies are
+#' current, and `remove_parquet_from_cache` removes copies.
 #'
 #' @inheritSection upload_parquet Credentials
 #' @param path URL or `r2://bucket/path` of the parquet file or the directory with (partitioned) parquet
@@ -479,7 +479,7 @@ cache_offline <- function(path){
 # remote path otherwise. The remote only gets checked when there is a copy, so paths that were never cached
 # cost nothing, and a copy that is out of date is reported but left alone. Each copy gets checked once per
 # session, later calls reuse the result from cache_checks until clear_cache_checks(), cache_parquet() or
-# remove_from_cache() drop it, so a stale copy is also only reported once. A copy whose remote can't be
+# remove_parquet_from_cache() drop it, so a stale copy is also only reported once. A copy whose remote can't be
 # checked, e.g. offline, gets used with a warning like cache_parquet does; that is not a verdict on the copy, so
 # it is not remembered and the next call checks again.
 cache_lookup <- function(path){
@@ -515,7 +515,7 @@ cache_lookup <- function(path){
 #' costs one request and not one per call. Remote data that changes during the session therefore goes
 #' unnoticed until the session is restarted or the checks are forgotten with this function, after which the next
 #' `parquet_tbl` call on each path checks the remote again. `cache_parquet` and `parquet_tbl(cache = TRUE)`
-#' always check, and update the remembered result along with the copy, and `remove_from_cache` forgets the
+#' always check, and update the remembered result along with the copy, and `remove_parquet_from_cache` forgets the
 #' checks of the paths it removes.
 #'
 #' @return (invisibly) `NULL`
@@ -609,7 +609,7 @@ prune_manifests <- function(local,cache_dir){
 #' remote file in UTC, and `etag`, the etag of the remote file when it was downloaded, followed by `local`,
 #' the path of the copy, and `path`, the `r2://bucket/path` or URL it is a copy of
 #' @export
-list_cache <- function(path=NULL) {
+list_parquet_cache <- function(path=NULL) {
   cache_dir <- cache_directory()
   files <- cache_contents(cache_dir)
   if (!is.null(path)) {
@@ -633,15 +633,15 @@ list_cache <- function(path=NULL) {
 #'
 #' @param path `r2://bucket/path` or URL of a parquet file or directory with (partitioned) parquet files, or a
 #' vector of these. `r2://` paths need the `R2_ACCOUNT_ID` environment variable, since the cache is kept per account.
-#' @return (invisibly) the removed files as `r2://bucket/path` or URL, as `list_cache` lists them
+#' @return (invisibly) the removed files as `r2://bucket/path` or URL, as `list_parquet_cache` lists them
 #' @export
-remove_from_cache <- function(path) {
+remove_parquet_from_cache <- function(path) {
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
   cache_dir <- cache_directory()
   local <- vapply(path,function(p)remote_cache_location(p,cache_dir)$local,"",USE.NAMES=FALSE)
   missing <- !file.exists(local)
   if (any(missing)) stop(paste0("Not in the cache: ",paste0(path[missing],collapse=", "),"."))
-  removed <- list_cache(path)$path
+  removed <- list_parquet_cache(path)$path
   for (l in unique(local)) {
     # may have gone with a directory removed before it
     if (!file.exists(l)) next

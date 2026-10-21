@@ -159,7 +159,7 @@ test_that("cache=NULL reads current copies, warns about stale ones and leaves th
   clear_cache_checks()
   expect_warning(expect_equal(lookup("r2://bucket/census/single.parquet"),"r2://bucket/census/single.parquet"),"out of date")
   objects <- fixture$objects
-  suppressMessages(remove_from_cache("r2://bucket/census/data/year=2021/data_0.parquet"))
+  suppressMessages(remove_parquet_from_cache("r2://bucket/census/data/year=2021/data_0.parquet"))
   expect_no_warning(expect_equal(lookup("r2://bucket/census/data"),"r2://bucket/census/data"))
   suppressMessages(cache_parquet("r2://bucket/census/data"))
   # the remote can't be reached: the copies get used with a warning, paths without a copy stay remote, and the
@@ -226,7 +226,7 @@ test_that("cache checks are remembered per copy and forgotten with the paths abo
   listings <- 0
   expect_equal(lookup("r2://bucket/census/data/year=2021/data_0.parquet"),file)
   expect_equal(listings,0)
-  suppressMessages(remove_from_cache("r2://bucket/census/data"))
+  suppressMessages(remove_parquet_from_cache("r2://bucket/census/data"))
   expect_equal(ls(checks),file.path(cache,"r2","other","bucket","census","data"))
   expect_null(clear_cache_checks())
   expect_length(ls(checks),0)
@@ -273,7 +273,7 @@ test_that("cache='offline' reads the copies without contacting the remote, curre
   expect_equal(list_parquet(tbl)$path,file.path(local,c("year=2021","year=2022"),"data_0.parquet"))
   expect_equal(listings,0)
   # a copy that no longer covers its directory is no copy
-  suppressMessages(remove_from_cache("r2://bucket/census/data/year=2021/data_0.parquet"))
+  suppressMessages(remove_parquet_from_cache("r2://bucket/census/data/year=2021/data_0.parquet"))
   expect_error(offline("r2://bucket/census/data"),"No copy")
   expect_equal(offline("r2://bucket/census/data/year=2022/data_0.parquet"),file.path(local,"year=2022","data_0.parquet"))
   expect_error(parquet_tbl("r2://bucket/census/data",cache="local"),"cache has to be")
@@ -365,12 +365,12 @@ test_that("URLs get cached by host, files via their headers and directories via 
   cache_parquet("https://data.example.com/census/data/")
   expect_equal(vapply(requests,`[[`,"",i="verb"),"GET")
   # the cache lists the copies by their URLs
-  cached <- list_cache()
+  cached <- list_parquet_cache()
   expect_equal(cached$path,c("https://data.example.com/census/data/year=2021/data_0.parquet",
                              "https://data.example.com/census/data/year=2022/data_0.parquet",
                              "https://data.example.com/census/single.parquet"))
   expect_equal(cached$local,c(file.path(local,c("year=2021","year=2022"),"data_0.parquet"),single))
-  expect_equal(list_cache("https://data.example.com/census/single.parquet?X-Amz-Signature=abc")$path,
+  expect_equal(list_parquet_cache("https://data.example.com/census/single.parquet?X-Amz-Signature=abc")$path,
                "https://data.example.com/census/single.parquet")
   # directories without a manifest, and URLs that are not files on a host
   expect_error(cache_parquet("https://data.example.com/census/"),"no manifest")
@@ -378,7 +378,7 @@ test_that("URLs get cached by host, files via their headers and directories via 
   expect_error(cache_parquet("https://data.example.com/../x.parquet"),"has to point to")
 })
 
-test_that("list_cache and remove_from_cache work on the cache directory and keep its manifests in line", {
+test_that("list_parquet_cache and remove_parquet_from_cache work on the cache directory and keep its manifests in line", {
   fixture <- cache_fixture()
   objects <- fixture$objects
   local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix="")objects[startsWith(objects$key,prefix),],
@@ -387,15 +387,15 @@ test_that("list_cache and remove_from_cache work on the cache directory and keep
                         })
   cache <- local_cache_dir()
   withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret",R2PARQUET_CACHE_PATH=cache)
-  expect_named(list_cache(),c("file","size","sizeRaw","modified","etag","local","path"))
-  expect_equal(nrow(list_cache()),0)
+  expect_named(list_parquet_cache(),c("file","size","sizeRaw","modified","etag","local","path"))
+  expect_equal(nrow(list_parquet_cache()),0)
   expect_equal(list_parquet("r2://bucket/census/data")$cache,rep("not cached",2))
   suppressMessages({
     local <- cache_parquet("r2://bucket/census/data")
     single <- cache_parquet("r2://bucket/census/single.parquet")
   })
   # everything in the cache, or the copies of given paths, by their remote paths
-  cached <- list_cache()
+  cached <- list_parquet_cache()
   expect_s3_class(cached,"tbl_df")
   expect_equal(cached$path,paste0("r2://bucket/census/",c("data/year=2021/data_0.parquet","data/year=2022/data_0.parquet","single.parquet")))
   expect_equal(cached$local,c(file.path(local,c("year=2021","year=2022"),"data_0.parquet"),single))
@@ -403,12 +403,12 @@ test_that("list_cache and remove_from_cache work on the cache directory and keep
   expect_equal(cached$sizeRaw,objects$size[match(sub("^r2://bucket/","",cached$path),objects$key)])
   expect_equal(cached$file,c("data_0.parquet","data_0.parquet","single.parquet"))
   expect_equal(cached$modified,rep(objects$modified[1],3))
-  expect_equal(list_cache("r2://bucket/census/data/")$path,cached$path[1:2])
-  expect_equal(list_cache(c("r2://bucket/census/single.parquet","r2://bucket/census/data/year=2022"))$path,cached$path[c(2,3)])
-  expect_equal(nrow(list_cache("r2://bucket/census/other.parquet")),0)
-  expect_equal(nrow(list_cache("r2://other/census")),0)
-  expect_error(list_cache(fixture$dir),"r2://bucket/path or a URL")
-  expect_error(list_cache("r2://bucket"),"specify the path")
+  expect_equal(list_parquet_cache("r2://bucket/census/data/")$path,cached$path[1:2])
+  expect_equal(list_parquet_cache(c("r2://bucket/census/single.parquet","r2://bucket/census/data/year=2022"))$path,cached$path[c(2,3)])
+  expect_equal(nrow(list_parquet_cache("r2://bucket/census/other.parquet")),0)
+  expect_equal(nrow(list_parquet_cache("r2://other/census")),0)
+  expect_error(list_parquet_cache(fixture$dir),"r2://bucket/path or a URL")
+  expect_error(list_parquet_cache("r2://bucket"),"specify the path")
   # the cache column of list_parquet compares the etags of the copies with the remote files
   expect_equal(list_parquet("r2://bucket/census/data")$cache,rep("current",2))
   expect_equal(list_parquet("r2://bucket/census")$cache,rep("current",3))
@@ -417,7 +417,7 @@ test_that("list_cache and remove_from_cache work on the cache directory and keep
   expect_equal(list_parquet(c("r2://bucket/census/single.parquet",fixture$dir))$cache,c("current",NA,NA,NA))
   objects <- fixture$objects
   # removing a file inside a cached directory leaves a manifest that no longer covers the directory
-  expect_message(removed <- remove_from_cache("r2://bucket/census/data/year=2021/data_0.parquet"),"Removed 1 file from the cache")
+  expect_message(removed <- remove_parquet_from_cache("r2://bucket/census/data/year=2021/data_0.parquet"),"Removed 1 file from the cache")
   expect_equal(removed,"r2://bucket/census/data/year=2021/data_0.parquet")
   expect_false(dir.exists(file.path(local,"year=2021")))
   manifest <- jsonlite::fromJSON(file.path(local,"_manifest.json"))
@@ -428,21 +428,21 @@ test_that("list_cache and remove_from_cache work on the cache directory and keep
   expect_message(cache_parquet("r2://bucket/census/data"),"Downloading 1 file")
   expect_true(jsonlite::fromJSON(file.path(local,"_manifest.json"))$directory)
   # a directory goes with its manifest, a single file leaves the directory manifest without its entry
-  expect_message(removed <- remove_from_cache(c("r2://bucket/census/data","r2://bucket/census/data/year=2022")),"Removed 2 files")
+  expect_message(removed <- remove_parquet_from_cache(c("r2://bucket/census/data","r2://bucket/census/data/year=2022")),"Removed 2 files")
   expect_equal(removed,cached$path[1:2])
   expect_false(dir.exists(local))
-  expect_equal(list_cache()$path,"r2://bucket/census/single.parquet")
-  expect_message(remove_from_cache("r2://bucket/census/single.parquet"),"Removed 1 file")
-  expect_equal(nrow(list_cache()),0)
+  expect_equal(list_parquet_cache()$path,"r2://bucket/census/single.parquet")
+  expect_message(remove_parquet_from_cache("r2://bucket/census/single.parquet"),"Removed 1 file")
+  expect_equal(nrow(list_parquet_cache()),0)
   # empty directories are removed up to the cache directory, which stays
   expect_length(dir(cache,all.files=TRUE,no..=TRUE),0)
   expect_true(dir.exists(cache))
   # nothing gets removed unless all paths are in the cache
   suppressMessages(cache_parquet("r2://bucket/census/single.parquet"))
-  expect_error(remove_from_cache(c("r2://bucket/census/single.parquet","r2://bucket/census/data")),"Not in the cache: r2://bucket/census/data")
-  expect_equal(nrow(list_cache()),1)
-  expect_error(remove_from_cache(fixture$dir),"r2://bucket/path or a URL")
-  expect_error(remove_from_cache(character()),"character vector")
+  expect_error(remove_parquet_from_cache(c("r2://bucket/census/single.parquet","r2://bucket/census/data")),"Not in the cache: r2://bucket/census/data")
+  expect_equal(nrow(list_parquet_cache()),1)
+  expect_error(remove_parquet_from_cache(fixture$dir),"r2://bucket/path or a URL")
+  expect_error(remove_parquet_from_cache(character()),"character vector")
 })
 
 test_that("files and directories cached within a cached directory share its manifest", {
@@ -476,10 +476,10 @@ test_that("files and directories cached within a cached directory share its mani
   objects <- fixture$objects
   expect_message(cache_parquet("r2://bucket/census/data"),"Downloading 2 files")
   expect_equal(manifest(local)$files$etag,objects$etag[startsWith(objects$key,"census/data/")])
-  expect_equal(nrow(list_cache()),2)
+  expect_equal(nrow(list_parquet_cache()),2)
   # a partition below a directory holding only a cached single file keeps a manifest of its own, so its copy
   # is known to be complete, and gets recorded in the directory's manifest as well
-  suppressMessages(remove_from_cache("r2://bucket/census/data"))
+  suppressMessages(remove_parquet_from_cache("r2://bucket/census/data"))
   suppressMessages(single <- cache_parquet("r2://bucket/census/single.parquet"))
   expect_false(manifest(dirname(single))$directory)
   suppressMessages(cache_parquet("r2://bucket/census/data/year=2022"))
@@ -501,7 +501,7 @@ test_that("files and directories cached within a cached directory share its mani
   objects$etag[objects$key=="census/single.parquet"] <- "changed single"
   suppressMessages(cache_parquet("r2://bucket/census/single.parquet"))
   expect_equal(manifest(census)$files$etag[3],"changed single")
-  expect_equal(nrow(list_cache()),3)
+  expect_equal(nrow(list_parquet_cache()),3)
 })
 
 test_that("URL paths get encoded without breaking the path", {

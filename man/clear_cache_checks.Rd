@@ -15,6 +15,6 @@ path with the default `cache = NULL`, and reuses the result afterwards, so that 
 costs one request and not one per call. Remote data that changes during the session therefore goes
 unnoticed until the session is restarted or the checks are forgotten with this function, after which the next
 `parquet_tbl` call on each path checks the remote again. `cache_parquet` and `parquet_tbl(cache = TRUE)`
-always check, and update the remembered result along with the copy, and `remove_from_cache` forgets the
+always check, and update the remembered result along with the copy, and `remove_parquet_from_cache` forgets the
 checks of the paths it removes.
 }

@@ -14,8 +14,8 @@ reference:
   - parquet_metadata
   - list_parquet
   - cache_parquet
-  - list_cache
-  - remove_from_cache
+  - list_parquet_cache
+  - remove_parquet_from_cache
   - clear_cache_checks
   - parquet_connection
 - title: Uploading and managing data on R2 and S3

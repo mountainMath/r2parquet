@@ -37,8 +37,8 @@ names are only unique within an account, and URLs as `<scheme>/<host>/<path>`. T
 files below the cache directory, files it does not know about get removed when a directory is synced.
 Downloads go through a temporary file, and files uploaded by this package get checked against their etag,
 which is the MD5 hash of the content, so an interrupted download never ends up in the cache.
-`list_cache` lists what is in the cache, `list_parquet` on the remote paths tells whether the copies are
-current, and `remove_from_cache` removes copies.
+`list_parquet_cache` lists what is in the cache, `list_parquet` on the remote paths tells whether the copies are
+current, and `remove_parquet_from_cache` removes copies.
 }
 \section{Credentials}{
 

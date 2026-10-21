@@ -522,4 +522,4 @@ Writing a partitioned dataset to R2 with `data_to_parquet(partition_by = )` writ
 
 ## The local cache
 
-`cache_parquet()` and `parquet_tbl(cache = TRUE)` mirror remote files and directories into a local cache directory, in the same layout as on R2, and keep local manifests of the same format next to the copies, with the remote etags they were downloaded with. That is how the package knows whether a copy is current without comparing files, and how `list_cache()` knows what the cache holds. The [Caching](caching.html) article covers the cache.
+`cache_parquet()` and `parquet_tbl(cache = TRUE)` mirror remote files and directories into a local cache directory, in the same layout as on R2, and keep local manifests of the same format next to the copies, with the remote etags they were downloaded with. That is how the package knows whether a copy is current without comparing files, and how `list_parquet_cache()` knows what the cache holds. The [Caching](caching.html) article covers the cache.

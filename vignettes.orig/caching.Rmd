@@ -34,7 +34,7 @@ geos_cma <- parquet_tbl(census_cma_url, cache = TRUE)
 This downloads the file if the cache has no current copy and opens the table on the local file. The copy is kept current by its etag: every call with `cache = TRUE` checks the remote file and downloads it again when it changed. We can inspect the cache to see what is available locally.
 
 ```{r}
-list_cache()
+list_parquet_cache()
 ```
 
 Once a dataset is cached, `parquet_tbl()` reads the copy by default as long as it is current. The `cache` argument chooses how the cache gets used:
@@ -65,5 +65,5 @@ list_parquet(census_cma_url)
 We can remove the local copy when we don't need the file any more.
 
 ```{r}
-remove_from_cache(census_cma_url)
+remove_parquet_from_cache(census_cma_url)
 ```
