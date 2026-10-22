@@ -28,5 +28,7 @@ For tables from \code{\link[=parquet_tbl]{parquet_tbl()}} the metadata of the pa
 the result: the whole list as the \code{metadata} attribute, and the \code{label} entries of \code{columns} as \code{label}
 attributes of the columns, as the haven and labelled packages use them. The files are looked up through the
 table, so the metadata follows the table through \code{dplyr} verbs and is the metadata of the left-hand table of
-joins.
+joins. The metadata of every table from \code{\link[=parquet_tbl]{parquet_tbl()}} the result was read from, joined tables included, gets
+attached as the \code{parquet_sources} attribute, see \code{\link[=parquet_sources]{parquet_sources()}}, and columns the left-hand table has no
+label for get the labels of the other tables.
 }

@@ -136,7 +136,7 @@ bc_cmas <- parquet_tbl(cma_url) |>
 ggplot(bc_cmas) +
   geom_sf(aes(fill = CMATYPE)) +
   labs(title = "Census metropolitan areas and agglomerations in BC",
-       fill = "Type", caption = parquet_metadata(bc_cmas)$attribution)
+       fill = "Type", caption = parquet_sources_attribution(bc_cmas))
 ```
 
 <div class="figure">
@@ -161,14 +161,14 @@ The manifest carries the metadata of the dataset, so `parquet_metadata()` reads 
 parquet_metadata(cma_url)
 #> <parquet metadata: 9 entries>
 #> licence           Statistics Canada Open Licence
-#> reference_guide   https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/g…
-#> source_url        https://www12.statcan.gc.ca/census-recensement/alternative_al…
-#> primary_key       CMAPUID
-#> attribution       Statistics Canada Product lcma000b21f_e
-#> title             2021 Census – Boundary files - Census metropolitan areas and …
-#> geometry_repairs  {"columns":"CMAPUID","rows":["35571","47705"]}
-#> processing        Repaired 2 of 156 geometries that were invalid, via sf::st_ma…
 #> licence_url       https://www.statcan.gc.ca/en/terms-conditions/open-licence
+#> processing        Repaired 2 of 156 geometries that were invalid, via sf::st_ma…
+#> geometry_repairs  {"columns":"CMAPUID","rows":["35571","47705"]}
+#> title             2021 Census – Boundary files - Census metropolitan areas and …
+#> attribution       Statistics Canada Product lcma000b21f_e
+#> primary_key       CMAPUID
+#> source_url        https://www12.statcan.gc.ca/census-recensement/alternative_al…
+#> reference_guide   https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/g…
 
 list_parquet(cma_url) |>
   mutate(path = sub(cma_url, "", path, fixed = TRUE)) |>

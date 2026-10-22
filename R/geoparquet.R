@@ -237,7 +237,9 @@ st_filter.tbl_r2parquet_connection <- st_filter.tbl_duckdb_connection
 #' the result: the whole list as the `metadata` attribute, and the `label` entries of `columns` as `label`
 #' attributes of the columns, as the haven and labelled packages use them. The files are looked up through the
 #' table, so the metadata follows the table through `dplyr` verbs and is the metadata of the left-hand table of
-#' joins.
+#' joins. The metadata of every table from [parquet_tbl()] the result was read from, joined tables included, gets
+#' attached as the `parquet_sources` attribute, see [parquet_sources()], and columns the left-hand table has no
+#' label for get the labels of the other tables.
 #'
 #' @param tbl lazy DuckDB table, e.g. from [parquet_tbl()] or [`sf::st_filter()`][st_filter.tbl_duckdb_connection].
 #' @param attach_metadata `TRUE` (default) or `FALSE`: attach the metadata of the parquet files as attributes.
@@ -252,8 +254,16 @@ collect_parquet <- function(tbl,attach_metadata=TRUE) {
   if (length(geometry_columns)>0) {
     data <- sf::st_as_sf(data,sf_column_name=duckdb_geometry_column(tbl,geometry_columns=geometry_columns)$name)
   }
-  if (isTRUE(attach_metadata) && !is.null(attr(tbl,"r2parquet_paths"))) {
-    data <- attach_parquet_metadata(data,duckdb_parquet_metadata(dbplyr::remote_con(tbl),attr(tbl,"r2parquet_paths")))
+  if (isTRUE(attach_metadata)) {
+    con <- dbplyr::remote_con(tbl)
+    scans <- table_scans(tbl)
+    metadata <- lapply(scans,function(scan)duckdb_parquet_metadata(con,scan$paths))
+    # the metadata attribute is the left-hand table's, which need not be from parquet_tbl
+    paths <- attr(tbl,"r2parquet_paths")
+    left <- match(list(paths),lapply(scans,function(scan)scan$paths))
+    left_metadata <- if (is.null(paths)) NULL else if (is.na(left)) duckdb_parquet_metadata(con,paths) else metadata[[left]]
+    data <- attach_parquet_metadata(data,left_metadata,metadata)
+    if (length(scans)>0) attr(data,"parquet_sources") <- parquet_sources_table(scans,metadata)
   }
   data
 }

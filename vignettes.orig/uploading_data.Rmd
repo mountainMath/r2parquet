@@ -146,7 +146,7 @@ data <- con |>
 ggplot(data) +
   geom_sf() +
   labs(title = "Montréal CMA boundary",
-       caption=parquet_metadata(data)$attribution) 
+       caption=parquet_sources_attribution(data)) 
 ```
 
 The metadata is accessible from the lazy table `con` as well as from the collected `data`, and is used here for the caption.

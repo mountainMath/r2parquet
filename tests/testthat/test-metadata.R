@@ -312,3 +312,88 @@ test_that("metadata of the source can be written again", {
   data_to_parquet(collected,copy,metadata=parquet_metadata(collected)[c("source","columns")])
   expect_equal(unclass(parquet_metadata(copy)),list(source="s",columns=list(id=list(label="Identifier"),value=list(label="Value"))))
 })
+
+test_that("parquet_sources lists the metadata of joined tables, also ones not assigned to a variable", {
+  left <- withr::local_tempfile(fileext=".parquet")
+  right <- withr::local_tempfile(fileext=".parquet")
+  third <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(data.frame(id=c("a","b"),value=1:2),left,metadata=list(attribution="Left",columns=list(id="Identifier")))
+  data_to_parquet(data.frame(id=c("a","b"),count=3:4),right,metadata=list(attribution="Right",licence="OGL",columns=list(id="Other",count="Count")))
+  data_to_parquet(data.frame(id="a"),third,metadata=list(attribution="Third"))
+  tbl <- parquet_tbl(left)
+  joined <- tbl |>
+    dplyr::inner_join(parquet_tbl(right),by="id") |>
+    dplyr::semi_join(parquet_tbl(third),by="id") |>
+    dplyr::filter(value>0)
+  sources <- parquet_sources(joined)
+  expect_equal(sources$path,c(left,right,third))
+  expect_equal(sources$attribution,c("Left","Right","Third"))
+  expect_equal(sources$licence,c(NA,"OGL",NA))
+  expect_equal(unclass(sources$metadata[[2]])$columns$count,list(label="Count"))
+  result <- collect_parquet(joined)
+  expect_equal(nrow(result),1)
+  # the metadata stays the left-hand table's, the labels of the joined columns get added
+  expect_equal(attr(result,"metadata")$attribution,"Left")
+  expect_equal(attr(result$id,"label"),"Identifier")
+  expect_equal(attr(result$count,"label"),"Count")
+  expect_equal(parquet_sources(result),sources)
+  # a table joined twice is one source, set operations count too
+  self <- dplyr::left_join(tbl,tbl,by="id")
+  expect_equal(parquet_sources(self)$path,left)
+  combined <- dplyr::union_all(dplyr::select(tbl,id),dplyr::select(parquet_tbl(third),id))
+  expect_equal(parquet_sources(combined)$attribution,c("Left","Third"))
+  # tables not from parquet_tbl have no row, also on the left
+  other <- dplyr::tbl(dbplyr::remote_con(tbl),dplyr::sql("SELECT 'a' AS id"))
+  expect_equal(nrow(parquet_sources(other)),0)
+  from_other <- collect_parquet(dplyr::left_join(other,parquet_tbl(right),by="id"))
+  expect_null(attr(from_other,"metadata"))
+  expect_equal(parquet_sources(from_other)$attribution,"Right")
+  expect_equal(nrow(parquet_sources(data.frame(a=1))),0)
+  expect_null(attr(collect_parquet(joined,attach_metadata=FALSE),"parquet_sources"))
+  expect_error(parquet_sources(1),"lazy DuckDB table")
+})
+
+test_that("attributions that differ in their last word get combined", {
+  expect_equal(combine_attributions(c("Statistics Canada Product ldb_000b21f_e","Statistics Canada Product 2021_92-151_X")),
+               "Statistics Canada Product ldb_000b21f_e, 2021_92-151_X")
+  # groups keep the order of their first member, repeats and missing attributions go
+  expect_equal(combine_attributions(c("StatCan Table 1","City of Vancouver","StatCan Table 2","StatCan Table 1",NA," ")),
+               "StatCan Table 1, 2 | City of Vancouver")
+  # a shared first word is not enough, and single words don't match a prefix
+  expect_equal(combine_attributions(c("Statistics Canada Product 1","Statistics Canada, Census"),sep="; "),
+               "Statistics Canada Product 1; Statistics Canada, Census")
+  expect_equal(combine_attributions(c("Statistics","Statistics Canada")),"Statistics | Statistics Canada")
+  expect_null(combine_attributions(c(NA,"")))
+  expect_null(combine_attributions(NULL))
+  left <- withr::local_tempfile(fileext=".parquet")
+  right <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(data.frame(id="a",value=1),left,metadata=list(attribution="Statistics Canada Product A"))
+  data_to_parquet(data.frame(id="a",count=2),right,metadata=list(attribution="Statistics Canada Product B"))
+  joined <- dplyr::left_join(parquet_tbl(left),parquet_tbl(right),by="id")
+  expect_equal(parquet_sources_attribution(joined),"Statistics Canada Product A, B")
+  expect_equal(parquet_sources_attribution(collect_parquet(joined)),"Statistics Canada Product A, B")
+  data_to_parquet(data.frame(id="a"),left,metadata=list(source="s"))
+  expect_null(parquet_sources_attribution(parquet_tbl(left)))
+})
+
+test_that("writing joined data warns about the metadata of the joined tables", {
+  left <- withr::local_tempfile(fileext=".parquet")
+  right <- withr::local_tempfile(fileext=".parquet")
+  plain <- withr::local_tempfile(fileext=".parquet")
+  copy <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(data.frame(id="a",value=1),left,metadata=list(source="s"))
+  data_to_parquet(data.frame(id="a",count=2),right,metadata=list(attribution="r"))
+  data_to_parquet(data.frame(id="a",other=3),plain,metadata=list())
+  joined <- dplyr::left_join(parquet_tbl(left),parquet_tbl(right),by="id")
+  expect_warning(data_to_parquet(joined,copy),
+                 paste0("metadata \\(source\\).*Joined parquet tables have metadata too \\(",right,"\\)"))
+  expect_warning(data_to_parquet(collect_parquet(joined),copy),paste0("too \\(",right,"\\)"))
+  # only the joined table has metadata
+  from_plain <- dplyr::left_join(parquet_tbl(plain),parquet_tbl(right),by="id")
+  expect_warning(data_to_parquet(from_plain,copy),paste0("^The data was read from parquet files with metadata, .*too \\(",right,"\\).*metadata = list\\(\\)"))
+  expect_warning(data_to_parquet(collect_parquet(from_plain),copy),paste0("too \\(",right,"\\)"))
+  expect_no_warning(data_to_parquet(from_plain,copy,metadata=list()))
+  # joined tables without metadata don't get mentioned
+  expect_warning(data_to_parquet(dplyr::left_join(parquet_tbl(left),parquet_tbl(plain),by="id"),copy),"^(?!.*Joined)",perl=TRUE)
+  expect_no_warning(data_to_parquet(dplyr::left_join(parquet_tbl(plain),parquet_tbl(plain),by="id"),copy))
+})

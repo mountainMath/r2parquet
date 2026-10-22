@@ -250,6 +250,7 @@ duckdb_parquet_paths <- function(con,path){
 #' @export
 parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL) {
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
+  given <- path
   if (is.null(con)) {
     con <- parquet_connection()
   } else if (!methods::is(con,"duckdb_connection")) {
@@ -281,7 +282,29 @@ parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL) {
   # files the table reads, and the paths they were resolved from
   attr(tbl,"r2parquet_paths") <- files
   attr(tbl,"r2parquet_source") <- path
+  # tables joined on the right lose their attributes, parquet_sources() finds them by the SQL of their scan
+  assign(as.character(tbl$lazy_query$x),list(paths=files,source=path,given=given),envir=parquet_scans)
   tbl
+}
+
+# the tables parquet_tbl created in the session, by the SQL of their scan: the files they read, the paths these
+# were resolved from (local copies for cached paths) and the paths as given
+parquet_scans <- new.env(parent=emptyenv())
+
+# the parquet_scans entries of the tables a lazy table reads, left-hand table first and each once: dbplyr nests
+# the lazy queries of joined, semi joined and combined tables, with the scans as lazy_base_remote_query leaves
+table_scans <- function(x){
+  found <- list()
+  walk <- function(query){
+    if (inherits(query,"lazy_base_remote_query")) {
+      key <- as.character(query$x)
+      if (length(key)==1 && nzchar(key) && exists(key,envir=parquet_scans,inherits=FALSE)) found[[key]] <<- get(key,envir=parquet_scans)
+    } else if (is.list(query)) {
+      for (element in query) walk(element)
+    }
+  }
+  walk(x$lazy_query)
+  unname(found)
 }
 
 # sizes in bytes formatted for reading, like 2.5 kB

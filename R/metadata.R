@@ -171,14 +171,16 @@ manifest_footers <- function(path){
   NULL
 }
 
-# attach metadata to collected data, the whole list as the metadata attribute and column labels as label attributes
-attach_parquet_metadata <- function(data,metadata){
-  if (length(metadata)==0) return(data)
-  for (column in intersect(names(metadata$columns),names(data))) {
-    label <- if (is.list(metadata$columns[[column]])) metadata$columns[[column]]$label
-    if (is.character(label) && length(label)==1) attr(data[[column]],"label") <- label
+# attach metadata to collected data, the whole list as the metadata attribute and column labels as label
+# attributes, also from the metadata of the other sources (joined tables) for columns that have none yet
+attach_parquet_metadata <- function(data,metadata,sources=list()){
+  for (source in c(list(metadata),sources)) {
+    for (column in intersect(names(source$columns),names(data))) {
+      label <- if (is.list(source$columns[[column]])) source$columns[[column]]$label
+      if (is.character(label) && length(label)==1 && is.null(attr(data[[column]],"label"))) attr(data[[column]],"label") <- label
+    }
   }
-  attr(data,"metadata") <- metadata
+  if (length(metadata)>0) attr(data,"metadata") <- metadata
   data
 }
 
@@ -198,14 +200,36 @@ source_metadata <- function(data){
   metadata
 }
 
+# the paths of the tables other than the left-hand one that data was read from and that have metadata, for
+# data_to_parquet to point out that it doesn't get written either. Empty when they can't be read
+joined_source_paths <- function(data){
+  sources <- tryCatch(parquet_sources(data),error=function(e)NULL)
+  if (is.null(sources) || nrow(sources)==0) return(character(0))
+  # the left-hand table comes first when it is from parquet_tbl, for collected data it has no row without metadata
+  left <- if (inherits(data,"tbl_lazy")) !is.null(attr(data,"r2parquet_paths")) else !is.null(attr(data,"metadata"))
+  if (left) sources <- sources[-1,]
+  sources$path[vapply(sources$metadata,length,integer(1))>0]
+}
+
 # warn that the metadata of the files data was read from doesn't get written, metadata = list() writes none on purpose
 warn_dropped_metadata <- function(data){
   metadata <- source_metadata(data)
-  if (is.null(metadata)) return(invisible())
-  warning(paste0("The data was read from parquet files with metadata (",paste0(names(metadata),collapse=", "),
-                 "), which doesn't get written without the metadata argument. Pass metadata = parquet_metadata(data) ",
-                 "to write it again, modifyList(parquet_metadata(data), list(...)) to change entries, or ",
-                 "metadata = list() to write none."),call.=FALSE)
+  joined <- joined_source_paths(data)
+  if (is.null(metadata) && length(joined)==0) return(invisible())
+  joined_message <- if (length(joined)>0) {
+    paste0("Joined parquet tables have metadata too (",paste0(joined,collapse=", "),"), see parquet_sources(data) ",
+           "and parquet_sources_attribution(data) for an attribution of all of them.")
+  }
+  if (is.null(metadata)) {
+    message <- paste0("The data was read from parquet files with metadata, which doesn't get written without the ",
+                      "metadata argument. ",joined_message," Pass metadata = list() to write none.")
+  } else {
+    message <- paste0("The data was read from parquet files with metadata (",paste0(names(metadata),collapse=", "),
+                      "), which doesn't get written without the metadata argument. Pass metadata = parquet_metadata(data) ",
+                      "to write it again, modifyList(parquet_metadata(data), list(...)) to change entries, or ",
+                      "metadata = list() to write none.",if (!is.null(joined_message)) paste0(" ",joined_message))
+  }
+  warning(message,call.=FALSE)
 }
 
 #' metadata of parquet files
@@ -272,14 +296,17 @@ parquet_metadata.character <- function(x,from_files=FALSE,...) {
 parquet_metadata.tbl_lazy <- function(x,from_files=FALSE,...) {
   path <- attr(x,"r2parquet_paths")
   if (is.null(path)) stop("The table was not created by parquet_tbl, pass the path of the parquet files instead.")
-  # the manifests of the paths the table was resolved from serve when they cover all of them, a table reading
-  # local copies from the cache reads their footers
-  source <- attr(x,"r2parquet_source")
+  new_parquet_metadata(scan_metadata(dbplyr::remote_con(x),path,attr(x,"r2parquet_source"),from_files))
+}
+
+# the metadata of the files a table from parquet_tbl reads: the manifests of the paths the table was resolved from
+# serve when they cover all of them, a table reading local copies from the cache reads their footers
+scan_metadata <- function(con,path,source,from_files=FALSE){
   if (!isTRUE(from_files) && length(source)>0 && all(is_remote(source))) {
     recorded <- lapply(unique(source),manifest_footers)
-    if (!any(vapply(recorded,is.null,logical(1)))) return(new_parquet_metadata(merge_footers(do.call(c,recorded))))
+    if (!any(vapply(recorded,is.null,logical(1)))) return(merge_footers(do.call(c,recorded)))
   }
-  new_parquet_metadata(duckdb_parquet_metadata(dbplyr::remote_con(x),path))
+  duckdb_parquet_metadata(con,path)
 }
 
 #' @rdname parquet_metadata
@@ -292,6 +319,119 @@ parquet_metadata.data.frame <- function(x,...) {
 #' @export
 parquet_metadata.default <- function(x,...) {
   stop("x has to be a path, a vector of paths, a lazy DuckDB table from parquet_tbl or data collected with collect_parquet.")
+}
+
+#' metadata of all parquet sources of a table
+#'
+#' @description
+#' The metadata of every table from [parquet_tbl()] that a lazy table or collected data was read from, one row
+#' per table: for joins the left-hand table and the joined ones, for example to credit all of them in a caption.
+#' [parquet_metadata()] only has the left-hand table's.
+#'
+#' @details
+#' The tables get found through the query of the lazy table, so tables joined with [dplyr::left_join()] and the
+#' other joins, [dplyr::semi_join()], [dplyr::union_all()] and the like count, also when they were never assigned
+#' to a variable. [collect_parquet()] attaches the result to the collected data as the `parquet_sources`
+#' attribute. A table read from several paths in one [parquet_tbl()] call is one row, with its metadata merged
+#' as [parquet_metadata()] merges it. Tables not created by [parquet_tbl()] in the current session, like data
+#' copied to the connection, have no row.
+#'
+#' @inheritSection upload_parquet Credentials
+#' @param x a lazy DuckDB table, e.g. from [parquet_tbl()] and joins of such tables, or data collected with
+#'   [collect_parquet()].
+#' @param from_files where lazy tables read the metadata of files on R2, S3 and at URLs from, see
+#'   [parquet_metadata()].
+#' @param ... not used.
+#' @return a tibble with one row per source table, left-hand table first: `path`, the path(s) passed to
+#'   [parquet_tbl()], separated by `", "`; a column for each metadata entry that holds a single value in any of
+#'   the sources, like `title`, `attribution` or `licence`, `NA` for sources without it; and `metadata`, the
+#'   whole metadata of each source as returned by [parquet_metadata()].
+#' @examples
+#' \dontrun{
+#' census <- "https://data.mountainmath.ca/census/2021/"
+#' data <- parquet_tbl(paste0(census,"ldb_000b21f_e.parquet")) |>
+#'   dplyr::inner_join(parquet_tbl(paste0(census,"2021_92-151_X.parquet")),by="DBUID") |>
+#'   collect_parquet()
+#' paste(unique(parquet_sources(data)$attribution),collapse=" | ")
+#' }
+#' @export
+parquet_sources <- function(x,...) UseMethod("parquet_sources")
+
+#' @rdname parquet_sources
+#' @export
+parquet_sources.tbl_lazy <- function(x,from_files=FALSE,...) {
+  scans <- table_scans(x)
+  con <- dbplyr::remote_con(x)
+  parquet_sources_table(scans,lapply(scans,function(scan)scan_metadata(con,scan$paths,scan$source,from_files)))
+}
+
+#' @rdname parquet_sources
+#' @export
+parquet_sources.data.frame <- function(x,...) {
+  attr(x,"parquet_sources") %||% parquet_sources_table(list(),list())
+}
+
+#' @rdname parquet_sources
+#' @export
+parquet_sources.default <- function(x,...) {
+  stop("x has to be a lazy DuckDB table or data collected with collect_parquet.")
+}
+
+#' attribution of all parquet sources of a table
+#'
+#' @description
+#' The `attribution` metadata entries of all tables from [parquet_tbl()] that a lazy table or collected data was
+#' read from (see [parquet_sources()]) as one string, e.g. for the caption of a plot of joined data.
+#'
+#' @details
+#' Repeated attributions appear once. Attributions that differ only in their last word get combined: "Statistics
+#' Canada Product ldb_000b21f_e" and "Statistics Canada Product 2021_92-151_X" become "Statistics Canada Product
+#' ldb_000b21f_e, 2021_92-151_X", other attributions get separated by `sep`, in the order of the sources.
+#'
+#' @param x a lazy DuckDB table, e.g. from [parquet_tbl()] and joins of such tables, or data collected with
+#'   [collect_parquet()].
+#' @param sep separator between attributions that don't get combined.
+#' @return a string, or `NULL` if none of the sources has an attribution, which leaves out a caption passed to
+#'   [ggplot2::labs()].
+#' @examples
+#' \dontrun{
+#' census <- "https://data.mountainmath.ca/census/2021/"
+#' data <- parquet_tbl(paste0(census,"ldb_000b21f_e.parquet")) |>
+#'   dplyr::inner_join(parquet_tbl(paste0(census,"2021_92-151_X.parquet")),by="DBUID") |>
+#'   collect_parquet()
+#' parquet_sources_attribution(data)
+#' }
+#' @export
+parquet_sources_attribution <- function(x,sep=" | "){
+  combine_attributions(parquet_sources(x)[["attribution"]],sep)
+}
+
+# attributions as one string, the ones that differ only in their last word combined, NULL without any
+combine_attributions <- function(attribution,sep=" | "){
+  attribution <- unique(trimws(attribution[!is.na(attribution)]))
+  attribution <- attribution[nzchar(attribution)]
+  if (length(attribution)==0) return(NULL)
+  words <- strsplit(attribution,"\\s+")
+  last <- vapply(words,function(w)w[length(w)],"")
+  # single words have nothing to share, their key can't match a prefix
+  prefix <- vapply(words,function(w)if (length(w)>1) paste0(w[-length(w)],collapse=" ") else NA_character_,"")
+  key <- ifelse(is.na(prefix),paste0("\001",attribution),prefix)
+  groups <- split(seq_along(attribution),factor(key,levels=unique(key)))
+  parts <- vapply(groups,function(i)if (length(i)==1) attribution[i] else paste0(prefix[i[1]]," ",paste0(last[i],collapse=", ")),"")
+  paste0(parts,collapse=sep)
+}
+
+# the parquet_sources tibble for parquet_scans entries and their metadata, single valued entries as columns
+parquet_sources_table <- function(scans,metadata){
+  metadata <- lapply(metadata,new_parquet_metadata)
+  single <- function(value)is.atomic(value) && length(value)==1 && is.null(names(value))
+  entries <- unique(unlist(lapply(metadata,function(m)names(m)[vapply(unclass(m),single,logical(1))])))
+  sources <- dplyr::tibble(path=vapply(scans,function(scan)paste0(scan$given,collapse=", "),""))
+  for (entry in setdiff(entries,c("path","metadata"))) {
+    sources[[entry]] <- vapply(metadata,function(m)if (single(m[[entry]])) as.character(m[[entry]]) else NA_character_,"")
+  }
+  sources$metadata <- metadata
+  sources
 }
 
 # the metadata as returned by parquet_metadata, a named list with a class for printing

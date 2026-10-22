@@ -50,7 +50,7 @@ db_table |> parquet_metadata()
 
 A simple query would be to fetch the data for just the City of Vancouver.
 
-```{r vancouver-csd}
+```{r fig-vancouver-csd, fig.cap="Example of using a remote geoparquet file"}
 data_csd <- db_table |>
   filter(CSDUID=="5915022") |>
   collect_parquet()
@@ -58,12 +58,12 @@ data_csd <- db_table |>
 ggplot(data_csd) +
   geom_sf() +
   labs(title="City of Vancouver Dissemination Blocks",
-       caption=parquet_metadata(data_csd)$attribution)
+       caption=parquet_sources_attribution(data_csd))
 ```
 
 Similarly, we can fetch the data for Metro Vancouver. The remote parquet file is over 300 MB in size, but both these queries run in less than a second because under the hood only the ranges for the data that's actually required are identified and read, with only limited unneeded data making the trip from R2 to the R session.
 
-```{r vancouver-cma}
+```{r fig-vancouver-cma, fig.cap="Example of a larger data pull."}
 data_cma <- db_table |>
   filter(CMAUID=="933") |>
   collect_parquet()
@@ -71,7 +71,7 @@ data_cma <- db_table |>
 ggplot(data_cma) +
   geom_sf() +
   labs(title="Metro Vancouver Dissemination Blocks",
-       caption=parquet_metadata(data_cma)$attribution)
+       caption=parquet_sources_attribution(data_cma))
 ```
 
 To build on this we query the geographic attributes hosted at
@@ -80,20 +80,24 @@ To build on this we query the geographic attributes hosted at
 geo_attributes_path <- "https://data.mountainmath.ca/census/2021/2021_92-151_X.parquet"
 ```
 
-and read just the ones for Metro Vancouver.
+and join just the population counts onto the Metro Vancouver dissemination blocks. Joining the lazy tables before collecting runs as one DuckDB query, and `collect_parquet()` records the metadata of every table the result was read from, not just of the left-hand one that `parquet_metadata()` returns.
 
 ```{r}
-geo_attributes <- parquet_tbl(geo_attributes_path) |>
+data_cma <- db_table |>
   filter(CMAUID=="933") |>
-  select(DBUID,Population=DBPOP2021) |>
+  left_join(parquet_tbl(geo_attributes_path) |>
+              select(DBUID,Population=DBPOP2021),
+            by="DBUID") |>
   collect_parquet()
+
+parquet_sources(data_cma) |>
+  transmute(file=basename(path),attribution)
 ```
 
-`collect_parquet()` works for tables without geometry too, and unlike `collect()` it attaches the file metadata, so the attribution of both sources can go into the caption.
+`parquet_sources_attribution()` turns these into one attribution for the caption, combining attributions that only differ in their last word.
 
-```{r vancouver-density}
+```{r fig-vancouver-density, fig.cap="Example of map using data from joined tables."}
 data_cma |>
-  left_join(geo_attributes, by="DBUID") |>
   mutate(density=Population/(LANDAREA*100)) |>
   mutate(density=if_else(is.finite(density),density,0)) |>
   mutate(bands=cut(density,breaks=c(-Inf,0,10,20,50,100,200,500,1000,Inf),
@@ -104,8 +108,7 @@ data_cma |>
   scale_fill_viridis_d(option = "magma") +
   labs(title="Population density in Metro Vancouver",
        fill="Pop/ha",
-       caption=paste0(parquet_metadata(data_cma)$attribution, " | ",
-                      parquet_metadata(geo_attributes)$attribution))
+       caption=parquet_sources_attribution(data_cma))
 ```
 
 
@@ -114,7 +117,7 @@ data_cma |>
 
 We can also use efficient spatial filtering when getting the data, for example querying data within a 10 km radius around central Toronto.
 
-```{r toronto-radius}
+```{r fig-toronto-radius, fig.cap="Example of a spatial query"}
 library(sf)
 
 mask <- st_point(c(-79.3842, 43.6514)) |> 
@@ -131,7 +134,7 @@ data_mask |>
   ggplot() +
   geom_sf() +
   labs(title="Dissemination blocks in central Toronto",
-       caption=parquet_metadata(data_mask)$attribution) 
+       caption=parquet_sources_attribution(data_mask)) 
 ```
 
 `st_filter()` on the lazy table returns every feature that intersects the mask, reading only the row groups whose bounding box intersects it, clipping the returned data with `st_intersection` makes for a prettier plot. Unlike on sf objects, `st_filter()` on lazy tables transforms the mask to the crs of the data automatically, `st_intersection()` needs the explicit transformation.

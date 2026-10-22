@@ -12,6 +12,8 @@ reference:
   - st_filter.tbl_duckdb_connection
   - collect_parquet
   - parquet_metadata
+  - parquet_sources
+  - parquet_sources_attribution
   - list_parquet
   - cache_parquet
   - list_parquet_cache

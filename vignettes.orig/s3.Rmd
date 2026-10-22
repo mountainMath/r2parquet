@@ -138,7 +138,7 @@ bc_cmas <- parquet_tbl(cma_url) |>
 ggplot(bc_cmas) +
   geom_sf(aes(fill = CMATYPE)) +
   labs(title = "Census metropolitan areas and agglomerations in BC",
-       fill = "Type", caption = parquet_metadata(bc_cmas)$attribution)
+       fill = "Type", caption = parquet_sources_attribution(bc_cmas))
 ```
 
 Next to it the private file stays out of reach: requests without credentials get 403 Forbidden for it, while the manifest of the public dataset is served.

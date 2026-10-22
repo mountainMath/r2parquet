@@ -196,7 +196,7 @@ data <- con |>
 ggplot(data) +
   geom_sf() +
   labs(title = "Montréal CMA boundary",
-       caption=parquet_metadata(data)$attribution) 
+       caption=parquet_sources_attribution(data)) 
 ```
 
 <div class="figure">
