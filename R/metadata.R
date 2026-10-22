@@ -152,14 +152,12 @@ manifest_footers <- function(path){
     prefix <- paste0(url$scheme,"://",url$hostname,if (!is.null(url$port)) paste0(":",url$port),"/")
     key <- utils::URLdecode(sub("/+$","",url$path %||% ""))
     encode <- url_path_encode
-    read <- function(directory){
-      # a server that denies requests for missing files, like S3 without listing rights, has no manifest there
-      tryCatch(url_get_manifest(paste0(prefix,encode(directory),if (directory!="") "/",manifest_name)),
-               r2parquet_access_denied=function(e)NULL)
-    }
+    read <- function(directory)url_get_manifest(paste0(prefix,encode(directory),if (directory!="") "/",manifest_name))
   }
   for (directory in c(key,r2_ancestors(key))) {
-    manifest <- read(directory)
+    # a denied request counts as no manifest: S3 denies requests for missing objects without listing rights, and
+    # the footer read that follows fails on its own when access to the data is denied
+    manifest <- tryCatch(read(directory),r2parquet_access_denied=function(e)NULL)
     if (is.null(manifest)) next
     if (!isTRUE(attr(manifest,"has_metadata"))) return(NULL)
     relative <- r2_relative(key,directory)

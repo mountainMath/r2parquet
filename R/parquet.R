@@ -423,9 +423,9 @@ table_source <- function(x){
 #' list parquet files
 #'
 #' @description
-#' Lists the parquet files at paths on R2 or S3, at URLs or at local paths, or the files a lazy table from
-#' [parquet_tbl()] reads, with their size, modification time and etag, and whether the local cache holds a
-#' current copy. Directories get listed recursively, a path that does not exist lists nothing.
+#' Lists the parquet files at paths on R2 or S3, at URLs or at local paths, or at the paths a lazy table from
+#' [parquet_tbl()] was created from (the remote paths for a table reading copies from the cache), with their
+#' size, modification time and etag, and whether the local cache holds a current copy. Directories get listed recursively, a path that does not exist lists nothing.
 #'
 #' @details
 #' Files at URLs, including presigned URLs, get their size and etag from a request for their first byte,

@@ -184,7 +184,9 @@ test_that("remove_parquet removes local files, directories and the paths of lazy
   # also for a table read from a URL
   tbl <- parquet_tbl(file)
   attr(tbl,"r2parquet_source") <- "https://example.com/a.parquet"
-  expect_error(remove_parquet(tbl),"Files at URLs can't be removed.*https://example.com/a.parquet")
+  expect_error(remove_parquet(tbl),"Files at URLs can't be removed.*https://example.com/a.parquet. The copies .* remove_parquet_from_cache")
+  attr(tbl,"r2parquet_paths") <- "https://example.com/a.parquet"
+  expect_error(remove_parquet(tbl),"https://example.com/a.parquet.$")
   expect_true(file.exists(file))
 })
 

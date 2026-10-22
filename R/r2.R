@@ -950,15 +950,21 @@ write_manifest <- function(path,purge_cache=TRUE) {
 #' @return (invisibly) the removed files as `r2://bucket/path`, `s3://bucket/path` or local paths.
 #' @export
 remove_parquet <- function(path,purge_cache=TRUE) {
-  if (inherits(path,"tbl_lazy")) path <- table_source(path)
+  files <- NULL
+  if (inherits(path,"tbl_lazy")) {
+    files <- attr(path,"r2parquet_paths")
+    path <- table_source(path)
+  }
   if (!is.character(path) || length(path)==0) {
     stop("path has to be one or more paths of the form r2://bucket/path or s3://bucket/path, local paths, or a lazy table from parquet_tbl.")
   }
   is_bucket <- is_bucket_path(path)
   at_url <- is_url(path)
   if (any(at_url)) {
+    # a table whose files are local was read from copies in the cache
     stop(paste0("Files at URLs can't be removed, use the r2://bucket/path or s3://bucket/path form instead: ",
-                paste0(path[at_url],collapse=", "),"."))
+                paste0(path[at_url],collapse=", "),".",
+                if (!is.null(files) && !any(is_remote(files))) " The copies the table reads from the cache are removed with remove_parquet_from_cache()."))
   }
   local <- lapply(path[!is_bucket],local_removal)
   resolved <- lapply(path[is_bucket],function(p){
