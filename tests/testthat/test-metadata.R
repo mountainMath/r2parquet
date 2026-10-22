@@ -353,6 +353,28 @@ test_that("parquet_sources lists the metadata of joined tables, also ones not as
   expect_error(parquet_sources(1),"lazy DuckDB table")
 })
 
+test_that("tables keep their sources when the session's record of them is reset, as by reloading the package", {
+  root <- withr::local_tempdir()
+  left <- file.path(root,"it's.parquet")
+  right <- file.path(root,"right")
+  data_to_parquet(data.frame(id=c("a","b"),value=1:2),left,metadata=list(attribution="Left"))
+  data_to_parquet(data.frame(id=c("a","b"),part=c("x","y")),right,partition_by="part",metadata=list(attribution="Right"))
+  tbl <- parquet_tbl(left)
+  joined <- dplyr::inner_join(tbl,parquet_tbl(right),by="id")
+  other <- file.path(root,"other.parquet")
+  data_to_parquet(data.frame(id="c",value=3L),other,metadata=list())
+  both <- parquet_tbl(c(left,other))
+  expected <- parquet_sources(joined)
+  scans <- r2parquet:::parquet_scans
+  rm(list=ls(scans,all.names=TRUE),envir=scans)
+  expect_equal(parquet_sources(joined)$path,c(left,right))
+  expect_equal(parquet_sources_attribution(joined),"Left | Right")
+  expect_equal(parquet_sources(joined)$metadata,expected$metadata)
+  expect_equal(parquet_sources(both)$path,paste(c(left,other),collapse=", "))
+  # other SQL is not a scan
+  expect_equal(r2parquet:::scan_sql_paths("SELECT 'a' AS id"),character())
+})
+
 test_that("attributions that differ in their last word get combined", {
   expect_equal(combine_attributions(c("Statistics Canada Product ldb_000b21f_e","Statistics Canada Product 2021_92-151_X")),
                "Statistics Canada Product ldb_000b21f_e, 2021_92-151_X")

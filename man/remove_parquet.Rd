@@ -2,43 +2,53 @@
 % Please edit documentation in R/r2.R
 \name{remove_parquet}
 \alias{remove_parquet}
-\title{remove files from Cloudflare R2 or S3}
+\title{remove parquet files from Cloudflare R2, S3 or local directories}
 \usage{
 remove_parquet(path, purge_cache = TRUE)
 }
 \arguments{
-\item{path}{file, or directory of (partitioned) parquet files, as \verb{r2://bucket/path} or \verb{s3://bucket/path},
-or a vector of these.}
+\item{path}{what to remove:
+\itemize{
+\item \verb{r2://bucket/path}, \verb{s3://bucket/path} or local path of a file or of a directory of (partitioned)
+parquet files, or a vector of these;
+\item a lazy DuckDB table from \code{\link[=parquet_tbl]{parquet_tbl()}}.
+}}
 
 \item{purge_cache}{\code{TRUE} (default) or \code{FALSE}: purge the removed files from the Cloudflare cache of the
-bucket's custom domains. Ignored for S3.}
+bucket's custom domains. Ignored for S3 and local paths.}
 }
 \value{
-(invisibly) the removed files as \verb{r2://bucket/path} or \verb{s3://bucket/path}.
+(invisibly) the removed files as \verb{r2://bucket/path}, \verb{s3://bucket/path} or local paths.
 }
 \description{
 Removes files, or all parquet files in directories of (partitioned) parquet files together with the
-manifests below them, and updates the manifests of the directories above. Removed files can't be recovered.
+manifests below them, from buckets or local directories, and updates the manifests of the bucket directories
+above. Removed files can't be recovered.
 }
 \details{
 \itemize{
-\item The path of a file removes that file whatever its type, like a JSON index uploaded with
+\item The path of a file in a bucket removes that file whatever its type, like a JSON index uploaded with
 \code{\link[=upload_parquet]{upload_parquet()}}, or a manifest, which takes the directory's manifest away until \code{\link[=write_manifest]{write_manifest()}} or the
-next upload writes it again.
+next upload writes it again. Local files have to be parquet files, \code{\link[=unlink]{unlink()}} removes others.
 \item The path of a directory removes its parquet files and the manifests (\verb{_manifest.json}, see
-\code{\link[=write_manifest]{write_manifest()}}) below it; other files in it are left in place.
+\code{\link[=write_manifest]{write_manifest()}}) below it; other files in it are left in place. Local directories left empty get
+removed as well.
+\item A lazy table from \code{\link[=parquet_tbl]{parquet_tbl()}} removes the paths it was created from, the remote ones also when the
+table was read from the local cache.
 }
 
 All paths get resolved to files first, so a path that does not exist stops the call before anything is
 removed. The files are then removed in one batch per bucket. If an R2 bucket is served via a custom domain,
 the removed files get purged from the Cloudflare cache, with the same requirements as for \code{\link[=upload_parquet]{upload_parquet()}}.
 
-Since a manifest lists all parquet files below its directory, the existing manifests of the directories
-above removed files get updated, so removing a file or a partition from a dataset keeps the dataset's
-manifest current: the removed files are dropped from what the manifests record, without listing their
-directories, and a manifest left without files is removed. The manifests are written conditionally, like
-\code{\link[=upload_parquet]{upload_parquet()}} writes them, and a manifest that could not be updated is reported with a warning after the
-files are gone.
+Since a manifest lists all parquet files below its directory, the existing manifests of the bucket
+directories above removed files get updated, so removing a file or a partition from a dataset keeps the
+dataset's manifest current: the removed files are dropped from what the manifests record, without listing
+their directories, and a manifest left without files is removed. The manifests are written conditionally,
+like \code{\link[=upload_parquet]{upload_parquet()}} writes them, and a manifest that could not be updated is reported with a warning
+after the files are gone. \code{\link[=data_to_parquet]{data_to_parquet()}} writes no manifests for local paths, so there are none to update
+above local files. Copies in the cache directory are removed with \code{\link[=remove_parquet_from_cache]{remove_parquet_from_cache()}} instead, which
+keeps the manifests there in line, and files at URLs can't be removed, only through their bucket path.
 }
 \section{Credentials}{
 

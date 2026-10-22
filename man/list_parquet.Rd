@@ -45,8 +45,8 @@ current copy. Directories get listed recursively, a path that does not exist lis
 }
 \details{
 Files at URLs, including presigned URLs, get their size and etag from a request for their first byte,
-directories at URLs from the manifest next to the files (see \code{\link[=upload_parquet]{upload_parquet()}}). A URL with neither, or one
-that can't be reached, is listed as it is with \code{NA}s.
+directories at URLs from the manifest next to the files (see \code{\link[=upload_parquet]{upload_parquet()}}). A URL with neither is listed
+as it is with \code{NA}s, a server that can't be reached fails with an \code{r2parquet_network_error}.
 }
 \section{Credentials}{
 

@@ -72,6 +72,16 @@ multiplication). Write integers as \code{2021L} to avoid the message, and on a c
 \code{con}, which keeps DuckDB's own translation.
 }
 
+\section{Errors}{
+Paths without parquet files and denied requests fail with an error naming the path, of class
+\code{r2parquet_not_found} or \code{r2parquet_access_denied} (both also \code{r2parquet_error}) for use with
+\code{\link[=tryCatch]{tryCatch()}}. Denied requests say what access depends on: the credentials for buckets, the expiry of
+presigned URLs, public access for other URLs. Servers that can't be reached, e.g. offline, fail with an
+\code{r2parquet_network_error}, as does installing a DuckDB extension the first time it is needed. The
+files get read when the query is executed, \code{\link[=collect_parquet]{collect_parquet()}} raises the same errors then, e.g. when the
+connection dropped after the table was created.
+}
+
 \section{Cache}{
 Remote files that get queried regularly can be kept in a local cache directory via \code{\link[=cache_parquet]{cache_parquet()}}, and
 the table then reads the local copies, see the \code{cache} argument. The default costs nothing for paths

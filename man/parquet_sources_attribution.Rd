@@ -26,11 +26,17 @@ Canada Product ldb_000b21f_e" and "Statistics Canada Product 2021_92-151_X" beco
 ldb_000b21f_e, 2021_92-151_X", other attributions get separated by \code{sep}, in the order of the sources.
 }
 \examples{
-\dontrun{
-census <- "https://data.mountainmath.ca/census/2021/"
-data <- parquet_tbl(paste0(census,"ldb_000b21f_e.parquet")) |>
-  dplyr::inner_join(parquet_tbl(paste0(census,"2021_92-151_X.parquet")),by="DBUID") |>
-  collect_parquet()
-parquet_sources_attribution(data)
+\donttest{
+if (requireNamespace("curl", quietly = TRUE) && curl::has_internet()) {
+  census <- "https://data.mountainmath.ca/census/2021/"
+  # the dissemination blocks of one dissemination area, with their population
+  blocks <- parquet_tbl(paste0(census,"ldb_000b21f_e.parquet")) |>
+    dplyr::filter(DAUID == "59150307") |>
+    dplyr::select(DBUID,geometry)
+  population <- parquet_tbl(paste0(census,"2021_92-151_X.parquet")) |>
+    dplyr::select(DBUID,DBPOP2021)
+  data <- collect_parquet(dplyr::inner_join(blocks,population,by="DBUID"))
+  parquet_sources_attribution(data)
+}
 }
 }

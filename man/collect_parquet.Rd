@@ -24,6 +24,9 @@ with their crs. The active geometry column is the one named \code{geometry}, as 
 else the first GEOMETRY column, use \code{\link[sf:st_set_geometry]{sf::st_set_geometry()}} to switch to another one. Missing (\code{NULL})
 geometries, e.g. from a left join, become empty geometries, since sf has no missing geometries.
 
+Reading the files fails with the errors described in the Errors section of \code{\link[=parquet_tbl]{parquet_tbl()}}, e.g. an
+\code{r2parquet_network_error} when the server can't be reached.
+
 For tables from \code{\link[=parquet_tbl]{parquet_tbl()}} the metadata of the parquet files (see \code{\link[=parquet_metadata]{parquet_metadata()}}) gets attached to
 the result: the whole list as the \code{metadata} attribute, and the \code{label} entries of \code{columns} as \code{label}
 attributes of the columns, as the haven and labelled packages use them. The files are looked up through the

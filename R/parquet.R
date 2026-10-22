@@ -135,7 +135,12 @@ duckdb_bucket_secrets <- function(con,path){
 # install and load a DuckDB extension, the R package turns autoinstall off, so extensions get installed
 # explicitly, and spatial functions do not autoload
 load_extension <- function(con,name){
-  DBI::dbExecute(con,paste0("INSTALL ",name))
+  # INSTALL downloads an extension the first time only, which fails without a connection
+  tryCatch(DBI::dbExecute(con,paste0("INSTALL ",name)),error=function(e){
+    url <- regmatches(conditionMessage(e),regexec("Failed to download extension \"[^\"]+\" at URL \"([^\"]+)\"",conditionMessage(e)))[[1]]
+    if (length(url)!=2 || !grepl("establish connection|resolve|[Tt]imeout|connect to server",conditionMessage(e))) stop(e)
+    stop(network_error(url[2],paste0("The DuckDB extension ",name," gets downloaded the first time it is needed.")))
+  })
   DBI::dbExecute(con,paste0("LOAD ",name))
 }
 
@@ -184,6 +189,43 @@ duckdb_parquet_paths <- function(con,path){
   as.character(unlist(lapply(seq_along(path),function(i)if (is_url_dir[i]) url_directory_files(path[i]) else path[i])))
 }
 
+# the error for a failed DuckDB read of paths: missing paths and denied access as r2parquet_error conditions that
+# name the path and explain the failure, unreachable servers as r2parquet_network_error, other errors unchanged
+read_error <- function(e,path,call=NULL){
+  messages <- character(0)
+  for (cause in list(e,e$parent,e$parent$parent)) if (!is.null(cause)) messages <- c(messages,conditionMessage(cause))
+  message <- paste0(messages,collapse="\n")
+  status <- as.numeric(regmatches(message,regexpr("(?<=\\(HTTP )[0-9]{3}",message,perl=TRUE)))
+  not_found <- grepl("No files found that match the pattern",message,fixed=TRUE) || identical(status,404)
+  # connection failures, DuckDB names the request it could not send
+  connection <- regmatches(message,regexec("IO Error: (.+?) error for HTTP [A-Z]+ to '([^']+)'",message))[[1]]
+  if (length(connection)==3) return(network_error(connection[3],paste0(connection[2],"."),call))
+  if (!not_found && !(length(status)==1 && status %in% c(401,403))) return(e)
+  # the path the failed read was for, the longest one the file or pattern in the message starts with
+  target <- regmatches(message,regexpr("(?<=pattern \")[^\"]+|(?<=error (on|reading) ')[^']+",message,perl=TRUE))
+  base <- sub("/+$","",sub("[?#].*$","",path))
+  matches <- which(startsWith(if (length(target)==1) sub("[?#].*$","",target) else "",base))
+  if (length(matches)==0 && length(path)!=1) return(e)
+  p <- if (length(matches)==0) path else path[matches[which.max(nchar(base[matches]))]]
+  # the error code and explanation S3 compatible services send along, like SignatureDoesNotMatch: ...
+  server <- regmatches(message,regexpr("(?m)^[A-Z][A-Za-z]+: [^\n]+",message,perl=TRUE))
+  is_local <- !grepl("^[a-z0-9]+://",p)
+  text <- if (!not_found) {
+    paste0("Reading ",p," failed with status ",status,".",access_hint(status,p),if (length(server)==1) paste0("\n",server))
+  } else if (is_local && dir.exists(p)) {
+    paste0("No parquet files in the directory ",p,".")
+  } else if (is_local) {
+    paste0("No file or directory at ",p,if (!grepl("^(/|~|[A-Za-z]:)",p)) paste0(" (relative to the working directory ",getwd(),")"),".")
+  } else if (grepl("NoSuchBucket",message,fixed=TRUE)) {
+    paste0("The ",bucket_label(r2_split_path(p)$bucket)," does not exist.")
+  } else if (is_bucket_path(p)) {
+    paste0("No parquet file or directory of parquet files at ",p,".")
+  } else {
+    paste0("No file at ",p,if (!endsWith(sub("[?#].*$","",p),"/")) paste0(" and no manifest of a directory at ",sub("[?#].*$","",p),"/",manifest_name),".")
+  }
+  r2parquet_error(if (not_found) "not_found" else "access_denied",text,call)
+}
+
 #' lazy table to query parquet files at URLs, on R2 or S3, or at local paths
 #'
 #' @description
@@ -217,6 +259,15 @@ duckdb_parquet_paths <- function(con,path){
 #' multiplication). Write integers as `2021L` to avoid the message, and on a connection of your own passed as
 #' `con`, which keeps DuckDB's own translation.
 #'
+#' # Errors
+#' Paths without parquet files and denied requests fail with an error naming the path, of class
+#' `r2parquet_not_found` or `r2parquet_access_denied` (both also `r2parquet_error`) for use with
+#' [tryCatch()]. Denied requests say what access depends on: the credentials for buckets, the expiry of
+#' presigned URLs, public access for other URLs. Servers that can't be reached, e.g. offline, fail with an
+#' `r2parquet_network_error`, as does installing a DuckDB extension the first time it is needed. The
+#' files get read when the query is executed, [collect_parquet()] raises the same errors then, e.g. when the
+#' connection dropped after the table was created.
+#'
 #' # Cache
 #' Remote files that get queried regularly can be kept in a local cache directory via [cache_parquet()], and
 #' the table then reads the local copies, see the `cache` argument. The default costs nothing for paths
@@ -249,6 +300,7 @@ duckdb_parquet_paths <- function(con,path){
 #' @return a lazy `dplyr` table on DuckDB.
 #' @export
 parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL) {
+  call <- sys.call()
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
   given <- path
   if (is.null(con)) {
@@ -272,10 +324,10 @@ parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL) {
     # the manifests get tried once reading fails
     is_file_url <- grepl("^https?://",path) & !grepl("/$",sub("[?#].*$","",path))
     is_directory <- is_file_url & vapply(path,function(p)is_file_url[match(p,path)] && !is.null(url_directory_files(p,missing_ok=TRUE)),logical(1))
-    if (!any(is_directory)) stop(tbl)
+    if (!any(is_directory)) stop(read_error(tbl,path,call))
     path[is_directory] <- paste0(sub("[?#].*$","",path[is_directory]),"/")
     files <- duckdb_parquet_paths(con,path)
-    tbl <- duckdb_parquet_tbl(con,files,hive_partitioning=hive_partitioning)
+    tbl <- tryCatch(duckdb_parquet_tbl(con,files,hive_partitioning=hive_partitioning),error=function(e)stop(read_error(e,path,call)))
   }
   if (length(duckdb_geometry_columns(tbl))>0) load_extension(con,"spatial")
   # for parquet_metadata, list_parquet and collect_parquet, dbplyr keeps attributes through its verbs: the
@@ -291,14 +343,33 @@ parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL) {
 # were resolved from (local copies for cached paths) and the paths as given
 parquet_scans <- new.env(parent=emptyenv())
 
+# the files a scan written by duckdb_parquet_tbl reads, from its SQL, nothing for other SQL
+scan_sql_paths <- function(sql){
+  pattern <- "^SELECT \\* FROM read_parquet\\((.*), hive_partitioning = (true|false)\\)$"
+  if (!grepl(pattern,sql)) return(character())
+  urls <- sub(pattern,"\\1",sql)
+  quoted <- regmatches(urls,gregexpr("'([^']|'')*'",urls))[[1]]
+  gsub("''","'",substr(quoted,2,nchar(quoted)-1),fixed=TRUE)
+}
+
 # the parquet_scans entries of the tables a lazy table reads, left-hand table first and each once: dbplyr nests
-# the lazy queries of joined, semi joined and combined tables, with the scans as lazy_base_remote_query leaves
+# the lazy queries of joined, semi joined and combined tables, with the scans as lazy_base_remote_query leaves;
+# tables created before parquet_scans was reset, e.g. by reloading the package, get recovered from the SQL of
+# their scan, with the paths the left-hand table was resolved from where it is one of them
 table_scans <- function(x){
   found <- list()
   walk <- function(query){
     if (inherits(query,"lazy_base_remote_query")) {
       key <- as.character(query$x)
-      if (length(key)==1 && nzchar(key) && exists(key,envir=parquet_scans,inherits=FALSE)) found[[key]] <<- get(key,envir=parquet_scans)
+      if (length(key)!=1 || !nzchar(key)) return()
+      if (exists(key,envir=parquet_scans,inherits=FALSE)) {
+        found[[key]] <<- get(key,envir=parquet_scans)
+      } else if (length(paths <- scan_sql_paths(key))>0) {
+        source <- if (identical(paths,attr(x,"r2parquet_paths"))) attr(x,"r2parquet_source")
+        # local and bucket directories are read as globs for the parquet files in them
+        source <- source %||% sub("/\\*\\*/\\*\\.parquet$","",paths)
+        found[[key]] <<- list(paths=paths,source=source,given=source)
+      }
     } else if (is.list(query)) {
       for (element in query) walk(element)
     }
@@ -322,9 +393,11 @@ parquet_files <- function(path,size=NA_real_,modified=NA_real_,etag=NA_character
 }
 
 # the file at a URL with size and etag from its headers, or the files the manifest of a directory at the URL
-# lists, just the URL if there is neither or it can't be reached
+# lists, just the URL if there is neither, failing only if the server can't be reached
 url_parquet_files <- function(url){
-  source <- if (grepl("^https?://",url)) tryCatch(url_cache_source(list(url=url)),error=function(e)NULL)
+  source <- if (grepl("^https?://",url)) {
+    tryCatch(url_cache_source(list(url=url)),error=function(e)if (inherits(e,"r2parquet_network_error")) stop(e))
+  }
   if (is.null(source)) return(parquet_files(url))
   parquet_files(source$files$key,source$files$size,source$files$modified,source$files$etag)
 }
@@ -336,6 +409,14 @@ local_parquet_files <- function(path){
   parquet_files(files,info$size,info$mtime)
 }
 
+# the paths a lazy table from parquet_tbl was created from, for list_parquet and remove_parquet
+table_source <- function(x){
+  path <- attr(x,"r2parquet_paths")
+  if (is.null(path)) stop("The table was not created by parquet_tbl, pass the path of the parquet files instead.")
+  # the paths parquet_tbl resolved to the files, local and R2 directories as globs for all parquet files in them
+  attr(x,"r2parquet_source") %||% sub("/\\*\\*/\\*\\.parquet$","",path)
+}
+
 #' list parquet files
 #'
 #' @description
@@ -345,8 +426,8 @@ local_parquet_files <- function(path){
 #'
 #' @details
 #' Files at URLs, including presigned URLs, get their size and etag from a request for their first byte,
-#' directories at URLs from the manifest next to the files (see [upload_parquet()]). A URL with neither, or one
-#' that can't be reached, is listed as it is with `NA`s.
+#' directories at URLs from the manifest next to the files (see [upload_parquet()]). A URL with neither is listed
+#' as it is with `NA`s, a server that can't be reached fails with an `r2parquet_network_error`.
 #'
 #' @inheritSection upload_parquet Credentials
 #' @param x what to list:
@@ -383,10 +464,7 @@ list_parquet.character <- function(x) {
 #' @rdname list_parquet
 #' @export
 list_parquet.tbl_lazy <- function(x) {
-  path <- attr(x,"r2parquet_paths")
-  if (is.null(path)) stop("The table was not created by parquet_tbl, pass the path of the parquet files instead.")
-  # the paths parquet_tbl resolved to the files, local and R2 directories as globs for all parquet files in them
-  list_parquet(attr(x,"r2parquet_source") %||% sub("/\\*\\*/\\*\\.parquet$","",path))
+  list_parquet(table_source(x))
 }
 
 #' @rdname list_parquet

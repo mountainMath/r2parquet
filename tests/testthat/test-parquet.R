@@ -116,8 +116,8 @@ test_that("directories at URLs get read through their manifest", {
   expect_equal(dplyr::pull(dplyr::count(parquet_tbl(paste0(base,"/data.parquet")))),3)
   expect_equal(dplyr::pull(dplyr::count(parquet_tbl(c(paste0(base,"/data"),paste0(base,"/data/year=2022/data_0.parquet"))))),4)
   # without a manifest the error of the read stands, or says what is missing for a directory
-  expect_error(parquet_tbl(paste0(base,"/missing.parquet")),"404")
-  expect_error(parquet_tbl(paste0(base,"/missing/")),"no manifest")
+  expect_error(parquet_tbl(paste0(base,"/missing.parquet")),"No file at .*missing.parquet and no manifest",class="r2parquet_not_found")
+  expect_error(parquet_tbl(paste0(base,"/missing/")),"no manifest",class="r2parquet_not_found")
 })
 
 test_that("whole numbers in comparisons are rendered as integers", {
@@ -159,4 +159,75 @@ test_that("whole numbers in comparisons are rendered as integers", {
   # a lazy table still goes into data_to_parquet
   expect_silent(data_to_parquet(dplyr::filter(tbl,i>2L),file.path(dir,"subset.parquet")))
   expect_equal(nrow(dplyr::collect(parquet_tbl(file.path(dir,"subset.parquet")))),3L)
+})
+
+test_that("missing local paths get explained", {
+  root <- withr::local_tempdir()
+  expect_error(parquet_tbl(file.path(root,"census.parquet")),"No file or directory at .*census.parquet\\.$",class="r2parquet_not_found")
+  withr::local_dir(root)
+  expect_error(parquet_tbl("census.parquet"),"relative to the working directory",class="r2parquet_not_found")
+  dir.create("empty")
+  expect_error(parquet_tbl("empty"),"No parquet files in the directory empty",class="r2parquet_not_found")
+  # with several paths the one that is missing gets named
+  data_to_parquet(data.frame(x=1:2),"data.parquet",metadata=list())
+  expect_error(parquet_tbl(c("data.parquet","census.parquet")),"No file or directory at census.parquet",class="r2parquet_not_found")
+})
+
+test_that("failed remote reads get explained", {
+  denied <- function(target)simpleError(paste0("HTTP Error: HTTP GET error reading '",target,"' in region 'auto' (HTTP 403 Forbidden)\n\n",
+                                               "SignatureDoesNotMatch: The request signature we calculated does not match."))
+  e <- r2parquet:::read_error(denied("r2://bucket/data"),c("r2://bucket/data","r2://bucket/other"))
+  expect_s3_class(e,"r2parquet_access_denied")
+  expect_match(conditionMessage(e),"Reading r2://bucket/data failed with status 403. Access was denied: check that R2_ACCESS_KEY_ID")
+  expect_match(conditionMessage(e),"SignatureDoesNotMatch",fixed=TRUE)
+  e <- r2parquet:::read_error(simpleError("HTTP Error: HTTP GET error reading 's3://bucket/a.parquet' (HTTP 404 Not Found)\n\nNoSuchBucket: The specified bucket does not exist."),"s3://bucket/a.parquet")
+  expect_s3_class(e,"r2parquet_not_found")
+  expect_equal(conditionMessage(e),"The S3 bucket bucket does not exist.")
+  e <- r2parquet:::read_error(simpleError('IO Error: No files found that match the pattern "r2://bucket/data/**/*.parquet"'),"r2://bucket/data")
+  expect_equal(conditionMessage(e),"No parquet file or directory of parquet files at r2://bucket/data.")
+  # other errors pass unchanged
+  e <- simpleError("Invalid Input Error: not a parquet file")
+  expect_identical(r2parquet:::read_error(e,"r2://bucket/data"),e)
+})
+
+test_that("denied requests say what access depends on", {
+  expect_equal(r2parquet:::access_hint(404,"r2://bucket/a"),"")
+  expect_match(r2parquet:::access_hint(403,"r2://bucket/a"),"R2_SECRET_ACCESS_KEY .* bucket bucket\\.$")
+  expect_match(r2parquet:::access_hint(403,"s3://bucket/a"),"AWS_SECRET_ACCESS_KEY")
+  expect_match(r2parquet:::access_hint(401,"https://example.com/a.parquet"),"not public")
+  presigned <- function(date)paste0("https://example.com/a.parquet?X-Amz-Date=",date,"&X-Amz-Expires=3600&X-Amz-Signature=abc")
+  expect_match(r2parquet:::access_hint(403,presigned("20200101T000000Z")),"expired at 2020-01-01 01:00:00 UTC")
+  expect_match(r2parquet:::access_hint(403,presigned(format(Sys.time(),"%Y%m%dT%H%M%SZ",tz="UTC"))),"is not valid")
+  withr::local_envvar(R2_ACCOUNT_ID="account",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret")
+  local_mocked_bindings(r2_request=function(...)fake_response(403))
+  expect_error(r2parquet:::r2_object_exists("bucket","a.parquet"),"failed with status 403. Access was denied",class="r2parquet_access_denied")
+  local_mocked_bindings(http_probe=function(url)fake_response(403))
+  expect_error(r2parquet:::url_cache_source(list(url="https://example.com/a.parquet")),"not public",class="r2parquet_access_denied")
+})
+
+test_that("servers that can't be reached fail with a network error", {
+  # curl errors of requests
+  unreachable <- function(...)stop(structure(class=c("curl_error_couldnt_resolve_host","curl_error","error","condition"),
+                                             list(message="Could not resolve hostname [example.com]:\nCould not resolve host: example.com",call=NULL)))
+  local_mocked_bindings(GET=unreachable,HEAD=unreachable,.package="httr")
+  expect_error(r2parquet:::url_cache_source(list(url="https://example.com/a.parquet")),
+               "^Could not reach example.com, check the internet connection. Could not resolve host: example.com$",
+               class="r2parquet_network_error")
+  expect_error(r2parquet:::url_cache_source(list(url="https://example.com/a/")),class="r2parquet_network_error")
+  # list_parquet lists a URL it can't look up as it is, but not one it can't reach
+  expect_error(list_parquet("https://example.com/a/"),class="r2parquet_network_error")
+  # connection failures of DuckDB reads
+  e <- r2parquet:::read_error(simpleError("IO Error: Could not resolve hostname error for HTTP HEAD to 'https://example.com:8080/a.parquet'"),
+                              c("https://example.com:8080/a.parquet","b.parquet"))
+  expect_s3_class(e,"r2parquet_network_error")
+  expect_equal(conditionMessage(e),"Could not reach example.com:8080, check the internet connection. Could not resolve hostname.")
+})
+
+test_that("extensions that can't be downloaded fail with a network error", {
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con,shutdown=TRUE))
+  DBI::dbExecute(con,paste0("SET extension_directory = ",DBI::dbQuoteString(con,withr::local_tempdir())))
+  DBI::dbExecute(con,"SET custom_extension_repository = 'http://nonexistent.invalid'")
+  expect_error(r2parquet:::load_extension(con,"httpfs"),"Could not reach nonexistent.invalid.*extension httpfs gets downloaded",
+               class="r2parquet_network_error")
 })

@@ -34,6 +34,49 @@ bucket_label <- function(r2_bucket){
   if (startsWith(r2_bucket,"s3://")) paste0("S3 bucket ",sub("^s3://","",r2_bucket)) else paste0("R2 bucket ",r2_bucket)
 }
 
+# what a denied request (401 or 403) for path depends on, the credentials for buckets, the signature and expiry
+# for presigned URLs, public access for other URLs; "" for other statuses
+access_hint <- function(status,path){
+  if (!(status %in% c(401,403))) return("")
+  if (startsWith(path,"r2://")) {
+    return(paste0(" Access was denied: check that R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY hold a valid R2 API token ",
+                  "for the account in R2_ACCOUNT_ID with access to the bucket ",sub("^r2://([^/]*).*$","\\1",path),"."))
+  }
+  if (startsWith(path,"s3://")) {
+    return(paste0(" Access was denied: check AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN for ",
+                  "temporary credentials), and that the IAM permissions or the bucket policy allow the request. S3 ",
+                  "also denies requests for missing objects when the credentials can't list the bucket."))
+  }
+  if (grepl("[?&]X-Amz-Signature=",path)) {
+    signed <- as.POSIXct(sub("^.*[?&]X-Amz-Date=([0-9TZ]+).*$","\\1",path),format="%Y%m%dT%H%M%SZ",tz="UTC")
+    expires <- signed+as.numeric(sub("^.*[?&]X-Amz-Expires=([0-9]+).*$","\\1",path))
+    if (!is.na(expires) && expires<Sys.time()) {
+      return(paste0(" Access was denied: the presigned URL expired at ",format(expires,"%Y-%m-%d %H:%M:%S UTC"),
+                    ", create a new one with presigned_url()."))
+    }
+    return(" Access was denied: the presigned URL is not valid, create a new one with presigned_url().")
+  }
+  paste0(" Access was denied: the file is not public. Files in private buckets can be read as r2://bucket/path ",
+         "or s3://bucket/path with credentials.")
+}
+
+# an error of class r2parquet_not_found or r2parquet_access_denied, so callers can tell these failures apart
+r2parquet_error <- function(type,message,call=NULL){
+  structure(class=c(paste0("r2parquet_",type),"r2parquet_error","error","condition"),list(message=message,call=call))
+}
+
+# an r2parquet_network_error for a server that could not be reached, with the reason the connection failed
+network_error <- function(url,reason,call=NULL){
+  r2parquet_error("network_error",paste0("Could not reach ",sub("^[a-z0-9]+://([^/?#]+).*$","\\1",url),
+                                         ", check the internet connection. ",reason),call)
+}
+
+# run a request to url, with connection failures (unresolvable host, refused connection, timeout) as
+# r2parquet_network_error conditions
+with_network <- function(url,expr){
+  tryCatch(expr,curl_error=function(e)stop(network_error(url,sub("^.*\n","",conditionMessage(e)))))
+}
+
 # the first of the environment variables that is set, "" if none is
 first_env <- function(env_vars){
   values <- Sys.getenv(env_vars)
@@ -169,8 +212,8 @@ r2_request <- function(verb,r2_bucket,r2_path="",query=list(),headers=list(),bod
   query_string <- sigv4_query_string(query)
   request_config <- do.call(httr::add_headers,headers)
   if (!is.null(config)) request_config <- c(request_config,config)
-  httr::VERB(verb,paste0(store$endpoint,path,if (query_string!="") "?",query_string),request_config,
-             body=if (length(body)>0) body)
+  with_network(store$endpoint,httr::VERB(verb,paste0(store$endpoint,path,if (query_string!="") "?",query_string),request_config,
+                                         body=if (length(body)>0) body))
 }
 
 # escape text for use in xml
@@ -219,7 +262,7 @@ r2_delete_objects <- function(r2_bucket,r2_paths){
                            headers=list("content-md5"=base64_md5(body),"content-type"="application/xml"))
     content <- httr::content(response,"text",encoding="UTF-8")
     if (httr::status_code(response)>=400) {
-      stop(paste0("Removing files from ",bucket_label(r2_bucket)," failed with status ",httr::status_code(response),". ",content))
+      stop(paste0("Removing files from ",bucket_label(r2_bucket)," failed with status ",httr::status_code(response),".",access_hint(httr::status_code(response),bucket_url(r2_bucket)),"\n",content))
     }
     # with quiet mode the response only lists the objects that could not be deleted
     errors <- xml_elements(content,"Error")
@@ -240,7 +283,8 @@ base64_md5 <- function(body){
 r2_object_exists <- function(r2_bucket,r2_path){
   status <- httr::status_code(r2_request("HEAD",r2_bucket,r2_path))
   if (status>=400 && status!=404) {
-    stop(paste0("Checking ",r2_path," in ",bucket_label(r2_bucket)," failed with status ",status,"."))
+    message <- paste0("Checking ",r2_path," in ",bucket_label(r2_bucket)," failed with status ",status,".",access_hint(status,bucket_url(r2_bucket,r2_path)))
+    stop(if (status %in% c(401,403)) r2parquet_error("access_denied",message) else message)
   }
   status<400
 }
@@ -248,9 +292,10 @@ r2_object_exists <- function(r2_bucket,r2_path){
 # call the Cloudflare API
 cloudflare_api <- function(verb,path,body=NULL,query=NULL){
   credentials <- r2_credentials("R2_API_TOKEN")
-  httr::VERB(verb,paste0("https://api.cloudflare.com/client/v4",path),
-             httr::add_headers(Authorization=paste0("Bearer ",credentials[["R2_API_TOKEN"]])),
-             body=body,query=query,encode="json")
+  with_network("https://api.cloudflare.com",
+               httr::VERB(verb,paste0("https://api.cloudflare.com/client/v4",path),
+                          httr::add_headers(Authorization=paste0("Bearer ",credentials[["R2_API_TOKEN"]])),
+                          body=body,query=query,encode="json"))
 }
 
 # call the Cloudflare API for R2 buckets, needed for bucket settings not available via the S3 compatible API
@@ -357,7 +402,7 @@ r2_put_body <- function(r2_bucket,r2_path,body,content_type,what="the file",head
   response <- r2_request("PUT",r2_bucket,r2_path,body=body,headers=c(list("content-type"=content_type),headers))
   status <- httr::status_code(response)
   if (status>=400 && !(status==412 && length(headers)>0)) {
-    stop(paste0("Uploading ",what," to ",bucket_url(r2_bucket,r2_path)," failed with status ",status,". ",
+    stop(paste0("Uploading ",what," to ",bucket_url(r2_bucket,r2_path)," failed with status ",status,".",access_hint(status,bucket_url(r2_bucket,r2_path)),"\n",
                 httr::content(response,"text",encoding="UTF-8")))
   }
   invisible(response)
@@ -389,7 +434,7 @@ r2_get_manifest <- function(r2_bucket,key){
   response <- r2_request("GET",r2_bucket,key)
   status <- httr::status_code(response)
   if (status==404) return(NULL)
-  if (status>=400) stop(paste0("Reading ",bucket_url(r2_bucket,key)," failed with status ",status,"."))
+  if (status>=400) stop(paste0("Reading ",bucket_url(r2_bucket,key)," failed with status ",status,".",access_hint(status,bucket_url(r2_bucket,key))))
   manifest <- tryCatch(parse_manifest(httr::content(response,"text",encoding="UTF-8")),error=function(e){
     warning(paste0(bucket_url(r2_bucket,key)," is not a valid manifest and gets rewritten."),call.=FALSE)
     structure(manifest_files(),directory=TRUE,has_metadata=FALSE)
@@ -584,7 +629,7 @@ r2_list_objects <- function(r2_bucket,prefix=""){
     response <- r2_request("GET",r2_bucket,query=query)
     content <- httr::content(response,"text",encoding="UTF-8")
     if (httr::status_code(response)>=400) {
-      stop(paste0("Listing ",bucket_label(r2_bucket)," failed with status ",httr::status_code(response),". ",content))
+      stop(paste0("Listing ",bucket_label(r2_bucket)," failed with status ",httr::status_code(response),".",access_hint(httr::status_code(response),bucket_url(r2_bucket)),"\n",content))
     }
     objects <- xml_elements(content,"Contents")
     pages[[length(pages)+1]] <- data.frame(key=xml_field(objects,"Key"),
@@ -828,40 +873,58 @@ write_manifest <- function(path,purge_cache=TRUE) {
   invisible(manifests)
 }
 
-#' remove files from Cloudflare R2 or S3
+#' remove parquet files from Cloudflare R2, S3 or local directories
 #'
 #' @description
 #' Removes files, or all parquet files in directories of (partitioned) parquet files together with the
-#' manifests below them, and updates the manifests of the directories above. Removed files can't be recovered.
+#' manifests below them, from buckets or local directories, and updates the manifests of the bucket directories
+#' above. Removed files can't be recovered.
 #'
 #' @details
-#' * The path of a file removes that file whatever its type, like a JSON index uploaded with
+#' * The path of a file in a bucket removes that file whatever its type, like a JSON index uploaded with
 #'   [upload_parquet()], or a manifest, which takes the directory's manifest away until [write_manifest()] or the
-#'   next upload writes it again.
+#'   next upload writes it again. Local files have to be parquet files, [unlink()] removes others.
 #' * The path of a directory removes its parquet files and the manifests (`_manifest.json`, see
-#'   [write_manifest()]) below it; other files in it are left in place.
+#'   [write_manifest()]) below it; other files in it are left in place. Local directories left empty get
+#'   removed as well.
+#' * A lazy table from [parquet_tbl()] removes the paths it was created from, the remote ones also when the
+#'   table was read from the local cache.
 #'
 #' All paths get resolved to files first, so a path that does not exist stops the call before anything is
 #' removed. The files are then removed in one batch per bucket. If an R2 bucket is served via a custom domain,
 #' the removed files get purged from the Cloudflare cache, with the same requirements as for [upload_parquet()].
 #'
-#' Since a manifest lists all parquet files below its directory, the existing manifests of the directories
-#' above removed files get updated, so removing a file or a partition from a dataset keeps the dataset's
-#' manifest current: the removed files are dropped from what the manifests record, without listing their
-#' directories, and a manifest left without files is removed. The manifests are written conditionally, like
-#' [upload_parquet()] writes them, and a manifest that could not be updated is reported with a warning after the
-#' files are gone.
+#' Since a manifest lists all parquet files below its directory, the existing manifests of the bucket
+#' directories above removed files get updated, so removing a file or a partition from a dataset keeps the
+#' dataset's manifest current: the removed files are dropped from what the manifests record, without listing
+#' their directories, and a manifest left without files is removed. The manifests are written conditionally,
+#' like [upload_parquet()] writes them, and a manifest that could not be updated is reported with a warning
+#' after the files are gone. [data_to_parquet()] writes no manifests for local paths, so there are none to update
+#' above local files. Copies in the cache directory are removed with [remove_parquet_from_cache()] instead, which
+#' keeps the manifests there in line, and files at URLs can't be removed, only through their bucket path.
 #'
 #' @inheritSection upload_parquet Credentials
-#' @param path file, or directory of (partitioned) parquet files, as `r2://bucket/path` or `s3://bucket/path`,
-#'   or a vector of these.
+#' @param path what to remove:
+#'   * `r2://bucket/path`, `s3://bucket/path` or local path of a file or of a directory of (partitioned)
+#'     parquet files, or a vector of these;
+#'   * a lazy DuckDB table from [parquet_tbl()].
 #' @param purge_cache `TRUE` (default) or `FALSE`: purge the removed files from the Cloudflare cache of the
-#'   bucket's custom domains. Ignored for S3.
-#' @return (invisibly) the removed files as `r2://bucket/path` or `s3://bucket/path`.
+#'   bucket's custom domains. Ignored for S3 and local paths.
+#' @return (invisibly) the removed files as `r2://bucket/path`, `s3://bucket/path` or local paths.
 #' @export
 remove_parquet <- function(path,purge_cache=TRUE) {
-  if (!is.character(path) || length(path)==0) stop("path has to be one or more paths of the form r2://bucket/path or s3://bucket/path.")
-  resolved <- lapply(path,function(p){
+  if (inherits(path,"tbl_lazy")) path <- table_source(path)
+  if (!is.character(path) || length(path)==0) {
+    stop("path has to be one or more paths of the form r2://bucket/path or s3://bucket/path, local paths, or a lazy table from parquet_tbl.")
+  }
+  is_bucket <- is_bucket_path(path)
+  is_url <- !is_bucket & grepl("^[a-z0-9]+://",path)
+  if (any(is_url)) {
+    stop(paste0("Files at URLs can't be removed, use the r2://bucket/path or s3://bucket/path form instead: ",
+                paste0(path[is_url],collapse=", "),"."))
+  }
+  local <- lapply(path[!is_bucket],local_removal)
+  resolved <- lapply(path[is_bucket],function(p){
     p <- r2_split_path(p)
     r2_bucket <- p$bucket
     r2_path <- p$path
@@ -898,7 +961,49 @@ remove_parquet <- function(path,purge_cache=TRUE) {
     message(paste0("Removed ",length(r2_paths)," file",if (length(r2_paths)>1) "s" else ""," from ",bucket_label(r2_bucket),"."))
     removed <- c(removed,bucket_url(r2_bucket,r2_paths))
   }
+  if (length(local)>0) {
+    files <- unique(unlist(lapply(local,`[[`,"files")))
+    manifests <- unique(unlist(lapply(local,`[[`,"manifests")))
+    unlink(c(files,manifests))
+    # directories left empty, the deepest first
+    directories <- unique(unlist(lapply(local,`[[`,"directories")))
+    for (d in directories[order(-nchar(directories))]) {
+      if (dir.exists(d) && length(dir(d,all.files=TRUE,no..=TRUE))==0) unlink(d,recursive=TRUE)
+    }
+    message(paste0("Removed ",length(files)," local file",if (length(files)>1) "s","."))
+    removed <- c(removed,files)
+  }
   invisible(removed)
+}
+
+# whether a local file starts with the parquet magic bytes, PARE for encrypted footers
+is_parquet_file <- function(path){
+  con <- file(path,"rb")
+  on.exit(close(con))
+  rawToChar(readBin(con,"raw",4)) %in% c("PAR1","PARE")
+}
+
+# the files, manifests and directories that removing a local path removes, nothing removed yet
+local_removal <- function(path){
+  path <- sub("(.)[/\\\\]+$","\\1",path)
+  normalized <- function(p)gsub("\\\\","/",normalizePath(p,mustWork=FALSE))
+  cache_dir <- normalized(cache_directory())
+  if (file.exists(path) && (normalized(path)==cache_dir || startsWith(normalized(path),paste0(cache_dir,"/")))) {
+    stop(paste0(path," is in the cache directory, remove copies with remove_parquet_from_cache() and the remote path."))
+  }
+  if (dir.exists(path)) {
+    files <- dir(path,recursive=TRUE,full.names=TRUE,all.files=TRUE)
+    parquet <- files[grepl("\\.parquet$",files)]
+    if (length(parquet)==0) stop(paste0("No parquet files found in ",path,"."))
+    directories <- c(path,dir(path,recursive=TRUE,full.names=TRUE,include.dirs=TRUE,all.files=TRUE))
+    list(files=parquet,manifests=files[basename(files)==manifest_name],directories=directories[dir.exists(directories)])
+  } else if (file.exists(path)) {
+    # a guard against removing other files by mistake, truncated parquet files still start with the magic bytes
+    if (!is_parquet_file(path)) stop(paste0(path," is not a parquet file, use unlink() to remove other local files."))
+    list(files=path,manifests=character(),directories=character())
+  } else {
+    stop(paste0("File or directory ",path," does not exist (relative to the working directory ",getwd(),")."))
+  }
 }
 
 #' presigned URL for a file on Cloudflare R2 or S3

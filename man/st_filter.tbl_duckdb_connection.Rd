@@ -67,11 +67,17 @@ crs. DuckDB treats coordinates as planar, also for longitude/latitude data, wher
 about this for longitude/latitude data while \code{\link[sf:sf_use_s2]{sf::sf_use_s2()}} is on.
 }
 \examples{
-\dontrun{
-library(sf)
-nc <- read_sf(system.file("shape/nc.shp", package = "sf"))
-parquet_tbl("https://data.example.com/nc/counties.parquet") |>
-  st_filter(nc[nc$NAME == "Wake", ]) |>
-  collect_parquet()
+\donttest{
+# DuckDB downloads its spatial extension the first time it is needed
+if (requireNamespace("curl", quietly = TRUE) && curl::has_internet()) {
+  library(sf)
+  sf_use_s2(FALSE) # DuckDB is planar
+  nc <- read_sf(system.file("shape/nc.shp", package = "sf"))
+  path <- tempfile(fileext = ".parquet")
+  data_to_parquet(nc, path, metadata = list())
+  parquet_tbl(path) |>
+    st_filter(nc[nc$NAME == "Wake", ]) |>
+    collect_parquet()
+}
 }
 }

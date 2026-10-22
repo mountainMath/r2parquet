@@ -347,12 +347,18 @@ parquet_metadata.default <- function(x,...) {
 #'   the sources, like `title`, `attribution` or `licence`, `NA` for sources without it; and `metadata`, the
 #'   whole metadata of each source as returned by [parquet_metadata()].
 #' @examples
-#' \dontrun{
-#' census <- "https://data.mountainmath.ca/census/2021/"
-#' data <- parquet_tbl(paste0(census,"ldb_000b21f_e.parquet")) |>
-#'   dplyr::inner_join(parquet_tbl(paste0(census,"2021_92-151_X.parquet")),by="DBUID") |>
-#'   collect_parquet()
-#' paste(unique(parquet_sources(data)$attribution),collapse=" | ")
+#' \donttest{
+#' if (requireNamespace("curl", quietly = TRUE) && curl::has_internet()) {
+#'   census <- "https://data.mountainmath.ca/census/2021/"
+#'   # the dissemination blocks of one dissemination area, with their population
+#'   blocks <- parquet_tbl(paste0(census,"ldb_000b21f_e.parquet")) |>
+#'     dplyr::filter(DAUID == "59150307") |>
+#'     dplyr::select(DBUID,geometry)
+#'   population <- parquet_tbl(paste0(census,"2021_92-151_X.parquet")) |>
+#'     dplyr::select(DBUID,DBPOP2021)
+#'   data <- collect_parquet(dplyr::inner_join(blocks,population,by="DBUID"))
+#'   paste(unique(parquet_sources(data)$attribution),collapse=" | ")
+#' }
 #' }
 #' @export
 parquet_sources <- function(x,...) UseMethod("parquet_sources")
@@ -394,12 +400,18 @@ parquet_sources.default <- function(x,...) {
 #' @return a string, or `NULL` if none of the sources has an attribution, which leaves out a caption passed to
 #'   [ggplot2::labs()].
 #' @examples
-#' \dontrun{
-#' census <- "https://data.mountainmath.ca/census/2021/"
-#' data <- parquet_tbl(paste0(census,"ldb_000b21f_e.parquet")) |>
-#'   dplyr::inner_join(parquet_tbl(paste0(census,"2021_92-151_X.parquet")),by="DBUID") |>
-#'   collect_parquet()
-#' parquet_sources_attribution(data)
+#' \donttest{
+#' if (requireNamespace("curl", quietly = TRUE) && curl::has_internet()) {
+#'   census <- "https://data.mountainmath.ca/census/2021/"
+#'   # the dissemination blocks of one dissemination area, with their population
+#'   blocks <- parquet_tbl(paste0(census,"ldb_000b21f_e.parquet")) |>
+#'     dplyr::filter(DAUID == "59150307") |>
+#'     dplyr::select(DBUID,geometry)
+#'   population <- parquet_tbl(paste0(census,"2021_92-151_X.parquet")) |>
+#'     dplyr::select(DBUID,DBPOP2021)
+#'   data <- collect_parquet(dplyr::inner_join(blocks,population,by="DBUID"))
+#'   parquet_sources_attribution(data)
+#' }
 #' }
 #' @export
 parquet_sources_attribution <- function(x,sep=" | "){

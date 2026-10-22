@@ -146,3 +146,44 @@ test_that("remove_parquet keeps the manifests above removed files and partitions
   expect_equal(puts,list("_manifest.json"="other.parquet"))
   expect_equal(purged,list(c("data/year=2023/data_0.parquet","data/_manifest.json","_manifest.json")))
 })
+
+test_that("remove_parquet removes local files, directories and the paths of lazy tables", {
+  root <- withr::local_tempdir()
+  file <- file.path(root,"iris.parquet")
+  data_to_parquet(iris,file,metadata=list())
+  expect_message(expect_equal(remove_parquet(parquet_tbl(file)),file),"Removed 1 local file")
+  expect_false(file.exists(file))
+  expect_error(remove_parquet(file),"does not exist")
+
+  dataset <- file.path(root,"dataset")
+  data_to_parquet(iris,dataset,partition_by="Species",metadata=list())
+  writeLines("{}",file.path(dataset,"_manifest.json"))
+  writeLines("notes",file.path(dataset,"Species=setosa","notes.txt"))
+  index <- file.path(root,"index.json")
+  writeLines("{}",index)
+  expected <- dir(dataset,"\\.parquet$",recursive=TRUE,full.names=TRUE)
+  expect_message(removed <- remove_parquet(paste0(dataset,"/")),"Removed 3 local files")
+  expect_setequal(removed,expected)
+  # other files stay, with the directories holding them
+  expect_equal(dir(dataset,recursive=TRUE,all.files=TRUE),"Species=setosa/notes.txt")
+  unlink(file.path(dataset,"Species=setosa","notes.txt"))
+  expect_error(remove_parquet(dataset),"No parquet files found")
+
+  # nothing gets removed when a path does not resolve
+  data_to_parquet(iris,file,metadata=list())
+  expect_error(remove_parquet(c(file,file.path(root,"missing"))),"missing does not exist")
+  expect_true(file.exists(file))
+  expect_error(remove_parquet(c(file,index)),"index.json is not a parquet file")
+  expect_true(file.exists(file))
+  expect_error(remove_parquet("https://example.com/a.parquet"),"Files at URLs can't be removed")
+})
+
+test_that("remove_parquet leaves copies in the cache directory to remove_parquet_from_cache", {
+  cache <- local_cache_dir()
+  withr::local_envvar(R2PARQUET_CACHE_PATH=cache)
+  dir.create(file.path(cache,"r2"),recursive=TRUE)
+  data_to_parquet(iris,file.path(cache,"r2","a.parquet"),metadata=list())
+  expect_error(remove_parquet(file.path(cache,"r2","a.parquet")),"remove_parquet_from_cache")
+  expect_error(remove_parquet(cache),"remove_parquet_from_cache")
+  expect_true(file.exists(file.path(cache,"r2","a.parquet")))
+})

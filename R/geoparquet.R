@@ -157,12 +157,18 @@ duckdb_predicate <- function(predicate){
 #'     of these.
 #' @return a lazy `dplyr` table.
 #' @examples
-#' \dontrun{
-#' library(sf)
-#' nc <- read_sf(system.file("shape/nc.shp", package = "sf"))
-#' parquet_tbl("https://data.example.com/nc/counties.parquet") |>
-#'   st_filter(nc[nc$NAME == "Wake", ]) |>
-#'   collect_parquet()
+#' \donttest{
+#' # DuckDB downloads its spatial extension the first time it is needed
+#' if (requireNamespace("curl", quietly = TRUE) && curl::has_internet()) {
+#'   library(sf)
+#'   sf_use_s2(FALSE) # DuckDB is planar
+#'   nc <- read_sf(system.file("shape/nc.shp", package = "sf"))
+#'   path <- tempfile(fileext = ".parquet")
+#'   data_to_parquet(nc, path, metadata = list())
+#'   parquet_tbl(path) |>
+#'     st_filter(nc[nc$NAME == "Wake", ]) |>
+#'     collect_parquet()
+#' }
 #' }
 #' @exportS3Method sf::st_filter
 st_filter.tbl_duckdb_connection <- function(x,y,...,.predicate=sf::st_intersects,geometry_column=NULL,exact=TRUE) {
@@ -233,6 +239,9 @@ st_filter.tbl_r2parquet_connection <- st_filter.tbl_duckdb_connection
 #' else the first GEOMETRY column, use [sf::st_set_geometry()] to switch to another one. Missing (`NULL`)
 #' geometries, e.g. from a left join, become empty geometries, since sf has no missing geometries.
 #'
+#' Reading the files fails with the errors described in the Errors section of [parquet_tbl()], e.g. an
+#' `r2parquet_network_error` when the server can't be reached.
+#'
 #' For tables from [parquet_tbl()] the metadata of the parquet files (see [parquet_metadata()]) gets attached to
 #' the result: the whole list as the `metadata` attribute, and the `label` entries of `columns` as `label`
 #' attributes of the columns, as the haven and labelled packages use them. The files are looked up through the
@@ -246,8 +255,15 @@ st_filter.tbl_r2parquet_connection <- st_filter.tbl_duckdb_connection
 #' @return a tibble, or an sf object if the table has GEOMETRY columns.
 #' @export
 collect_parquet <- function(tbl,attach_metadata=TRUE) {
-  geometry_columns <- duckdb_geometry_columns(tbl)
-  data <- dplyr::collect(tbl)
+  call <- sys.call()
+  # the files get read now, failures get explained as in parquet_tbl
+  geometry_columns <- NULL
+  data <- tryCatch({
+    geometry_columns <- duckdb_geometry_columns(tbl)
+    dplyr::collect(tbl)
+  },error=function(e){
+    stop(read_error(e,unique(unlist(c(attr(tbl,"r2parquet_paths"),lapply(table_scans(tbl),function(scan)scan$paths)))),call))
+  })
   for (column in names(geometry_columns)) {
     data[[column]] <- wkb_to_sfc(data[[column]],geometry_columns[[column]])
   }

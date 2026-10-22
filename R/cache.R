@@ -114,15 +114,15 @@ read_local_manifest <- function(file){
 
 # plain GET requests to public URLs
 http_get <- function(url){
-  httr::GET(url)
+  with_network(url,httr::GET(url))
 }
 
 # the headers of a file at a URL: a HEAD request, or a request for its first byte where HEAD is not allowed, as
 # on presigned URLs, which are signed for GET only; a server that ignores the range sends the whole file
 http_probe <- function(url){
-  response <- httr::HEAD(url)
+  response <- with_network(url,httr::HEAD(url))
   if (!(httr::status_code(response) %in% c(403L,405L))) return(response)
-  httr::GET(url,httr::add_headers(Range="bytes=0-0"))
+  with_network(url,httr::GET(url,httr::add_headers(Range="bytes=0-0")))
 }
 
 # a key or relative path encoded for the path of a URL: URLencode leaves the characters that are reserved in
@@ -142,10 +142,10 @@ etag_is_md5 <- function(response){
 
 # download from a public URL to a local file, with whether its etag is an MD5 hash as an attribute
 http_download <- function(url,file){
-  response <- httr::GET(url,httr::write_disk(file,overwrite=TRUE))
+  response <- with_network(url,httr::GET(url,httr::write_disk(file,overwrite=TRUE)))
   if (httr::status_code(response)>=400) {
     unlink(file)
-    stop(paste0("Downloading ",url," failed with status ",httr::status_code(response),"."))
+    stop(paste0("Downloading ",url," failed with status ",httr::status_code(response),".",access_hint(httr::status_code(response),url)))
   }
   invisible(structure(file,etag_is_md5=etag_is_md5(response)))
 }
@@ -155,7 +155,7 @@ r2_get_object <- function(r2_bucket,r2_path,file){
   response <- r2_request("GET",r2_bucket,r2_path,config=httr::write_disk(file,overwrite=TRUE))
   if (httr::status_code(response)>=400) {
     unlink(file)
-    stop(paste0("Downloading ",bucket_url(r2_bucket,r2_path)," failed with status ",httr::status_code(response),"."))
+    stop(paste0("Downloading ",bucket_url(r2_bucket,r2_path)," failed with status ",httr::status_code(response),".",access_hint(httr::status_code(response),bucket_url(r2_bucket,r2_path))))
   }
   invisible(structure(file,etag_is_md5=etag_is_md5(response)))
 }
@@ -216,15 +216,18 @@ url_cache_source <- function(location){
       files$key <- url
       return(list(is_file=TRUE,files=files,download=http_download))
     }
+    if (status %in% c(401,403)) stop(r2parquet_error("access_denied",paste0("Checking ",url," failed with status ",status,".",access_hint(status,url))))
     if (status!=404) stop(paste0("Checking ",url," failed with status ",status,"."))
   }
   base <- sub("/+$","",base)
   manifest_url <- paste0(base,"/",manifest_name)
   response <- http_get(manifest_url)
-  if (httr::status_code(response)>=400) {
-    stop(paste0("No file at ",url," and no manifest at ",manifest_url,
-                ". Directories at URLs can only be cached if they have a manifest, see write_manifest, ",
-                "or pass the URLs of the files or the r2://bucket/path form with credentials."))
+  status <- httr::status_code(response)
+  if (status %in% c(401,403)) stop(r2parquet_error("access_denied",paste0("Reading the manifest at ",manifest_url," failed with status ",status,".",access_hint(status,url))))
+  if (status>=400) {
+    stop(r2parquet_error("not_found",paste0("No file at ",url," and no manifest at ",manifest_url,
+                ". Directories at URLs can't be listed, they are read through the manifest of their files, see ",
+                "write_manifest(); otherwise pass the URLs of the files, or the r2://bucket/path form with credentials.")))
   }
   files <- parse_manifest(httr::content(response,"text",encoding="UTF-8"))
   if (nrow(files)==0) stop(paste0("The manifest at ",manifest_url," lists no files."))
