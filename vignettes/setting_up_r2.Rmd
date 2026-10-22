@@ -139,6 +139,14 @@ R doesn't need it, but browsers do: to read the files from a web page, e.g. with
 ]
 ```
 
+Cloudflare caches the responses to browser requests separately for each `Origin` header, and purging a URL only clears the copy for requests without one. This only affects web apps: browsers send the `Origin` header on cross-origin requests, while `r2parquet`, DuckDB, curl and other non-browser clients don't, and always get the copy that the purge clears. For web apps, list the origins of the pages that read the bucket in `R2PARQUET_PURGE_ORIGINS`, comma separated, and the uploads and removals purge their copies as well:
+
+```sh
+R2PARQUET_PURGE_ORIGINS=https://example.com,https://www.example.com
+```
+
+Pages on other origins keep getting old versions until the edge TTL runs out. That is one reason to list the origins in the CORS policy rather than allow `*`: the two lists then match, and every cached copy gets purged.
+
 ## Checking the setup
 
 

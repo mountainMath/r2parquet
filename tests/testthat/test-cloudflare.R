@@ -114,6 +114,28 @@ test_that("cache purges go to the zones of enabled custom domains in batches", {
   expect_equal(purges[[3]]$body$files[[1]],"https://data.example.org/dir/a%20b.parquet")
 })
 
+test_that("cache purges also purge the copies cached per origin in R2PARQUET_PURGE_ORIGINS", {
+  withr::local_envvar(R2_ACCOUNT_ID="abc",R2PARQUET_PURGE_ORIGINS="https://a.example.com/, https://b.example.com,,")
+  expect_equal(r2parquet:::purge_origins(),c("https://a.example.com","https://b.example.com"))
+  mock_cloudflare_api(list(
+    "GET /accounts/abc/r2/buckets/b/domains/custom"=cloudflare_response(list(domains=list(
+      list(domain="data.example.com",zoneId="z1",enabled=TRUE)))),
+    "POST /zones/z1/purge_cache"=cloudflare_response(list(id="z1"))))
+  paths <- paste0("dir/f",seq_len(12),".parquet")
+  r2parquet:::r2_purge_cache("b",paths)
+  files <- unlist(lapply(Filter(function(r)r$verb=="POST",requests),function(r)r$body$files),recursive=FALSE)
+  expect_equal(lengths(lapply(Filter(function(r)r$verb=="POST",requests),function(r)r$body$files)),c(30,6))
+  urls <- paste0("https://data.example.com/",paths)
+  expect_equal(files[1:12],as.list(urls))
+  expect_equal(files[[13]],list(url=urls[1],headers=list(Origin="https://a.example.com")))
+  expect_equal(files[[36]],list(url=urls[12],headers=list(Origin="https://b.example.com")))
+})
+
+test_that("cache purges without R2PARQUET_PURGE_ORIGINS only purge the plain urls", {
+  withr::local_envvar(R2PARQUET_PURGE_ORIGINS=NA)
+  expect_equal(r2parquet:::purge_origins(),character(0))
+})
+
 test_that("purging after changes is skipped without a token and only warns on failure", {
   withr::local_envvar(R2_ACCOUNT_ID="abc",R2_API_TOKEN=NA)
   local_mocked_bindings(cloudflare_api=function(...)stop("should not be called"))

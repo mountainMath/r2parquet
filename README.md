@@ -40,6 +40,7 @@ Set these environment variables, e.g. in `~/.Renviron` (`usethis::edit_r_environ
 | `R2_ACCOUNT_ID` | everything on R2 |
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | reading, uploading and removing files (S3 API credentials of an R2 API token) |
 | `R2_API_TOKEN` | `create_r2_bucket()` (Admin Read & Write); Zone Read for custom domains; Zone Cache Purge for cache purging on upload/removal |
+| `R2PARQUET_PURGE_ORIGINS` | optional, comma separated origins of web pages reading the bucket from a browser, whose cached copies get purged as well; not needed for reading with this package, DuckDB or other clients that send no `Origin` header |
 
 See [Setting up R2](https://mountainmath.github.io/r2parquet/articles/setting_up_r2.html) for the token permissions, caching and rate limiting of public buckets on a custom domain. `s3://` paths use the standard AWS variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, and `AWS_ENDPOINT_URL` for services other than Amazon S3), see [Amazon S3 and other S3 compatible services](https://mountainmath.github.io/r2parquet/articles/s3.html).
 

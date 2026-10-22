@@ -88,6 +88,12 @@ token with access to the bucket.
 \item \code{R2_API_TOKEN}, optional: the value of an API token with Zone Cache Purge permission (see
 \code{\link[=create_r2_bucket]{create_r2_bucket()}}). Files that change on R2 then get purged from the Cloudflare cache of the bucket's
 custom domains, so that the new versions are served right away; the purge is skipped without it.
+\item \code{R2PARQUET_PURGE_ORIGINS}, optional: the origins of web pages reading the bucket from a browser, comma
+separated, like \verb{https://example.com,https://www.example.com}. Cloudflare caches the responses to their
+requests separately per \code{Origin}, which a purge of the plain URL misses, so each changed file also gets
+purged once per origin; copies cached for origins not listed are refreshed when the edge TTL runs out.
+This only concerns web apps, whose browsers send the \code{Origin} header; requests without one, like those of
+this package, DuckDB or curl, get the plain URL's copy, which is always purged.
 }
 
 Paths on S3 (\verb{s3://bucket/path}), on Amazon S3 or another S3 compatible service like MinIO, use the

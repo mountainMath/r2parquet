@@ -357,15 +357,26 @@ r2_stop_for_status <- function(response){
   }
 }
 
-# purge objects served via custom domains of the bucket from the Cloudflare cache
+# origins of web pages reading the bucket, from R2PARQUET_PURGE_ORIGINS (comma or whitespace separated)
+purge_origins <- function(){
+  origins <- strsplit(Sys.getenv("R2PARQUET_PURGE_ORIGINS"),"[,[:space:]]+")[[1]]
+  unique(sub("/+$","",origins[origins!=""]))
+}
+
+# purge objects served via custom domains of the bucket from the Cloudflare cache; responses to requests
+# with an Origin header (browsers reading cross-origin) are cached separately per origin, a purge of the
+# plain URL leaves them in place, so each URL also gets purged once per origin in R2PARQUET_PURGE_ORIGINS
 r2_purge_cache <- function(r2_bucket,r2_paths){
   response <- r2_api("GET",paste0("/",r2_bucket,"/domains/custom"))
   r2_stop_for_status(response)
   domains <- Filter(function(d)isTRUE(d$enabled),httr::content(response)$result$domains)
+  origins <- purge_origins()
   for (domain in domains) {
     urls <- paste0("https://",domain$domain,"/",url_path_encode(r2_paths))
+    files <- c(as.list(urls),do.call(c,lapply(origins,function(o)
+      lapply(urls,function(u)list(url=u,headers=list(Origin=o))))))
     # the purge API accepts a limited number of urls per request
-    for (batch in split(urls,ceiling(seq_along(urls)/30))) {
+    for (batch in split(files,ceiling(seq_along(files)/30))) {
       response <- cloudflare_api("POST",paste0("/zones/",domain$zoneId,"/purge_cache"),body=list(files=as.list(batch)))
       r2_stop_for_status(response)
     }
@@ -771,6 +782,12 @@ create_r2_bucket <- function(r2_bucket,public=FALSE,custom_domain=NULL) {
 #' * `R2_API_TOKEN`, optional: the value of an API token with Zone Cache Purge permission (see
 #'   [create_r2_bucket()]). Files that change on R2 then get purged from the Cloudflare cache of the bucket's
 #'   custom domains, so that the new versions are served right away; the purge is skipped without it.
+#' * `R2PARQUET_PURGE_ORIGINS`, optional: the origins of web pages reading the bucket from a browser, comma
+#'   separated, like `https://example.com,https://www.example.com`. Cloudflare caches the responses to their
+#'   requests separately per `Origin`, which a purge of the plain URL misses, so each changed file also gets
+#'   purged once per origin; copies cached for origins not listed are refreshed when the edge TTL runs out.
+#'   This only concerns web apps, whose browsers send the `Origin` header; requests without one, like those of
+#'   this package, DuckDB or curl, get the plain URL's copy, which is always purged.
 #'
 #' Paths on S3 (`s3://bucket/path`), on Amazon S3 or another S3 compatible service like MinIO, use the
 #' variables AWS tools use:
