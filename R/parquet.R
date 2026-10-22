@@ -202,7 +202,9 @@ read_error <- function(e,path,call=NULL){
   if (length(connection)==3) return(network_error(connection[3],paste0(connection[2],"."),call))
   if (!not_found && !(length(status)==1 && status %in% c(401,403))) return(e)
   # the path the failed read was for, the longest one the file or pattern in the message starts with
-  target <- regmatches(message,regexpr("(?<=pattern \")[^\"]+|(?<=error (on|reading) ')[^']+",message,perl=TRUE))
+  # captured rather than in lookbehinds, PCRE2 before 10.43 (Ubuntu) refuses lookbehinds of varying length
+  target <- regmatches(message,regexec("pattern \"([^\"]+)|error (on|reading) '([^']+)",message))[[1]]
+  target <- if (length(target)==4) paste0(target[2],target[4])
   base <- sub("/+$","",sub("[?#].*$","",path))
   matches <- which(startsWith(if (length(target)==1) sub("[?#].*$","",target) else "",base))
   if (length(matches)==0 && length(path)!=1) return(e)

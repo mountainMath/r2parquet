@@ -54,3 +54,4 @@ Read at call time from environment variables:
 - Two-space indentation, `=` and `<-` both used for assignment, compact spacing (`function(d)d`). Match the surrounding file.
 - Every exported function has a roxygen block with `@param` for each argument, `@return`, and `@export`.
 - Examples that need the network (including DuckDB extension downloads) go in `\donttest{}` with an `if (requireNamespace("curl", quietly = TRUE) && curl::has_internet())` guard, and read little: `--as-cran` runs them.
+- Regexes with `perl = TRUE` must not use lookbehinds of varying length (`(?<=error (on|reading) )`): PCRE2 before 10.43, as on Ubuntu CI, rejects them while macOS accepts them. Use a capture group with `regexec()` instead.
