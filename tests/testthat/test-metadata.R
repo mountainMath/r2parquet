@@ -385,13 +385,17 @@ test_that("writing joined data warns about the metadata of the joined tables", {
   data_to_parquet(data.frame(id="a",count=2),right,metadata=list(attribution="r"))
   data_to_parquet(data.frame(id="a",other=3),plain,metadata=list())
   joined <- dplyr::left_join(parquet_tbl(left),parquet_tbl(right),by="id")
-  expect_warning(data_to_parquet(joined,copy),
-                 paste0("metadata \\(source\\).*Joined parquet tables have metadata too \\(",right,"\\)"))
-  expect_warning(data_to_parquet(collect_parquet(joined),copy),paste0("too \\(",right,"\\)"))
+  # the paths are matched literally, Windows paths have backslashes
+  joined_message <- paste0("Joined parquet tables have metadata too (",right,")")
+  warning <- expect_warning(data_to_parquet(joined,copy),"metadata \\(source\\)")
+  expect_match(conditionMessage(warning),joined_message,fixed=TRUE)
+  expect_warning(data_to_parquet(collect_parquet(joined),copy),joined_message,fixed=TRUE)
   # only the joined table has metadata
   from_plain <- dplyr::left_join(parquet_tbl(plain),parquet_tbl(right),by="id")
-  expect_warning(data_to_parquet(from_plain,copy),paste0("^The data was read from parquet files with metadata, .*too \\(",right,"\\).*metadata = list\\(\\)"))
-  expect_warning(data_to_parquet(collect_parquet(from_plain),copy),paste0("too \\(",right,"\\)"))
+  warning <- expect_warning(data_to_parquet(from_plain,copy),"^The data was read from parquet files with metadata, ")
+  expect_match(conditionMessage(warning),joined_message,fixed=TRUE)
+  expect_match(conditionMessage(warning),"metadata = list()",fixed=TRUE)
+  expect_warning(data_to_parquet(collect_parquet(from_plain),copy),joined_message,fixed=TRUE)
   expect_no_warning(data_to_parquet(from_plain,copy,metadata=list()))
   # joined tables without metadata don't get mentioned
   expect_warning(data_to_parquet(dplyr::left_join(parquet_tbl(left),parquet_tbl(plain),by="id"),copy),"^(?!.*Joined)",perl=TRUE)
