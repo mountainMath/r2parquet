@@ -21,7 +21,7 @@ library(dplyr)
 
 The package focuses on parquet because it is uniquely suited to hold large static dataasets that can be read strategically instead of downloading the entire file, although how effective it is at that at least partially depends on how well the choices made in ordering, partitioning and row groups when uploading the file suit the use case of the person consuming the data.
 
-Next to the data a parquet file carries a schema, statistics that let readers skip the parts they don't need, and free-form key-value metadata. `r2parquet` uses that metadata add important context, where the data comes from, under which licence, and what its columns mean, and it copies the description into a manifest next to the files on R2, where clients can read it without opening a single parquet file. This article walks through where these pieces live, for a single file, a directory holding several datasets and a partitioned dataset, using the public bucket behind `https://data.mountainmath.xyz`.
+Next to the data a parquet file carries a schema, statistics that let readers skip the parts they don't need, and free-form key-value metadata. `r2parquet` uses that metadata add important context, where the data comes from, under which licence, and what its columns mean, and it copies the description into a manifest next to the files on R2, where clients can read it without opening a single parquet file. This article walks through where these pieces live, for a single file, a directory holding several datasets and a partitioned dataset, using the public bucket behind `https://data.mountainmath.ca`.
 
 ## What is in a parquet file
 
@@ -32,7 +32,7 @@ That metadata sits in the *footer* at the end of the file: the schema, the stati
 Take the file with the 2021 census dissemination block boundaries in the public bucket, the one the [Accessing public buckets](accessing_public_buckets.html) article queries.
 
 ```{r}
-db_url <- "https://data.mountainmath.xyz/census/2021/ldb_000b21f_e.parquet"
+db_url <- "https://data.mountainmath.ca/census/2021/ldb_000b21f_e.parquet"
 
 db_table <- parquet_tbl(db_url)
 ```
@@ -74,7 +74,7 @@ Directories on R2 can be listed with the credentials of the bucket, but not over
 The `census/2021` directory of the public bucket holds several datasets, single files like the boundary files and the geographic attribute file, and partitioned datasets that are directories of files, and one manifest listing all of them. We show it with the file entries cut down to three, a single file and the first file of each of the two partitioned datasets, and the list of repaired geometries cut down to three rows.
 
 ```{r}
-census_url <- "https://data.mountainmath.xyz/census/2021/"
+census_url <- "https://data.mountainmath.ca/census/2021/"
 
 manifest <- jsonlite::fromJSON(paste0(census_url, "_manifest.json"), simplifyVector = FALSE)
 
@@ -118,7 +118,7 @@ A dataset can also be a directory of files, hive partitioned by the values of on
 Each partition is a directory named after the column and its value, holding the parquet file for that value. The partition column is not stored in the files, readers recover it from the directory names, typed by their values, so `PRUID` comes back as a number below. The dataset's manifest lists the partition files.
 
 ```{r}
-profile_url <- "https://data.mountainmath.xyz/census/2021/profile_ADA/"
+profile_url <- "https://data.mountainmath.ca/census/2021/profile_ADA/"
 
 list_parquet(profile_url) |>
   mutate(path = sub(profile_url, "", path, fixed = TRUE)) |>
@@ -152,7 +152,7 @@ parquet_tbl(profile_url) |>
 `collect_parquet()` attaches the metadata to the result and the column labels to the columns, and `parquet_metadata()` on a lazy table reads the manifest of its source. Here we join the characteristic names from the file next to the dataset, both tables sit on the same DuckDB connection.
 
 ```{r}
-characteristics <- parquet_tbl("https://data.mountainmath.xyz/census/2021/profile_characteristics.parquet")
+characteristics <- parquet_tbl("https://data.mountainmath.ca/census/2021/profile_characteristics.parquet")
 
 area <- parquet_tbl(profile_url) |>
   filter(PRUID == "59", geo_uid == "59150002", characteristic_id <= 8L) |>

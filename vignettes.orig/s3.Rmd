@@ -68,7 +68,7 @@ By default all uploads the package makes are private. As an example we take the 
 ```{r}
 private_path <- paste0(params$s3_root, "/private/van_db_attributes.parquet")
 
-geo_attributes <- parquet_tbl("https://data.mountainmath.xyz/census/2021/2021_92-151_X.parquet")
+geo_attributes <- parquet_tbl("https://data.mountainmath.ca/census/2021/2021_92-151_X.parquet")
 
 geo_attributes |>
   filter(CMAUID == "933") |>
@@ -107,7 +107,7 @@ public_url <- set_s3_public_access(public_prefix)
 Whether a file is public is then decided by where it gets uploaded. Here we copy the census metropolitan area boundaries from the public census bucket, partitioned by province, into the public prefix. The policy only grants downloads, not listing the bucket, so readers find the files of the dataset through the `_manifest.json` that the upload writes next to them.
 
 ```{r}
-cma_source <- parquet_tbl("https://data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet")
+cma_source <- parquet_tbl("https://data.mountainmath.ca/census/2021/lcma000b21f_e.parquet")
 
 cma_source |>
   data_to_parquet(paste0(public_prefix, "/cma"), partition_by = "PRUID", sort_by = "CMAUID",

@@ -25,10 +25,10 @@ To cache a dataset set `cache = TRUE` in `parquet_tbl()`, or cache it explicitly
 
 
 ``` r
-census_cma_url <- "https://data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet"
+census_cma_url <- "https://data.mountainmath.ca/census/2021/lcma000b21f_e.parquet"
 
 geos_cma <- parquet_tbl(census_cma_url, cache = TRUE)
-#> Downloading 1 file (12.9 MB) to /var/folders/z4/gcjq2cd93p3bs5bgp8j2vv240000gp/T//RtmpPmJEmm/filed6f566db22c7/https/data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet.
+#> Downloading 1 file (12.9 MB) to /var/folders/z4/gcjq2cd93p3bs5bgp8j2vv240000gp/T//RtmpBYVZHb/file14b6b1f3e70f4/https/data.mountainmath.ca/census/2021/lcma000b21f_e.parquet.
 ```
 
 This downloads the file if the cache has no current copy and opens the table on the local file. The copy is kept current by its etag: every call with `cache = TRUE` checks the remote file and downloads it again when it changed. We can inspect the cache to see what is available locally.

@@ -22,7 +22,7 @@ As an example we consider accessing dissemination block (DB) level geographic da
 
 
 ``` r
-census_db_url <- "https://data.mountainmath.xyz/census/2021/ldb_000b21f_e.parquet"
+census_db_url <- "https://data.mountainmath.ca/census/2021/ldb_000b21f_e.parquet"
 ```
 
 The data can be downloaded in full, but often we are interested in a specific part of Canada only, maybe a particular metro area (CMA) or census subdivision (CSD). The first step is to get a lazy connection to the parquet file.
@@ -96,7 +96,7 @@ To build on this we query the geographic attributes hosted at
 
 
 ``` r
-geo_attributes_path <- "https://data.mountainmath.xyz/census/2021/2021_92-151_X.parquet"
+geo_attributes_path <- "https://data.mountainmath.ca/census/2021/2021_92-151_X.parquet"
 ```
 
 and read just the ones for Metro Vancouver.

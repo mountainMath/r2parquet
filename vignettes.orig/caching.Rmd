@@ -26,7 +26,7 @@ The cache lives in the directory named by the `R2PARQUET_CACHE_PATH` environment
 To cache a dataset set `cache = TRUE` in `parquet_tbl()`, or cache it explicitly with `cache_parquet()`.
 
 ```{r}
-census_cma_url <- "https://data.mountainmath.xyz/census/2021/lcma000b21f_e.parquet"
+census_cma_url <- "https://data.mountainmath.ca/census/2021/lcma000b21f_e.parquet"
 
 geos_cma <- parquet_tbl(census_cma_url, cache = TRUE)
 ```
