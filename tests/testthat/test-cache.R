@@ -39,7 +39,10 @@ test_that("cache_parquet mirrors R2 paths and only downloads what changed", {
   tbl <- parquet_tbl("r2://bucket/census/data",cache=TRUE)
   expect_equal(dplyr::pull(dplyr::count(tbl)),3)
   expect_equal(dplyr::pull(dplyr::count(dplyr::filter(tbl,year=="2022"))),1)
-  expect_equal(list_parquet(tbl)$path,file.path(local,c("year=2021","year=2022"),"data_0.parquet"))
+  expect_equal(attr(tbl,"r2parquet_paths"),file.path(local,"**","*.parquet"))
+  # the table lists the remote files it was read from, all cached
+  expect_equal(list_parquet(tbl)$path,paste0("r2://bucket/census/data/year=",2021:2022,"/data_0.parquet"))
+  expect_equal(list_parquet(tbl)$cache,rep("current",2))
   # a changed file gets downloaded again, a removed one goes
   objects$etag[objects$key=="census/data/year=2021/data_0.parquet"] <- "changed"
   objects <- objects[objects$key!="census/data/year=2022/data_0.parquet",]
@@ -129,7 +132,7 @@ test_that("cache=NULL reads current copies, warns about stale ones and leaves th
   expect_equal(lookup(c("r2://bucket/census/data","r2://bucket/census/single.parquet")),c(local,single))
   tbl <- parquet_tbl("r2://bucket/census/data")
   expect_equal(dplyr::pull(dplyr::count(tbl)),3)
-  expect_equal(list_parquet(tbl)$path,file.path(local,c("year=2021","year=2022"),"data_0.parquet"))
+  expect_equal(attr(tbl,"r2parquet_paths"),file.path(local,"**","*.parquet"))
   expect_equal(listings,2)
   # a changed file makes the copy stale: a warning, the remote path, nothing downloaded. The change goes unnoticed
   # until the checks are forgotten, and a stale copy is only reported once
@@ -270,8 +273,13 @@ test_that("cache='offline' reads the copies without contacting the remote, curre
   objects$etag[objects$key=="census/data/year=2021/data_0.parquet"] <- "changed"
   expect_no_warning(tbl <- parquet_tbl("r2://bucket/census/data",cache="offline"))
   expect_equal(dplyr::pull(dplyr::count(tbl)),3)
-  expect_equal(list_parquet(tbl)$path,file.path(local,c("year=2021","year=2022"),"data_0.parquet"))
+  expect_equal(attr(tbl,"r2parquet_paths"),file.path(local,"**","*.parquet"))
   expect_equal(listings,0)
+  # the table lists the remote files it was read from, not the copies
+  files <- list_parquet(tbl)
+  expect_equal(files$path,paste0("r2://bucket/census/data/year=",2021:2022,"/data_0.parquet"))
+  expect_equal(files$cache,c("stale","current"))
+  expect_equal(listings,1)
   # a copy that no longer covers its directory is no copy
   suppressMessages(remove_parquet_from_cache("r2://bucket/census/data/year=2021/data_0.parquet"))
   expect_error(offline("r2://bucket/census/data"),"No copy")

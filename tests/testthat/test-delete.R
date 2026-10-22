@@ -27,7 +27,7 @@ test_that("failed deletes of individual objects are reported", {
 
 test_that("failed delete requests are reported", {
   local_mocked_bindings(r2_request=function(...)fake_response(403,"<Error><Code>InvalidAccessKeyId</Code></Error>"))
-  expect_error(r2parquet:::r2_delete_objects("bucket","a.parquet"),"failed with status 403")
+  expect_error(r2parquet:::r2_delete_objects("bucket","a.parquet"),"failed with status 403.*InvalidAccessKeyId",class="r2parquet_access_denied")
 })
 
 test_that("remove_parquet resolves all paths first and removes per bucket", {
@@ -175,7 +175,41 @@ test_that("remove_parquet removes local files, directories and the paths of lazy
   expect_true(file.exists(file))
   expect_error(remove_parquet(c(file,index)),"index.json is not a parquet file")
   expect_true(file.exists(file))
+  # a binary file starting with a nul byte is not a parquet file either
+  binary <- file.path(root,"data.bin")
+  writeBin(as.raw(c(0,0,0,0,1)),binary)
+  expect_error(remove_parquet(binary),"data.bin is not a parquet file")
+  expect_true(file.exists(binary))
   expect_error(remove_parquet("https://example.com/a.parquet"),"Files at URLs can't be removed")
+  # also for a table read from a URL
+  tbl <- parquet_tbl(file)
+  attr(tbl,"r2parquet_source") <- "https://example.com/a.parquet"
+  expect_error(remove_parquet(tbl),"Files at URLs can't be removed.*https://example.com/a.parquet")
+  expect_true(file.exists(file))
+})
+
+test_that("remove_parquet removes the remote files of a table read from the cache", {
+  remote <- withr::local_tempdir()
+  data_to_parquet(data.frame(year=c(2021L,2022L),value=1:2),file.path(remote,"data"),partition_by="year",metadata=list())
+  files <- dir(remote,"\\.parquet$",recursive=TRUE)
+  objects <- data.frame(key=files,size=file.size(file.path(remote,files)),modified=as.POSIXct("2026-10-10 12:00:00",tz="UTC"),
+                        etag=vapply(file.path(remote,files),digest::digest,"",algo="md5",file=TRUE,USE.NAMES=FALSE))
+  deleted <- character()
+  local_mocked_bindings(r2_list_objects=function(r2_bucket,prefix="")objects[startsWith(objects$key,prefix),],
+                        r2_get_object=function(r2_bucket,r2_path,file)file.copy(file.path(remote,r2_path),file,overwrite=TRUE),
+                        r2_delete_objects=function(r2_bucket,r2_paths)deleted <<- c(deleted,r2_paths),
+                        r2_purge_cache_after_change=function(r2_bucket,r2_paths)NULL,
+                        r2_get_manifest=function(r2_bucket,key)NULL)
+  cache <- local_cache_dir()
+  withr::local_envvar(R2_ACCOUNT_ID="acct",R2_ACCESS_KEY_ID="key",R2_SECRET_ACCESS_KEY="secret",R2PARQUET_CACHE_PATH=cache)
+  suppressMessages(local <- cache_parquet("r2://bucket/data"))
+  tbl <- parquet_tbl("r2://bucket/data",cache="offline")
+  expect_equal(attr(tbl,"r2parquet_paths"),file.path(local,"**","*.parquet"))
+  expect_message(removed <- remove_parquet(tbl),"Removed 2 files from R2 bucket bucket")
+  expect_equal(removed,paste0("r2://bucket/",files))
+  expect_equal(deleted,files)
+  # the copies stay for remove_parquet_from_cache
+  expect_setequal(dir(local,"\\.parquet$",recursive=TRUE),sub("^data/","",files))
 })
 
 test_that("remove_parquet leaves copies in the cache directory to remove_parquet_from_cache", {

@@ -142,8 +142,8 @@ local_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_g
   if (inherits(data,"tbl_lazy")) {
     if (!methods::is(dbplyr::remote_con(data),"duckdb_connection")) stop("Lazy tables have to be DuckDB tables.")
     con <- dbplyr::remote_con(data)
-    geometry_columns <- names(duckdb_geometry_columns(data))
-    geometry_column <- if ("geometry" %in% geometry_columns) "geometry" else if (length(geometry_columns)>0) geometry_columns[1]
+    geometry_columns <- duckdb_geometry_columns(data)
+    geometry_column <- if (length(geometry_columns)>0) duckdb_geometry_column(data,geometry_columns=geometry_columns)$name
     source <- paste0("(",dbplyr::sql_render(data),")")
     columns <- colnames(data)
   } else if (inherits(data,"sf")) {
@@ -284,10 +284,10 @@ r2_data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_grou
     if (r2_path %in% objects$key) return(if (partitioned) r2_path)
     # partitions of earlier writes, other files in the directory are kept
     files <- objects$key[grepl("\\.parquet$",objects$key)]
-    files[is_partition_file(substring(files,nchar(r2_path)+2))]
+    files[is_partition_file(r2_relative(files,r2_path))]
   }
   files <- attr(local_path,"files")
-  message("Uploading ",format_size(sum(file.size(files)))," in ",length(files)," parquet file",if (length(files)>1) "s"," to ",r2_url,".")
+  message("Uploading ",format_size(sum(file.size(files)))," in ",plural(length(files),"parquet file")," to ",r2_url,".")
   uploaded <- r2_upload(local_path,r2_bucket,r2_path,stale=stale)
   if (purge_cache) r2_purge_cache_after_change(r2_bucket,union(uploaded$stale,c(uploaded$files,uploaded$manifests)))
   invisible(structure(r2_url,files=bucket_url(r2_bucket,uploaded$files)))

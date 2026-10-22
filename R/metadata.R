@@ -153,17 +153,16 @@ manifest_footers <- function(path){
     key <- utils::URLdecode(sub("/+$","",url$path %||% ""))
     encode <- url_path_encode
     read <- function(directory){
-      response <- http_get(paste0(prefix,encode(directory),if (directory!="") "/",manifest_name))
-      if (httr::status_code(response)>=400) return(NULL)
-      tryCatch(parse_manifest(httr::content(response,"text",encoding="UTF-8")),
-               error=function(e)structure(manifest_files(),has_metadata=FALSE))
+      # a server that denies requests for missing files, like S3 without listing rights, has no manifest there
+      tryCatch(url_get_manifest(paste0(prefix,encode(directory),if (directory!="") "/",manifest_name)),
+               r2parquet_access_denied=function(e)NULL)
     }
   }
   for (directory in c(key,r2_ancestors(key))) {
     manifest <- read(directory)
     if (is.null(manifest)) next
     if (!isTRUE(attr(manifest,"has_metadata"))) return(NULL)
-    relative <- substring(key,nchar(directory)+if (directory=="") 1 else 2)
+    relative <- r2_relative(key,directory)
     files <- manifest[relative=="" | manifest$path==relative | startsWith(manifest$path,paste0(relative,"/")),]
     if (nrow(files)==0) return(NULL)
     return(stats::setNames(files$metadata,paste0(prefix,encode(paste0(directory,if (directory!="") "/",files$path)))))
@@ -299,10 +298,11 @@ parquet_metadata.tbl_lazy <- function(x,from_files=FALSE,...) {
   new_parquet_metadata(scan_metadata(dbplyr::remote_con(x),path,attr(x,"r2parquet_source"),from_files))
 }
 
-# the metadata of the files a table from parquet_tbl reads: the manifests of the paths the table was resolved from
-# serve when they cover all of them, a table reading local copies from the cache reads their footers
+# the metadata of the files a table from parquet_tbl reads: the manifests of the paths the table was given serve
+# when the files it reads are remote and the manifests cover all paths, a table reading local copies from the
+# cache reads their footers
 scan_metadata <- function(con,path,source,from_files=FALSE){
-  if (!isTRUE(from_files) && length(source)>0 && all(is_remote(source))) {
+  if (!isTRUE(from_files) && length(source)>0 && all(is_remote(c(path,source)))) {
     recorded <- lapply(unique(source),manifest_footers)
     if (!any(vapply(recorded,is.null,logical(1)))) return(merge_footers(do.call(c,recorded)))
   }
@@ -438,7 +438,7 @@ parquet_sources_table <- function(scans,metadata){
   metadata <- lapply(metadata,new_parquet_metadata)
   single <- function(value)is.atomic(value) && length(value)==1 && is.null(names(value))
   entries <- unique(unlist(lapply(metadata,function(m)names(m)[vapply(unclass(m),single,logical(1))])))
-  sources <- dplyr::tibble(path=vapply(scans,function(scan)paste0(scan$given,collapse=", "),""))
+  sources <- dplyr::tibble(path=vapply(scans,function(scan)paste0(scan$source,collapse=", "),""))
   for (entry in setdiff(entries,c("path","metadata"))) {
     sources[[entry]] <- vapply(metadata,function(m)if (single(m[[entry]])) as.character(m[[entry]]) else NA_character_,"")
   }

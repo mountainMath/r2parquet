@@ -23,6 +23,11 @@ is_bucket_path <- function(path){
   grepl("^(r2|s3)://",path)
 }
 
+# paths at URLs, as opposed to bucket paths and local paths
+is_url <- function(path){
+  !is_bucket_path(path) & grepl("^[a-z0-9]+://",path)
+}
+
 # internally a bucket on R2 is its name and a bucket on an S3 service is s3://name, so the code written for R2
 # serves both; the path of keys in a bucket as r2://bucket/key or s3://bucket/key
 bucket_url <- function(r2_bucket,key=""){
@@ -76,6 +81,23 @@ network_error <- function(url,reason,call=NULL){
 with_network <- function(url,expr){
   tryCatch(expr,curl_error=function(e)stop(network_error(url,sub("^.*\n","",conditionMessage(e)))))
 }
+
+# stop for the response to a failed request (status 400 and up): an r2parquet_access_denied for 401 and 403
+# with what access to the path depends on, an r2parquet_not_found for 404, a plain error otherwise. what names
+# the request, like "Reading r2://bucket/key", detail, like the response body, goes on a line of its own
+stop_for_status <- function(response,what,path,detail=NULL){
+  status <- httr::status_code(response)
+  if (status<400) return(invisible(response))
+  message <- paste0(what," failed with status ",status,".",access_hint(status,path),
+                    if (length(detail)==1 && nzchar(detail)) paste0("\n",detail))
+  call <- sys.call(-1)
+  stop(if (status %in% c(401,403)) r2parquet_error("access_denied",message,call)
+       else if (status==404) r2parquet_error("not_found",message,call)
+       else simpleError(message,call))
+}
+
+# a count with its noun, "1 file", "2 files"
+plural <- function(n,noun)paste0(n," ",noun,if (n!=1) "s")
 
 # the first of the environment variables that is set, "" if none is
 first_env <- function(env_vars){
@@ -261,14 +283,12 @@ r2_delete_objects <- function(r2_bucket,r2_paths){
     response <- r2_request("POST",r2_bucket,query=list(delete=""),body=body,
                            headers=list("content-md5"=base64_md5(body),"content-type"="application/xml"))
     content <- httr::content(response,"text",encoding="UTF-8")
-    if (httr::status_code(response)>=400) {
-      stop(paste0("Removing files from ",bucket_label(r2_bucket)," failed with status ",httr::status_code(response),".",access_hint(httr::status_code(response),bucket_url(r2_bucket)),"\n",content))
-    }
+    stop_for_status(response,paste0("Removing files from ",bucket_label(r2_bucket)),bucket_url(r2_bucket),content)
     # with quiet mode the response only lists the objects that could not be deleted
     errors <- xml_elements(content,"Error")
     if (length(errors)>0) {
       error_messages <- paste0(xml_field(errors,"Key"),": ",xml_field(errors,"Message")," (",xml_field(errors,"Code"),")")
-      stop(paste0("Removing ",length(errors)," file",if (length(errors)>1) "s"," from ",bucket_label(r2_bucket)," failed. ",
+      stop(paste0("Removing ",plural(length(errors),"file")," from ",bucket_label(r2_bucket)," failed. ",
                   paste0(error_messages,collapse=", ")))
     }
   }
@@ -281,11 +301,9 @@ base64_md5 <- function(body){
 
 # check if there is an object, as opposed to a directory, at the path
 r2_object_exists <- function(r2_bucket,r2_path){
-  status <- httr::status_code(r2_request("HEAD",r2_bucket,r2_path))
-  if (status>=400 && status!=404) {
-    message <- paste0("Checking ",r2_path," in ",bucket_label(r2_bucket)," failed with status ",status,".",access_hint(status,bucket_url(r2_bucket,r2_path)))
-    stop(if (status %in% c(401,403)) r2parquet_error("access_denied",message) else message)
-  }
+  response <- r2_request("HEAD",r2_bucket,r2_path)
+  status <- httr::status_code(response)
+  if (status!=404) stop_for_status(response,paste0("Checking ",r2_path," in ",bucket_label(r2_bucket)),bucket_url(r2_bucket,r2_path))
   status<400
 }
 
@@ -413,8 +431,8 @@ r2_put_body <- function(r2_bucket,r2_path,body,content_type,what="the file",head
   response <- r2_request("PUT",r2_bucket,r2_path,body=body,headers=c(list("content-type"=content_type),headers))
   status <- httr::status_code(response)
   if (status>=400 && !(status==412 && length(headers)>0)) {
-    stop(paste0("Uploading ",what," to ",bucket_url(r2_bucket,r2_path)," failed with status ",status,".",access_hint(status,bucket_url(r2_bucket,r2_path)),"\n",
-                httr::content(response,"text",encoding="UTF-8")))
+    stop_for_status(response,paste0("Uploading ",what," to ",bucket_url(r2_bucket,r2_path)),bucket_url(r2_bucket,r2_path),
+                    httr::content(response,"text",encoding="UTF-8"))
   }
   invisible(response)
 }
@@ -439,15 +457,20 @@ r2_ancestors <- function(r2_path){
   ancestors
 }
 
-# the parsed manifest at a key with the etag of the object as an attribute, NULL if there is none, and an empty
-# one without metadata, which makes the caller rebuild it from a listing, if it can't be parsed
+# the parsed manifest at a key with the etag of the object as an attribute, NULL if there is none, and, with a
+# warning, an empty one without metadata if it can't be parsed, which makes readers fall back to the footers and
+# r2_update_manifest rebuild it from a listing
 r2_get_manifest <- function(r2_bucket,key){
-  response <- r2_request("GET",r2_bucket,key)
+  manifest_response(r2_request("GET",r2_bucket,key),bucket_url(r2_bucket,key))
+}
+
+# the manifest from the response to the GET of its path, for r2_get_manifest and url_get_manifest
+manifest_response <- function(response,path){
   status <- httr::status_code(response)
   if (status==404) return(NULL)
-  if (status>=400) stop(paste0("Reading ",bucket_url(r2_bucket,key)," failed with status ",status,".",access_hint(status,bucket_url(r2_bucket,key))))
+  stop_for_status(response,paste0("Reading the manifest at ",path),path)
   manifest <- tryCatch(parse_manifest(httr::content(response,"text",encoding="UTF-8")),error=function(e){
-    warning(paste0(bucket_url(r2_bucket,key)," is not a valid manifest and gets rewritten."),call.=FALSE)
+    warning(paste0(path," is not a valid manifest, write_manifest() or the next upload to its directory rewrites it."),call.=FALSE)
     structure(manifest_files(),directory=TRUE,has_metadata=FALSE)
   })
   etag <- clean_etag(httr::headers(response)$etag)
@@ -514,8 +537,7 @@ r2_update_manifest <- function(r2_bucket,r2_dir,create=FALSE,objects=NULL,upload
     } else {
       files <- existing[!(existing$path %in% c(r2_relative(removed,r2_dir),uploaded$path)),]
     }
-    files <- rbind(files[,columns],uploaded[,columns])
-    files <- files[order(files$path,method="radix"),]
+    files <- sorted_files(rbind(files[,columns],uploaded[,columns]))
     if (nrow(files)==0) {
       if (!is.null(existing)) r2_delete_objects(r2_bucket,key)
       return(if (!is.null(existing)) key)
@@ -551,7 +573,7 @@ r2_update_manifests <- function(r2_bucket,r2_dirs,create=character(),objects=NUL
     manifests <- c(manifests,manifest)
   }
   if (length(failed)>0) {
-    warning(paste0(length(failed)," manifest",if (length(failed)>1) "s"," could not be updated and ",
+    warning(paste0(plural(length(failed),"manifest")," could not be updated and ",
                    if (length(failed)>1) "are" else "is"," out of date, write_manifest rewrites ",
                    if (length(failed)>1) "them" else "it",":\n",paste0(failed,collapse="\n")),call.=FALSE)
   }
@@ -612,7 +634,7 @@ r2_upload <- function(path,r2_bucket,r2_path,stale=NULL,directory=FALSE){
   objects <- if (create || !is.null(stale)) r2_objects(r2_bucket,listed)
   removed <- as.character(if (!is.null(stale)) stale(objects,r2_paths))
   if (length(removed)>0) {
-    message("Removing ",length(removed)," stale parquet file",if (length(removed)>1) "s"," from ",bucket_url(r2_bucket,listed),".")
+    message("Removing ",plural(length(removed),"stale parquet file")," from ",bucket_url(r2_bucket,listed),".")
     r2_delete_objects(r2_bucket,removed)
   }
   for (i in seq_along(files)) {
@@ -639,9 +661,7 @@ r2_list_objects <- function(r2_bucket,prefix=""){
     query <- c(list("list-type"="2"),if (prefix!="") list(prefix=prefix),if (!is.null(token)) list("continuation-token"=token))
     response <- r2_request("GET",r2_bucket,query=query)
     content <- httr::content(response,"text",encoding="UTF-8")
-    if (httr::status_code(response)>=400) {
-      stop(paste0("Listing ",bucket_label(r2_bucket)," failed with status ",httr::status_code(response),".",access_hint(httr::status_code(response),bucket_url(r2_bucket)),"\n",content))
-    }
+    stop_for_status(response,paste0("Listing ",bucket_label(r2_bucket)),bucket_url(r2_bucket),content)
     objects <- xml_elements(content,"Contents")
     pages[[length(pages)+1]] <- data.frame(key=xml_field(objects,"Key"),
                                            size=as.numeric(xml_field(objects,"Size")),
@@ -935,10 +955,10 @@ remove_parquet <- function(path,purge_cache=TRUE) {
     stop("path has to be one or more paths of the form r2://bucket/path or s3://bucket/path, local paths, or a lazy table from parquet_tbl.")
   }
   is_bucket <- is_bucket_path(path)
-  is_url <- !is_bucket & grepl("^[a-z0-9]+://",path)
-  if (any(is_url)) {
+  at_url <- is_url(path)
+  if (any(at_url)) {
     stop(paste0("Files at URLs can't be removed, use the r2://bucket/path or s3://bucket/path form instead: ",
-                paste0(path[is_url],collapse=", "),"."))
+                paste0(path[at_url],collapse=", "),"."))
   }
   local <- lapply(path[!is_bucket],local_removal)
   resolved <- lapply(path[is_bucket],function(p){
@@ -975,7 +995,7 @@ remove_parquet <- function(path,purge_cache=TRUE) {
     directories <- setdiff(unlist(lapply(in_bucket,`[[`,"directories")),r2_dirname(manifests))
     manifests <- c(manifests,r2_update_manifests(r2_bucket,directories,removed=r2_paths))
     if (purge_cache) r2_purge_cache_after_change(r2_bucket,c(r2_paths,manifests))
-    message(paste0("Removed ",length(r2_paths)," file",if (length(r2_paths)>1) "s" else ""," from ",bucket_label(r2_bucket),"."))
+    message(paste0("Removed ",plural(length(r2_paths),"file")," from ",bucket_label(r2_bucket),"."))
     removed <- c(removed,bucket_url(r2_bucket,r2_paths))
   }
   if (length(local)>0) {
@@ -987,7 +1007,7 @@ remove_parquet <- function(path,purge_cache=TRUE) {
     for (d in directories[order(-nchar(directories))]) {
       if (dir.exists(d) && length(dir(d,all.files=TRUE,no..=TRUE))==0) unlink(d,recursive=TRUE)
     }
-    message(paste0("Removed ",length(files)," local file",if (length(files)>1) "s","."))
+    message(paste0("Removed ",plural(length(files),"local file"),"."))
     removed <- c(removed,files)
   }
   invisible(removed)
@@ -997,7 +1017,9 @@ remove_parquet <- function(path,purge_cache=TRUE) {
 is_parquet_file <- function(path){
   con <- file(path,"rb")
   on.exit(close(con))
-  rawToChar(readBin(con,"raw",4)) %in% c("PAR1","PARE")
+  magic <- readBin(con,"raw",4)
+  # compared as bytes, rawToChar() fails on files starting with a nul byte
+  identical(magic,charToRaw("PAR1")) || identical(magic,charToRaw("PARE"))
 }
 
 # the files, manifests and directories that removing a local path removes, nothing removed yet

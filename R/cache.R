@@ -16,7 +16,6 @@ cache_directory <- function(){
   sub("(.)/+$","\\1",gsub("\\\\","/",path.expand(cache)))
 }
 
-# the local path of a remote path in the cache, local paths are not cached and have no place there
 # the checks of the session: for each local path cache_lookup checked against the remote, whether the copy was
 # current, so a dataset gets checked once per session, remote data rarely changes. clear_cache_checks() resets it
 cache_checks <- new.env(parent=emptyenv())
@@ -30,6 +29,7 @@ forget_checks <- function(local){
   }
 }
 
+# the local path of a remote path in the cache, local paths are not cached and have no place there
 remote_cache_location <- function(path,cache_dir){
   if (!is_remote(path)) stop("Expected an r2://bucket/path, s3://bucket/path or a URL, got ",path,".")
   cache_location(path,cache_dir)
@@ -143,20 +143,21 @@ etag_is_md5 <- function(response){
 # download from a public URL to a local file, with whether its etag is an MD5 hash as an attribute
 http_download <- function(url,file){
   response <- with_network(url,httr::GET(url,httr::write_disk(file,overwrite=TRUE)))
-  if (httr::status_code(response)>=400) {
-    unlink(file)
-    stop(paste0("Downloading ",url," failed with status ",httr::status_code(response),".",access_hint(httr::status_code(response),url)))
-  }
+  if (httr::status_code(response)>=400) unlink(file)
+  stop_for_status(response,paste0("Downloading ",url),url)
   invisible(structure(file,etag_is_md5=etag_is_md5(response)))
+}
+
+# the parsed manifest at a URL, like r2_get_manifest
+url_get_manifest <- function(url){
+  manifest_response(http_get(url),url)
 }
 
 # download an object from R2 to a local file, with whether its etag is an MD5 hash as an attribute
 r2_get_object <- function(r2_bucket,r2_path,file){
   response <- r2_request("GET",r2_bucket,r2_path,config=httr::write_disk(file,overwrite=TRUE))
-  if (httr::status_code(response)>=400) {
-    unlink(file)
-    stop(paste0("Downloading ",bucket_url(r2_bucket,r2_path)," failed with status ",httr::status_code(response),".",access_hint(httr::status_code(response),bucket_url(r2_bucket,r2_path))))
-  }
+  if (httr::status_code(response)>=400) unlink(file)
+  stop_for_status(response,paste0("Downloading ",bucket_url(r2_bucket,r2_path)),bucket_url(r2_bucket,r2_path))
   invisible(structure(file,etag_is_md5=etag_is_md5(response)))
 }
 
@@ -191,7 +192,7 @@ r2_cache_source <- function(location){
   is_file <- dataset$is_file
   objects <- dataset$objects
   if (nrow(objects)==0) stop("File or directory ",location$path," does not exist in ",bucket_label(location$bucket),".")
-  files <- manifest_files(if (is_file) basename(location$path) else substring(objects$key,nchar(location$path)+2),
+  files <- manifest_files(if (is_file) basename(location$path) else r2_relative(objects$key,location$path),
                           objects$size,objects$etag,objects$modified)
   files$key <- objects$key
   bucket <- location$bucket
@@ -216,20 +217,16 @@ url_cache_source <- function(location){
       files$key <- url
       return(list(is_file=TRUE,files=files,download=http_download))
     }
-    if (status %in% c(401,403)) stop(r2parquet_error("access_denied",paste0("Checking ",url," failed with status ",status,".",access_hint(status,url))))
-    if (status!=404) stop(paste0("Checking ",url," failed with status ",status,"."))
+    if (status!=404) stop_for_status(response,paste0("Checking ",url),url)
   }
   base <- sub("/+$","",base)
   manifest_url <- paste0(base,"/",manifest_name)
-  response <- http_get(manifest_url)
-  status <- httr::status_code(response)
-  if (status %in% c(401,403)) stop(r2parquet_error("access_denied",paste0("Reading the manifest at ",manifest_url," failed with status ",status,".",access_hint(status,url))))
-  if (status>=400) {
+  files <- url_get_manifest(manifest_url)
+  if (is.null(files)) {
     stop(r2parquet_error("not_found",paste0("No file at ",url," and no manifest at ",manifest_url,
                 ". Directories at URLs can't be listed, they are read through the manifest of their files, see ",
                 "write_manifest(); otherwise pass the URLs of the files, or the r2://bucket/path form with credentials.")))
   }
-  files <- parse_manifest(httr::content(response,"text",encoding="UTF-8"))
   if (nrow(files)==0) stop(paste0("The manifest at ",manifest_url," lists no files."))
   files$key <- paste0(base,"/",url_path_encode(files$path))
   list(is_file=FALSE,files=files,download=http_download)
@@ -327,7 +324,7 @@ sync_cache <- function(location,source){
   local <- location$local
   manifest <- covering_manifest(location,source)
   known <- read_local_manifest(file.path(manifest$dir,manifest_name))
-  if (manifest$prefix!="" && (!manifest$exists || (!source$is_file && !isTRUE(attr(known,"directory"))))) {
+  if (manifest$prefix!="" && !source$is_file && !isTRUE(attr(known,"directory"))) {
     manifest <- list(dir=manifest_directory(location,source),prefix="",path=source$files$path)
     known <- read_local_manifest(file.path(manifest$dir,manifest_name))
   }
@@ -340,7 +337,7 @@ sync_cache <- function(location,source){
   current <- current_files(manifest_dir,remote)
   if (any(!current)) {
     size <- sum(remote$size[!current],na.rm=TRUE)
-    message("Downloading ",sum(!current)," file",if (sum(!current)>1) "s",if (size>0) paste0(" (",format_size(size),")"),
+    message("Downloading ",plural(sum(!current),"file"),if (size>0) paste0(" (",format_size(size),")"),
             " to ",local,".")
     for (i in which(!current)) cache_download(source,remote[i,],targets[i])
   }
@@ -366,9 +363,9 @@ sync_cache <- function(location,source){
 
 manifest_columns <- c("path","size","etag","modified")
 
-# manifest entries in the order of their paths, as listings return them, so patched manifests stay in order
+# manifest entries in the byte order of their paths, as listings return them, so patched manifests stay in order
 sorted_files <- function(files){
-  files <- files[order(files$path),]
+  files <- files[order(files$path,method="radix"),]
   rownames(files) <- NULL
   files
 }
@@ -449,23 +446,27 @@ cached_copy <- function(location){
 #' @export
 cache_parquet <- function(path) {
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
-  cache_dir <- cache_directory()
-  vapply(path,function(p){
-    is_r2 <- is_bucket_path(p)
-    if (!is_r2 && !grepl("^https?://",p)) return(p)
+  resolve_remote(path,function(p,cache_dir){
     location <- cache_location(p,cache_dir)
     source <- tryCatch(cache_source(location),error=function(e)e)
     if (inherits(source,"error")) {
       local <- cached_copy(location)
       if (is.null(local)) stop(source)
-      warning(paste0("Checking ",p," failed, using the cached copy in ",local,". ",conditionMessage(source)),call.=FALSE)
+      warn_cached_copy(p,local,source)
       return(local)
     }
     local <- sync_cache(location,source)
     forget_checks(local)
     cache_checks[[local]] <- TRUE
     local
-  },character(1),USE.NAMES=FALSE)
+  })
+}
+
+# the paths the cache resolves paths to: resolve(path, cache directory) for the remote ones, local paths as
+# they are
+resolve_remote <- function(path,resolve){
+  cache_dir <- cache_directory()
+  vapply(path,function(p)if (is_remote(p)) resolve(p,cache_dir) else p,character(1),USE.NAMES=FALSE)
 }
 
 # the remote files of a cached path, from R2 or at a URL
@@ -473,16 +474,19 @@ cache_source <- function(location){
   if (is.null(location$url)) r2_cache_source(location) else url_cache_source(location)
 }
 
+# the warning for a copy that gets read because checking the remote failed, e.g. offline
+warn_cached_copy <- function(p,local,error){
+  warning(paste0("Checking ",p," failed, using the cached copy in ",local,". ",conditionMessage(error)),call.=FALSE)
+}
+
 # the paths parquet_tbl(cache = "offline") reads: the copies in the cache, whether current or not, without any
 # request to the remote, an error for a path that has no copy
 cache_offline <- function(path){
-  cache_dir <- cache_directory()
-  vapply(path,function(p){
-    if (!is_remote(p)) return(p)
+  resolve_remote(path,function(p,cache_dir){
     local <- cached_copy(cache_location(p,cache_dir))
     if (is.null(local)) stop(paste0("No copy of ",p," in the cache. Cache it with cache_parquet() or parquet_tbl(cache = TRUE) first."))
     local
-  },character(1),USE.NAMES=FALSE)
+  })
 }
 
 # the paths parquet_tbl(cache = NULL) reads: the copy in the cache where there is one and it is current, the
@@ -493,9 +497,7 @@ cache_offline <- function(path){
 # checked, e.g. offline, gets used with a warning like cache_parquet does; that is not a verdict on the copy, so
 # it is not remembered and the next call checks again.
 cache_lookup <- function(path){
-  cache_dir <- cache_directory()
-  vapply(path,function(p){
-    if (!is_remote(p)) return(p)
+  resolve_remote(path,function(p,cache_dir){
     # a path that can't be located in the cache, like r2:// without credentials, is left to the remote read
     location <- tryCatch(cache_location(p,cache_dir),error=function(e)NULL)
     if (is.null(location)) return(p)
@@ -505,7 +507,7 @@ cache_lookup <- function(path){
     if (is.null(current)) {
       source <- tryCatch(cache_source(location),error=function(e)e)
       if (inherits(source,"error")) {
-        warning(paste0("Checking ",p," failed, using the cached copy in ",local,". ",conditionMessage(source)),call.=FALSE)
+        warn_cached_copy(p,local,source)
         return(local)
       }
       current <- cache_current(location,source)
@@ -514,7 +516,7 @@ cache_lookup <- function(path){
                                    "Update it with cache_parquet() or parquet_tbl(cache = TRUE)."),call.=FALSE)
     }
     if (current) local else p
-  },character(1),USE.NAMES=FALSE)
+  })
 }
 
 #' forget the cache checks of the session
@@ -563,9 +565,7 @@ cache_contents <- function(cache_dir){
   files <- do.call(rbind,c(list(empty),files))
   files <- files[!duplicated(files$local) & file.exists(files$local),]
   files$path <- cache_remote_path(files$local,cache_dir)
-  files <- files[order(files$path),]
-  rownames(files) <- NULL
-  files[,c("path","local","size","modified","etag")]
+  sorted_files(files)[,c("path","local","size","modified","etag")]
 }
 
 # whether remote files have a copy in the cache, and whether it is current, by the etags the manifests recorded

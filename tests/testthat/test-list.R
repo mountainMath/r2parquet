@@ -40,7 +40,11 @@ test_that("r2_list_objects pages through listings and unescapes keys", {
   expect_named(empty,c("key","size","modified","etag"))
   expect_equal(requests[[1]]$query,list("list-type"="2"))
   local_mocked_bindings(r2_request=function(...)fake_response(404,"<Error><Code>NoSuchBucket</Code></Error>"))
-  expect_error(r2parquet:::r2_list_objects("bucket"),"Listing R2 bucket bucket failed with status 404")
+  expect_error(r2parquet:::r2_list_objects("bucket"),"Listing R2 bucket bucket failed with status 404",class="r2parquet_not_found")
+  local_mocked_bindings(r2_request=function(...)fake_response(500,"<Error><Code>InternalError</Code></Error>"))
+  e <- tryCatch(r2parquet:::r2_list_objects("bucket"),error=function(e)e)
+  expect_false(inherits(e,"r2parquet_error"))
+  expect_match(conditionMessage(e),"failed with status 500.\n<Error><Code>InternalError")
 })
 
 test_that("list_parquet on R2 lists files, directories and nothing for missing paths", {

@@ -53,7 +53,7 @@ test_that("failed uploads are reported", {
   local_mocked_bindings(r2_request=function(...)fake_response(403,"<Error><Code>AccessDenied</Code></Error>"),parquet_footers=fake_footers())
   file <- withr::local_tempfile(fileext=".parquet")
   file.create(file)
-  expect_error(upload_parquet(file,"r2://bucket/a.parquet"),"r2://bucket/a.parquet failed with status 403")
+  expect_error(upload_parquet(file,"r2://bucket/a.parquet"),"r2://bucket/a.parquet failed with status 403. Access was denied",class="r2parquet_access_denied")
 })
 
 test_that("directory uploads write a manifest with the footer metadata, single files update the manifest of their directory", {
@@ -384,7 +384,7 @@ test_that("manifest updates trust what the manifest records, rewrites read the f
   # a manifest that can't be parsed gets rewritten with a warning
   bodies[["data/_manifest.json"]] <- "not json"
   puts <- list()
-  expect_warning(upload_parquet(file.path(dir,"d.parquet"),"r2://bucket/data/"),"data/_manifest.json is not a valid manifest and gets rewritten")
+  expect_warning(upload_parquet(file.path(dir,"d.parquet"),"r2://bucket/data/"),"data/_manifest.json is not a valid manifest")
   expect_equal(vapply(puts[["data/_manifest.json"]]$files,`[[`,"",i="path"),paste0(c("a","b","c","d"),".parquet"))
 })
 

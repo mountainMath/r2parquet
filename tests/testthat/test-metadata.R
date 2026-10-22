@@ -235,16 +235,52 @@ test_that("remote metadata comes from the nearest manifest, or from the footers 
   expect_warning(result <- parquet_metadata(c("r2://bucket/plain/a.parquet","r2://bucket/data/year=2022")),"disagree on the metadata entry source")
   expect_equal(unclass(result),list(source="s",license="m"))
   expect_equal(footers,"r2://bucket/plain/a.parquet")
-  # a table reads the manifests of the paths it was resolved from, or the footers of the files it reads
+  # a table reads the manifests of the paths it was given when the files it reads are remote, a table reading
+  # copies from the cache the footers of the copies
   dir <- withr::local_tempdir()
   data_to_parquet(data.frame(a=1),file.path(dir,"local.parquet"),metadata=list(source="local"))
   tbl <- parquet_tbl(file.path(dir,"local.parquet"))
   expect_equal(unclass(parquet_metadata(tbl)),list(source="local"))
   attr(tbl,"r2parquet_source") <- "r2://bucket/data/year=2022"
-  expect_equal(unclass(parquet_metadata(tbl)),list(source="s",license="m"))
-  expect_equal(unclass(parquet_metadata(tbl,from_files=TRUE)),list(source="local"))
-  attr(tbl,"r2parquet_source") <- "r2://bucket/plain/a.parquet"
   expect_equal(unclass(parquet_metadata(tbl)),list(source="local"))
+  footers <- character()
+  attr(tbl,"r2parquet_paths") <- "r2://bucket/data/year=2022/**/*.parquet"
+  expect_equal(unclass(parquet_metadata(tbl)),list(source="s",license="m"))
+  expect_length(footers,0)
+  expect_equal(unclass(parquet_metadata(tbl,from_files=TRUE)),list(source="f"))
+  attr(tbl,"r2parquet_source") <- "r2://bucket/plain/a.parquet"
+  expect_equal(unclass(parquet_metadata(tbl)),list(source="f"))
+  expect_equal(footers,rep("r2://bucket/data/year=2022/**/*.parquet",2))
+  # collect_parquet attaches what parquet_metadata returns
+  footers <- character()
+  attr(tbl,"r2parquet_source") <- "r2://bucket/data/year=2022"
+  expect_equal(attr(collect_parquet(tbl),"metadata"),list(source="s",license="m"))
+  expect_length(footers,0)
+})
+
+test_that("remote metadata at URLs comes from the manifests, a denied request for one counts as none", {
+  manifests <- list("https://data.example.com/census/data/_manifest.json"=
+                      manifest_body(c("year=2021/data_0.parquet","year=2022/data_0.parquet"),
+                                    metadata=list(list(source="s",license="l"),list(source="s",license="m"))))
+  gets <- character()
+  local_mocked_bindings(http_get=function(url){
+                          gets <<- c(gets,url)
+                          if (!is.null(manifests[[url]])) return(fake_response(200,manifests[[url]]))
+                          # like S3 answers for missing objects without listing rights
+                          fake_response(if (grepl("^https://data.example.com/census/",url)) 404 else 403)
+                        },
+                        duckdb_parquet_paths=function(con,path)path,
+                        read_parquet_footers=function(con,path)stats::setNames(rep(list(list(source="f")),length(path)),path))
+  expect_equal(unclass(parquet_metadata("https://data.example.com/census/data/year=2022/")),list(source="s",license="m"))
+  expect_equal(gets,paste0("https://data.example.com/census/data/",c("year=2022/",""),"_manifest.json"))
+  # without a manifest below the host the footers get read, a 403 along the way is not an error
+  gets <- character()
+  expect_equal(unclass(parquet_metadata("https://data.example.com/other/a.parquet")),list(source="f"))
+  expect_equal(gets,paste0("https://data.example.com/",c("other/a.parquet/","other/",""),"_manifest.json"))
+  # an unreadable manifest counts as one without metadata, with a warning
+  manifests[["https://data.example.com/census/data/_manifest.json"]] <- "not json"
+  expect_warning(result <- parquet_metadata("https://data.example.com/census/data/"),"is not a valid manifest")
+  expect_equal(unclass(result),list(source="f"))
 })
 
 test_that("footer reads stay out of RStudio's Connections pane", {

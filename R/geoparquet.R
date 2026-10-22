@@ -273,11 +273,11 @@ collect_parquet <- function(tbl,attach_metadata=TRUE) {
   if (isTRUE(attach_metadata)) {
     con <- dbplyr::remote_con(tbl)
     scans <- table_scans(tbl)
-    metadata <- lapply(scans,function(scan)duckdb_parquet_metadata(con,scan$paths))
+    metadata <- lapply(scans,function(scan)scan_metadata(con,scan$paths,scan$source))
     # the metadata attribute is the left-hand table's, which need not be from parquet_tbl
     paths <- attr(tbl,"r2parquet_paths")
     left <- match(list(paths),lapply(scans,function(scan)scan$paths))
-    left_metadata <- if (is.null(paths)) NULL else if (is.na(left)) duckdb_parquet_metadata(con,paths) else metadata[[left]]
+    left_metadata <- if (is.null(paths)) NULL else if (is.na(left)) scan_metadata(con,paths,attr(tbl,"r2parquet_source")) else metadata[[left]]
     data <- attach_parquet_metadata(data,left_metadata,metadata)
     if (length(scans)>0) attr(data,"parquet_sources") <- parquet_sources_table(scans,metadata)
   }

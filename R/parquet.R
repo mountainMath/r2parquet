@@ -179,11 +179,11 @@ url_directory_files <- function(url,missing_ok=FALSE){
 # directory URLs, ending in a slash, resolve to the files their manifest lists
 duckdb_parquet_paths <- function(con,path){
   is_r2 <- is_bucket_path(path)
-  is_url <- !is_r2 & grepl("^[a-z0-9]+://",path)
-  is_url_dir <- is_url & grepl("^https?://",path) & grepl("/$",sub("[?#].*$","",path))
+  at_url <- is_url(path)
+  is_url_dir <- at_url & grepl("^https?://",path) & grepl("/$",sub("[?#].*$","",path))
   path[is_r2] <- r2_parquet_url(path[is_r2])
-  path[!is_r2 & !is_url] <- local_parquet_glob(path[!is_r2 & !is_url])
-  if (any(is_r2 | is_url)) load_extension(con,"httpfs")
+  path[!is_r2 & !at_url] <- local_parquet_glob(path[!is_r2 & !at_url])
+  if (any(is_r2 | at_url)) load_extension(con,"httpfs")
   duckdb_bucket_secrets(con,path[is_r2])
   if (!any(is_url_dir)) return(path)
   as.character(unlist(lapply(seq_along(path),function(i)if (is_url_dir[i]) url_directory_files(path[i]) else path[i])))
@@ -211,7 +211,7 @@ read_error <- function(e,path,call=NULL){
   p <- if (length(matches)==0) path else path[matches[which.max(nchar(base[matches]))]]
   # the error code and explanation S3 compatible services send along, like SignatureDoesNotMatch: ...
   server <- regmatches(message,regexpr("(?m)^[A-Z][A-Za-z]+: [^\n]+",message,perl=TRUE))
-  is_local <- !grepl("^[a-z0-9]+://",p)
+  is_local <- !is_bucket_path(p) && !is_url(p)
   text <- if (!not_found) {
     paste0("Reading ",p," failed with status ",status,".",access_hint(status,p),if (length(server)==1) paste0("\n",server))
   } else if (is_local && dir.exists(p)) {
@@ -325,24 +325,24 @@ parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL) {
     # a directory at a URL given without the trailing slash can't be told from a file without a request, so
     # the manifests get tried once reading fails
     is_file_url <- grepl("^https?://",path) & !grepl("/$",sub("[?#].*$","",path))
-    is_directory <- is_file_url & vapply(path,function(p)is_file_url[match(p,path)] && !is.null(url_directory_files(p,missing_ok=TRUE)),logical(1))
+    is_directory <- vapply(seq_along(path),function(i)is_file_url[i] && !is.null(url_directory_files(path[i],missing_ok=TRUE)),logical(1))
     if (!any(is_directory)) stop(read_error(tbl,path,call))
     path[is_directory] <- paste0(sub("[?#].*$","",path[is_directory]),"/")
     files <- duckdb_parquet_paths(con,path)
     tbl <- tryCatch(duckdb_parquet_tbl(con,files,hive_partitioning=hive_partitioning),error=function(e)stop(read_error(e,path,call)))
   }
   if (length(duckdb_geometry_columns(tbl))>0) load_extension(con,"spatial")
-  # for parquet_metadata, list_parquet and collect_parquet, dbplyr keeps attributes through its verbs: the
-  # files the table reads, and the paths they were resolved from
+  # for parquet_metadata, list_parquet, remove_parquet and collect_parquet, dbplyr keeps attributes through its
+  # verbs: the files the table reads (local copies for cached paths), and the paths as given
   attr(tbl,"r2parquet_paths") <- files
-  attr(tbl,"r2parquet_source") <- path
+  attr(tbl,"r2parquet_source") <- given
   # tables joined on the right lose their attributes, parquet_sources() finds them by the SQL of their scan
-  assign(as.character(tbl$lazy_query$x),list(paths=files,source=path,given=given),envir=parquet_scans)
+  assign(as.character(tbl$lazy_query$x),list(paths=files,source=given),envir=parquet_scans)
   tbl
 }
 
-# the tables parquet_tbl created in the session, by the SQL of their scan: the files they read, the paths these
-# were resolved from (local copies for cached paths) and the paths as given
+# the tables parquet_tbl created in the session, by the SQL of their scan: the files they read (local copies
+# for cached paths) and the paths as given
 parquet_scans <- new.env(parent=emptyenv())
 
 # the files a scan written by duckdb_parquet_tbl reads, from its SQL, nothing for other SQL
@@ -357,7 +357,7 @@ scan_sql_paths <- function(sql){
 # the parquet_scans entries of the tables a lazy table reads, left-hand table first and each once: dbplyr nests
 # the lazy queries of joined, semi joined and combined tables, with the scans as lazy_base_remote_query leaves;
 # tables created before parquet_scans was reset, e.g. by reloading the package, get recovered from the SQL of
-# their scan, with the paths the left-hand table was resolved from where it is one of them
+# their scan, with the paths the left-hand table was given where it is one of them
 table_scans <- function(x){
   found <- list()
   walk <- function(query){
@@ -370,7 +370,7 @@ table_scans <- function(x){
         source <- if (identical(paths,attr(x,"r2parquet_paths"))) attr(x,"r2parquet_source")
         # local and bucket directories are read as globs for the parquet files in them
         source <- source %||% sub("/\\*\\*/\\*\\.parquet$","",paths)
-        found[[key]] <<- list(paths=paths,source=source,given=source)
+        found[[key]] <<- list(paths=paths,source=source)
       }
     } else if (is.list(query)) {
       for (element in query) walk(element)
@@ -411,11 +411,12 @@ local_parquet_files <- function(path){
   parquet_files(files,info$size,info$mtime)
 }
 
-# the paths a lazy table from parquet_tbl was created from, for list_parquet and remove_parquet
+# the paths a lazy table from parquet_tbl was created from, for list_parquet and remove_parquet: the paths as
+# given, the remote ones for a table reading copies from the cache
 table_source <- function(x){
   path <- attr(x,"r2parquet_paths")
   if (is.null(path)) stop("The table was not created by parquet_tbl, pass the path of the parquet files instead.")
-  # the paths parquet_tbl resolved to the files, local and R2 directories as globs for all parquet files in them
+  # local and bucket directories are read as globs for all parquet files in them
   attr(x,"r2parquet_source") %||% sub("/\\*\\*/\\*\\.parquet$","",path)
 }
 
@@ -454,9 +455,9 @@ list_parquet <- function(x) UseMethod("list_parquet")
 #' @export
 list_parquet.character <- function(x) {
   is_r2 <- is_bucket_path(x)
-  is_url <- !is_r2 & grepl("^[a-z0-9]+://",x)
+  at_url <- is_url(x)
   files <- lapply(seq_along(x),function(i){
-    if (is_r2[i]) r2_parquet_files(x[i]) else if (is_url[i]) url_parquet_files(x[i]) else local_parquet_files(x[i])
+    if (is_r2[i]) r2_parquet_files(x[i]) else if (at_url[i]) url_parquet_files(x[i]) else local_parquet_files(x[i])
   })
   files <- dplyr::distinct(dplyr::bind_rows(parquet_files(character()),files))
   files$cache <- cache_status(files$path,files$etag)

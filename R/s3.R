@@ -7,7 +7,7 @@ s3_get_policy <- function(r2_bucket){
   status <- httr::status_code(response)
   if (status==404) return(list(Version="2012-10-17",Statement=list()))
   content <- httr::content(response,"text",encoding="UTF-8")
-  if (status>=400) stop(paste0("Reading the policy of bucket ",bucket_url(r2_bucket)," failed with status ",status,". ",content))
+  stop_for_status(response,paste0("Reading the policy of bucket ",bucket_url(r2_bucket)),bucket_url(r2_bucket),content)
   policy <- jsonlite::fromJSON(content,simplifyVector=FALSE)
   # a single statement may be given as an object instead of an array
   if (!is.null(names(policy$Statement))) policy$Statement <- list(policy$Statement)
@@ -25,10 +25,10 @@ s3_put_policy <- function(r2_bucket,policy){
   }
   status <- httr::status_code(response)
   if (status>=400) {
-    stop(paste0("Writing the policy of bucket ",bucket_url(r2_bucket)," failed with status ",status,". ",
-                if (status==403) paste0("The credentials need the s3:PutBucketPolicy and s3:DeleteBucketPolicy permissions, ",
-                                        "and Block Public Access of the AWS account must allow public policies. "),
-                httr::content(response,"text",encoding="UTF-8")))
+    stop_for_status(response,paste0("Writing the policy of bucket ",bucket_url(r2_bucket)),bucket_url(r2_bucket),
+                    paste0(if (status==403) paste0("The credentials need the s3:PutBucketPolicy and s3:DeleteBucketPolicy permissions, ",
+                                                   "and Block Public Access of the AWS account must allow public policies. "),
+                           httr::content(response,"text",encoding="UTF-8")))
   }
 }
 
