@@ -9,9 +9,14 @@
 \usage{
 parquet_sources(x, ...)
 
-\method{parquet_sources}{tbl_lazy}(x, from_files = FALSE, ...)
+\method{parquet_sources}{tbl_lazy}(
+  x,
+  from_files = FALSE,
+  language = getOption("r2parquet.language"),
+  ...
+)
 
-\method{parquet_sources}{data.frame}(x, ...)
+\method{parquet_sources}{data.frame}(x, language = getOption("r2parquet.language"), ...)
 
 \method{parquet_sources}{default}(x, ...)
 }
@@ -23,6 +28,10 @@ parquet_sources(x, ...)
 
 \item{from_files}{where lazy tables read the metadata of files on R2, S3 and at URLs from, see
 \code{\link[=parquet_metadata]{parquet_metadata()}}.}
+
+\item{language}{language code like \code{"fr"} for the metadata of each source in that language, as
+\code{\link[=collect_parquet]{collect_parquet()}} attaches it (\code{attribution_fr} becomes \code{attribution}, see its Languages section), or
+\code{NULL} for the metadata as stored. Defaults to the \code{r2parquet.language} option, like \code{\link[=collect_parquet]{collect_parquet()}}.}
 }
 \value{
 a tibble with one row per source table, left-hand table first: \code{path}, the path(s) passed to

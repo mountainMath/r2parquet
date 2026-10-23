@@ -161,6 +161,43 @@ test_that("whole numbers in comparisons are rendered as integers", {
   expect_equal(nrow(dplyr::collect(parquet_tbl(file.path(dir,"subset.parquet")))),3L)
 })
 
+test_that("numbers compared with partition columns are rendered as strings", {
+  dir <- withr::local_tempdir()
+  data_to_parquet(data.frame(PRUID=c("10","59","59"),i=1:3,d=c(1,2,3)),file.path(dir,"parts"),partition_by="PRUID")
+  tbl <- parquet_tbl(file.path(dir,"parts"))
+  expect_equal(attr(tbl,"r2parquet_partitions"),"PRUID")
+  expect_true(exists("PRUID",envir=r2parquet:::parquet_partitions))
+  where <- function(t)sub(".*WHERE ","",gsub("\\s+"," ",as.character(dbplyr::remote_query(t))))
+  assign("partition_literal_noted",FALSE,envir=r2parquet:::parquet_cache)
+  assign("integer_literal_noted",TRUE,envir=r2parquet:::parquet_cache)
+  expect_message(sql <- where(dplyr::filter(tbl,PRUID==59)),'rendered as the string "59"')
+  expect_equal(sql,"(PRUID = '59')")
+  # once per session, on either side, for integers and in %in%
+  expect_silent(expect_equal(where(dplyr::filter(tbl,59L==PRUID,PRUID!=10)),"('59' = PRUID) AND (PRUID <> '10')"))
+  expect_silent(expect_equal(where(dplyr::filter(tbl,10==PRUID)),"('10' = PRUID)"))
+  expect_equal(where(dplyr::filter(tbl,PRUID %in% c(10,59))),"(PRUID IN ('10', '59'))")
+  expect_equal(where(dplyr::filter(tbl,PRUID %in% 59L)),"(PRUID IN ('59'))")
+  # order comparisons and other columns keep the integer rendering, DuckDB asks for an explicit cast on the
+  # string column rather than comparing lexicographically
+  expect_equal(where(dplyr::filter(tbl,PRUID>10,i==2)),"(PRUID > 10) AND (i = 2)")
+  expect_error(dplyr::collect(dplyr::filter(tbl,PRUID>10)),"explicit cast")
+  expect_equal(dplyr::collect(dplyr::filter(tbl,as.integer(PRUID)>10))$i,2:3)
+  expect_equal(where(dplyr::filter(tbl,PRUID=="59")),"(PRUID = '59')")
+  # the string literal lets DuckDB skip the other partition
+  plan <- function(t)DBI::dbGetQuery(dbplyr::remote_con(t),paste0("EXPLAIN ",dbplyr::remote_query(t)))[[2]]
+  expect_match(plan(dplyr::filter(tbl,PRUID==59)),"Scanning Files: 1/2")
+  expect_equal(dplyr::collect(dplyr::filter(tbl,PRUID==59))$i,2:3)
+  expect_equal(dplyr::collect(dplyr::filter(tbl,PRUID %in% c(10,59)))$i,1:3)
+  # a numeric column of another table with the same name is unaffected, DuckDB casts the literal
+  other <- parquet_tbl(local({p <- file.path(dir,"other.parquet"); data_to_parquet(data.frame(PRUID=c(10L,59L),v=1:2),p); p}))
+  expect_equal(where(dplyr::filter(other,PRUID==59)),"(PRUID = '59')")
+  expect_equal(dplyr::collect(dplyr::filter(other,PRUID==59))$v,2L)
+  # the partition column is known for a single file read with its directories too
+  file <- parquet_tbl(dir(file.path(dir,"parts"),pattern="\\.parquet$",recursive=TRUE,full.names=TRUE)[1])
+  expect_equal(attr(file,"r2parquet_partitions"),"PRUID")
+  expect_equal(attr(parquet_tbl(file.path(dir,"parts"),hive_partitioning=FALSE),"r2parquet_partitions"),character(0))
+})
+
 test_that("missing local paths get explained", {
   root <- withr::local_tempdir()
   expect_error(parquet_tbl(file.path(root,"census.parquet")),"No file or directory at .*census.parquet\\.$",class="r2parquet_not_found")

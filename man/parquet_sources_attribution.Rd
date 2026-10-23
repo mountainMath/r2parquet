@@ -4,13 +4,21 @@
 \alias{parquet_sources_attribution}
 \title{attribution of all parquet sources of a table}
 \usage{
-parquet_sources_attribution(x, sep = " | ")
+parquet_sources_attribution(
+  x,
+  sep = " | ",
+  language = getOption("r2parquet.language")
+)
 }
 \arguments{
 \item{x}{a lazy DuckDB table, e.g. from \code{\link[=parquet_tbl]{parquet_tbl()}} and joins of such tables, or data collected with
 \code{\link[=collect_parquet]{collect_parquet()}}.}
 
 \item{sep}{separator between attributions that don't get combined.}
+
+\item{language}{language code like \code{"fr"} for the attributions in that language (\code{attribution_fr}, falling
+back to \code{attribution}), or \code{NULL} for the plain ones, see \code{\link[=parquet_sources]{parquet_sources()}}. Defaults to the
+\code{r2parquet.language} option.}
 }
 \value{
 a string, or \code{NULL} if none of the sources has an attribution, which leaves out a caption passed to

@@ -459,3 +459,216 @@ test_that("writing joined data warns about the metadata of the joined tables", {
   expect_warning(data_to_parquet(dplyr::left_join(parquet_tbl(left),parquet_tbl(plain),by="id"),copy),"^(?!.*Joined)",perl=TRUE)
   expect_no_warning(data_to_parquet(dplyr::left_join(parquet_tbl(plain),parquet_tbl(plain),by="id"),copy))
 })
+
+test_that("labels in several languages round trip and get checked", {
+  df <- data.frame(id=c("a","b"),name=c("Canada","Quebec"),name_fr=c("Canada","Québec"),rate_men=1:2)
+  path <- withr::local_tempfile(fileext=".parquet")
+  metadata <- list(language="en",columns=list(
+    id=list(label="Identifier",label_fr="Identifiant"),
+    name=list(label="Name",description="English name",label_fr="Nom",description_fr="Nom français"),
+    name_fr=list(label_en="Name, French",label_fr="Nom, en français"),
+    rate_men="Rate, men"))
+  data_to_parquet(df,path,metadata=metadata)
+  result <- parquet_metadata(path)
+  expect_equal(result$language,"en")
+  expect_equal(result$columns$id,list(label="Identifier",label_fr="Identifiant"))
+  # a column without a plain label keeps just the suffixed ones, no language is privileged
+  expect_equal(result$columns$name_fr,list(label_en="Name, French",label_fr="Nom, en français"))
+  collected <- collect_parquet(parquet_tbl(path))
+  # without a language the plain label, else the dataset language's, else none
+  expect_equal(attr(collected$name,"label"),"Name")
+  expect_equal(attr(collected$name_fr,"label"),"Name, French")
+  # in French name_fr takes the place of name, with its own French label
+  expect_equal(attr(collect_parquet(parquet_tbl(path),language="fr")$name,"label"),"Nom, en français")
+  expect_error(data_to_parquet(df,path,metadata=list(columns=list(id=list(label=c("a","b"))))),"label has to be a single string")
+  expect_error(data_to_parquet(df,path,metadata=list(columns=list(id=list(label="a",description_fr=1)))),"description_fr has to be a single string")
+  expect_error(data_to_parquet(df,path,metadata=list(language="english")),'metadata\\$language has to be a language code')
+  # printing shows one column per language, the dataset's language first
+  lines <- format(result,width=100)
+  expect_match(lines[grepl("^columns +en",lines)],"^columns +en +fr$")
+  expect_match(lines[grepl("^  id ",lines)],"^  id +Identifier +Identifiant$")
+  expect_match(lines[grepl("^  name ",lines)],"^  name +Name: English name +Nom: Nom français$")
+})
+
+test_that("metadata in several languages prints one column per language", {
+  metadata <- r2parquet:::new_parquet_metadata(list(
+    title="Census profile",title_fr="Profil du recensement",language="en",attribution="Statistics Canada",
+    columns=list(id=list(label="Identifier",label_fr="Identifiant"),
+                 name=list(label_en="Name",label_fr="Nom",description_en="English name",description_fr="Nom français",unit="text"),
+                 value=list(label="Value"))))
+  lines <- format(metadata,width=90)
+  # top-level entries with variants consolidate into one row under a header of the languages
+  expect_match(lines[2],"^ +en +fr$")
+  expect_match(lines[3],"^title +Census profile +Profil du recensement$")
+  expect_equal(lines[4:6],c("language     en","attribution  Statistics Canada","columns      <3 columns, see below>"))
+  expect_match(lines[8],"^columns +en +fr$")
+  expect_match(lines[9],"^  id +Identifier +Identifiant$")
+  # label and description per language, other entries after the text in the dataset's language
+  expect_match(lines[10],'^  name +Name: English name \\{"unit":"text"\\} +Nom: Nom français$')
+  # a column without variants spans the width
+  expect_equal(lines[11],"  value  Value")
+  # the cells start at the same position in the header and the rows
+  expect_equal(as.integer(regexpr("fr",lines[8])),as.integer(regexpr("Identifiant",lines[9])))
+  expect_true(all(nchar(format(metadata,width=40),type="width")<=40))
+  # without a language entry plain text gets its own column, first; top-level peers give the languages
+  lines <- format(r2parquet:::new_parquet_metadata(list(title_en="Profile",title_fr="Profil",
+    columns=list(id=list(label="Identifier",label_fr="Identifiant")))),width=80)
+  expect_match(lines[2],"^ +en +fr$")
+  expect_match(lines[3],"^title +Profile +Profil$")
+  expect_match(lines[6],"^columns +plain +fr$")
+  expect_match(lines[7],"^  id +Identifier +Identifiant$")
+})
+
+test_that("collect_parquet picks the labels and columns of a language", {
+  df <- data.frame(id=c("a","b"),name=c("Canada","Quebec"),name_fr=c("Canada","Québec"),name_de=c("Kanada","Quebec"),
+                   rate=c(1,2),rate_men=c(3,4))
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(df,path,metadata=list(language="en",columns=list(
+    id=list(label="Identifier",label_fr="Identifiant"),name=list(label="Name",label_fr="Nom"),
+    name_fr=list(label="Name, French",label_fr="Nom"),rate="Rate",rate_men=list(label="Rate, men",label_de="Rate, Männer"))))
+  tbl <- parquet_tbl(path)
+  # without a language the data comes as stored
+  plain <- collect_parquet(tbl)
+  expect_equal(names(plain),names(df))
+  expect_equal(attr(plain$id,"label"),"Identifier")
+  # in French the French columns take the place of the plain ones, the other languages go
+  french <- collect_parquet(tbl,language="fr")
+  expect_equal(names(french),c("id","name","rate","rate_men"))
+  expect_equal(as.character(french$name),c("Canada","Québec"))
+  expect_equal(attr(french$id,"label"),"Identifiant")
+  # the column that took the place of name has its own label
+  expect_equal(attr(french$name,"label"),"Nom")
+  # columns without a French label keep the plain one
+  expect_equal(attr(french$rate,"label"),"Rate")
+  # rate_men is no translation of rate, men is not a language of the dataset
+  expect_equal(as.numeric(french$rate_men),c(3,4))
+  # in the dataset's language the other languages' columns go and the plain columns stay
+  english <- collect_parquet(tbl,language="en")
+  expect_equal(names(english),c("id","name","rate","rate_men"))
+  expect_equal(as.character(english$name),c("Canada","Quebec"))
+  expect_equal(attr(english$name,"label"),"Name")
+  # a language the data doesn't have gives the plain columns and labels
+  spanish <- collect_parquet(tbl,language="es")
+  expect_equal(names(spanish),c("id","name","rate","rate_men"))
+  expect_equal(attr(spanish$id,"label"),"Identifier")
+  # the selection happens in the query, columns selected away stay away
+  expect_equal(names(collect_parquet(dplyr::select(tbl,id,name_fr),language="fr")),c("id","name_fr"))
+  expect_equal(names(collect_parquet(dplyr::select(tbl,id,name),language="fr")),c("id","name"))
+  # the option sets the language
+  withr::with_options(list(r2parquet.language="FR"),{
+    expect_equal(attr(collect_parquet(tbl)$id,"label"),"Identifiant")
+  })
+  expect_error(collect_parquet(tbl,language="french"),"language code")
+  # the metadata attribute describes the result: in French, with the columns as collected
+  expect_equal(attr(french,"metadata")$language,"fr")
+  expect_equal(attr(french,"metadata")$columns$name$label,"Nom")
+  expect_null(attr(french,"metadata")$columns$name_fr)
+  expect_equal(unclass(parquet_metadata(french)),attr(french,"metadata"))
+  # the same metadata without collecting; as stored by default
+  expect_equal(unclass(parquet_metadata(tbl,language="fr")),attr(french,"metadata"))
+  expect_equal(parquet_metadata(tbl)$language,"en")
+  expect_equal(unclass(parquet_metadata(spanish)),unclass(parquet_metadata(tbl)))
+})
+
+test_that("metadata collected in a language describes the result in that language", {
+  df <- data.frame(id=c("a","b"),name=c("Canada","Quebec"),name_fr=c("Canada","Québec"),value=1:2)
+  path <- withr::local_tempfile(fileext=".parquet")
+  metadata <- list(title="Census profile",title_fr="Profil du recensement",language="en",
+                   attribution="Statistics Canada",attribution_fr="Statistique Canada",notes="Only in English",
+                   columns=list(id=list(label="Identifier",label_fr="Identifiant",description="The id"),
+                                name=list(label="Name",label_fr="Nom",unit="text")))
+  data_to_parquet(df,path,metadata=metadata)
+  tbl <- parquet_tbl(path)
+  french <- unclass(parquet_metadata(tbl,language="fr"))
+  # entries in the language take the place of the plain ones, in their place, the others are left out
+  expect_equal(names(french),c("title","language","attribution","notes","columns"))
+  expect_equal(french$title,"Profil du recensement")
+  expect_equal(french$attribution,"Statistique Canada")
+  expect_equal(french$notes,"Only in English")
+  expect_equal(french$language,"fr")
+  # column entries resolve the same way, with the other entries kept, and follow the columns collected
+  expect_equal(french$columns,list(id=list(label="Identifiant",description="The id"),name=list(label="Nom",unit="text")))
+  # the dataset's language gives the plain entries without the variants
+  english <- unclass(parquet_metadata(tbl,language="en"))
+  expect_equal(english$title,"Census profile")
+  expect_equal(english$columns$name,list(label="Name",unit="text"))
+  expect_equal(english$language,"en")
+  # a language the dataset doesn't have leaves everything as stored
+  expect_equal(unclass(parquet_metadata(tbl,language="es")),unclass(parquet_metadata(tbl)))
+  # collect_parquet attaches the resolved metadata, and the sources and attribution follow
+  collected <- collect_parquet(tbl,language="fr")
+  expect_equal(attr(collected,"metadata"),french)
+  expect_equal(attr(collected$name,"label"),"Nom")
+  expect_equal(parquet_sources(collected)$attribution,"Statistique Canada")
+  expect_equal(parquet_sources_attribution(collected),"Statistique Canada")
+  expect_equal(parquet_sources_attribution(tbl,language="fr"),"Statistique Canada")
+  expect_equal(parquet_sources_attribution(tbl),"Statistics Canada")
+  withr::with_options(list(r2parquet.language="fr"),{
+    expect_equal(parquet_sources_attribution(tbl),"Statistique Canada")
+    # parquet_metadata ignores the option, it returns what the files hold
+    expect_equal(parquet_metadata(tbl)$language,"en")
+  })
+  # writing the collected data with its metadata gives a French dataset
+  other <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(collected,other,metadata=parquet_metadata(collected))
+  expect_equal(parquet_metadata(other)$title,"Profil du recensement")
+  expect_equal(parquet_metadata(other)$language,"fr")
+  expect_equal(attr(collect_parquet(parquet_tbl(other))$name,"label"),"Nom")
+  # the resolver on a plain list, including a title in several languages without a plain one
+  resolved <- r2parquet:::resolve_language(list(title_en="Profile",title_fr="Profil"),"fr")
+  expect_equal(resolved,list(title="Profil",language="fr"))
+  expect_equal(r2parquet:::resolve_language(list(title="T"),NULL),list(title="T"))
+})
+
+test_that("datasets with only suffixed labels and columns privilege no language", {
+  df <- data.frame(id=c("a","b"),name_en=c("Canada","Quebec"),name_fr=c("Canada","Québec"),name_de=c("Kanada","Quebec"),only_fr=c("x","y"),value=1:2)
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(df,path,metadata=list(columns=list(
+    id=list(label_en="Identifier",label_fr="Identifiant"),name_en=list(label_en="Name",label_fr="Nom"),
+    name_fr=list(label_en="Name, French",label_fr="Nom, en français"),only_fr=list(label_fr="Seulement"),value="Value")))
+  expect_null(parquet_metadata(path)$language)
+  tbl <- parquet_tbl(path)
+  # as stored, without a language: labels only where there is a plain one
+  plain <- collect_parquet(tbl)
+  expect_equal(names(plain),names(df))
+  expect_null(attr(plain$id,"label"))
+  expect_equal(attr(plain$value,"label"),"Value")
+  # the peers name_en and name_fr stand in for the missing plain column, in its place; de is no language of
+  # the dataset, so name_de is no peer
+  french <- collect_parquet(tbl,language="fr")
+  expect_equal(names(french),c("id","name","name_de","only_fr","value"))
+  expect_equal(as.character(french$name),c("Canada","Québec"))
+  expect_equal(attr(french$name,"label"),"Nom, en français")
+  expect_equal(attr(french$id,"label"),"Identifiant")
+  # a lone suffixed column without a plain one or a peer is left alone, with its label in the language
+  expect_equal(attr(french$only_fr,"label"),"Seulement")
+  english <- collect_parquet(tbl,language="en")
+  expect_equal(names(english),c("id","name","name_de","only_fr","value"))
+  expect_equal(as.character(english$name),c("Canada","Quebec"))
+  expect_equal(attr(english$name,"label"),"Name")
+  # asking for German makes name_de a peer, which then stands in for name
+  german <- collect_parquet(tbl,language="de")
+  expect_equal(names(german),c("id","name","only_fr","value"))
+  expect_equal(as.character(german$name),c("Kanada","Quebec"))
+  # a language none of the peers have keeps them as stored, there is no plain column to fall back on
+  expect_equal(names(collect_parquet(tbl,language="es")),names(df))
+  # a dataset language without plain labels labels the plain read in that language
+  data_to_parquet(df,path,metadata=list(language="fr",columns=list(id=list(label_en="Identifier",label_fr="Identifiant"))))
+  expect_equal(attr(collect_parquet(parquet_tbl(path))$id,"label"),"Identifiant")
+  expect_equal(attr(collect_parquet(parquet_tbl(path),language="en")$id,"label"),"Identifier")
+  expect_equal(attr(collect_parquet(parquet_tbl(path),language="es")$id,"label"),"Identifiant")
+})
+
+test_that("language columns of joined tables get picked too", {
+  left <- withr::local_tempfile(fileext=".parquet")
+  right <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(data.frame(id=c("a","b"),value=1:2),left,metadata=list(columns=list(id="Identifier")))
+  data_to_parquet(data.frame(id=c("a","b"),name=c("One","Two"),name_fr=c("Un","Deux")),right,
+                  metadata=list(language="en",columns=list(name=list(label="Name",label_fr="Nom"))))
+  joined <- dplyr::left_join(parquet_tbl(left),parquet_tbl(right),by="id")
+  result <- collect_parquet(joined,language="fr")
+  expect_equal(names(result),c("id","value","name"))
+  expect_equal(as.character(result$name),c("Un","Deux"))
+  expect_equal(attr(result$name,"label"),"Nom")
+  expect_equal(attr(result$id,"label"),"Identifier")
+})

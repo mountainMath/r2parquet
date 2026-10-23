@@ -131,6 +131,9 @@ test_that("local partitioned directories get read with their partition columns a
   result <- dplyr::collect(parquet_tbl(file.path(dir,"data")))
   expect_equal(sort(result$value),1:100)
   expect_setequal(result$group,c("001","002"))
+  # also values DuckDB would read as numbers
+  data_to_parquet(data.frame(group=c("10","24"),value=1:2),file.path(dir,"numbers"),partition_by="group")
+  expect_equal(sort(dplyr::collect(parquet_tbl(file.path(dir,"numbers")))$group),c("10","24"))
   expect_equal(nrow(dplyr::collect(parquet_tbl(file.path(dir,"data"),hive_partitioning=FALSE))),100)
   expect_false("group" %in% colnames(parquet_tbl(file.path(dir,"data"),hive_partitioning=FALSE)))
 })

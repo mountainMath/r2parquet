@@ -250,12 +250,58 @@ st_filter.tbl_r2parquet_connection <- st_filter.tbl_duckdb_connection
 #' attached as the `parquet_sources` attribute, see [parquet_sources()], and columns the left-hand table has no
 #' label for get the labels of the other tables.
 #'
+#' # Languages
+#' Datasets can carry their text in several languages, see the Metadata section of [data_to_parquet()]:
+#' labels and columns per language are named with the language as suffix, `label_fr` and `name_fr`, next to
+#' a plain `label` and `name` or without them, and the `language` entry names the language of the plain
+#' ones. With `language`, the result is in that language where the data has it:
+#' * column labels come from the `label_<language>` entries, else from `label`, else from the label in the
+#'   dataset's language;
+#' * a column in that language takes the place and name of its plain column, `name_fr` gets collected as
+#'   `name`, and the columns in the other languages get left out. The plain column stays where the data has
+#'   none in the language asked for. The selection happens before the query runs, so the columns left out
+#'   don't get read. Which suffixes are languages is known from the metadata, the `language` entry and the
+#'   suffixes of the labels, so a column like `rate_men` next to `rate` is left alone.
+#'
+#' The metadata attached (the `metadata` and `parquet_sources` attributes) describes the result in that
+#' language too: `title_fr`, `attribution_fr` and `label_fr` take the place of `title`, `attribution` and
+#' `label` (falling back to the plain entry and then to the dataset language's), the other languages' entries
+#' are left out, `columns` is keyed by the columns as collected and the `language` entry names the language
+#' delivered. Writing the result with that metadata therefore gives a correct dataset in one language. The
+#' metadata as stored, with all languages, is `parquet_metadata(tbl)` on the lazy table or the path. A
+#' dataset without anything in the language asked for is collected as stored, metadata included.
+#'
+#' Without `language` the result is the dataset as stored, with all its columns, labelled with the plain
+#' labels, else those in the dataset's language; columns with labels only in other languages get none. The
+#' default is the `r2parquet.language` option, so `options(r2parquet.language = "fr")` sets the language once
+#' for a session.
+#'
 #' @param tbl lazy DuckDB table, e.g. from [parquet_tbl()] or [`sf::st_filter()`][st_filter.tbl_duckdb_connection].
 #' @param attach_metadata `TRUE` (default) or `FALSE`: attach the metadata of the parquet files as attributes.
+#' @param language language code like `"en"` or `"fr"` to collect the labels and columns in, see the Languages
+#'   section, or `NULL` for the dataset as stored. Defaults to the `r2parquet.language` option.
 #' @return a tibble, or an sf object if the table has GEOMETRY columns.
 #' @export
-collect_parquet <- function(tbl,attach_metadata=TRUE) {
+collect_parquet <- function(tbl,attach_metadata=TRUE,language=getOption("r2parquet.language")) {
   call <- sys.call()
+  language <- check_language(language)
+  con <- dbplyr::remote_con(tbl)
+  scans <- table_scans(tbl)
+  read_metadata <- isTRUE(attach_metadata) || !is.null(language)
+  metadata <- if (read_metadata) lapply(scans,function(scan)scan_metadata(con,scan$paths,scan$source))
+  # the metadata attribute is the left-hand table's, which need not be from parquet_tbl
+  paths <- attr(tbl,"r2parquet_paths")
+  left <- match(list(paths),lapply(scans,function(scan)scan$paths))
+  left_metadata <- if (!read_metadata || is.null(paths)) NULL else if (is.na(left)) scan_metadata(con,paths,attr(tbl,"r2parquet_source")) else metadata[[left]]
+  # in a language, the columns in that language take the place of their plain columns and the other
+  # languages' columns get left out, before collecting so they don't get read
+  columns <- colnames(tbl)
+  selection <- NULL
+  if (!is.null(language)) {
+    languages <- unlist(lapply(c(list(left_metadata),metadata),metadata_languages))
+    selection <- language_columns(columns,language,languages)
+    if (!is.null(selection)) tbl <- dplyr::select(tbl,dplyr::all_of(selection))
+  }
   # the files get read now, failures get explained as in parquet_tbl
   geometry_columns <- NULL
   data <- tryCatch({
@@ -271,15 +317,14 @@ collect_parquet <- function(tbl,attach_metadata=TRUE) {
     data <- sf::st_as_sf(data,sf_column_name=duckdb_geometry_column(tbl,geometry_columns=geometry_columns)$name)
   }
   if (isTRUE(attach_metadata)) {
-    con <- dbplyr::remote_con(tbl)
-    scans <- table_scans(tbl)
-    metadata <- lapply(scans,function(scan)scan_metadata(con,scan$paths,scan$source))
-    # the metadata attribute is the left-hand table's, which need not be from parquet_tbl
-    paths <- attr(tbl,"r2parquet_paths")
-    left <- match(list(paths),lapply(scans,function(scan)scan$paths))
-    left_metadata <- if (is.null(paths)) NULL else if (is.na(left)) scan_metadata(con,paths,attr(tbl,"r2parquet_source")) else metadata[[left]]
+    # in a language the metadata describes the result: entries in that language in place of the plain ones,
+    # columns as collected, so the labels are the plain ones of the resolved metadata
+    if (!is.null(language)) {
+      left_metadata <- resolve_language(left_metadata,language,columns,selection)
+      metadata <- lapply(metadata,resolve_language,language)
+    }
     data <- attach_parquet_metadata(data,left_metadata,metadata)
-    if (length(scans)>0) attr(data,"parquet_sources") <- parquet_sources_table(scans,metadata)
+    if (length(scans)>0) attr(data,"parquet_sources") <- parquet_sources_table(scan_paths(scans),metadata)
   }
   data
 }

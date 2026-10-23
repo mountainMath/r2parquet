@@ -10,11 +10,11 @@
 \usage{
 parquet_metadata(x, ...)
 
-\method{parquet_metadata}{character}(x, from_files = FALSE, ...)
+\method{parquet_metadata}{character}(x, from_files = FALSE, language = NULL, ...)
 
-\method{parquet_metadata}{tbl_lazy}(x, from_files = FALSE, ...)
+\method{parquet_metadata}{tbl_lazy}(x, from_files = FALSE, language = NULL, ...)
 
-\method{parquet_metadata}{data.frame}(x, ...)
+\method{parquet_metadata}{data.frame}(x, language = NULL, ...)
 
 \method{parquet_metadata}{default}(x, ...)
 }
@@ -34,12 +34,21 @@ parquet_metadata(x, ...)
 \item \code{FALSE} (default): the manifest, where there is one.
 \item \code{TRUE}: the footers of the parquet files, current even when the files were changed with other tools.
 }}
+
+\item{language}{\code{NULL} (default) for the metadata as stored, with the entries of all languages, or a
+language code like \code{"fr"} for the metadata as \code{\link[=collect_parquet]{collect_parquet()}} attaches it when collecting in that
+language, see its Languages section: \code{title_fr} and \code{label_fr} take the place of \code{title} and \code{label}, the
+other languages' entries are left out, \code{columns} follows the columns collected and the \code{language} entry
+names the language. Unlike \code{\link[=collect_parquet]{collect_parquet()}}, the \code{r2parquet.language} option does not apply, so that
+\code{parquet_metadata(tbl)} always returns everything the files hold.}
 }
 \value{
 a named list of the metadata entries, empty if the files have none (or the data was collected
 without attaching it), of class \code{parquet_metadata}, which only changes how it prints: one line per entry,
 lists as compact JSON, and the \code{columns} entry as a table of the columns with their labels and
-descriptions.
+descriptions. Entries in several languages (\code{title} and \code{title_fr}, \code{label_en} and \code{label_fr}) are
+consolidated into one row with a column per language, the dataset's language (its \code{language} entry,
+or plain text without one) first.
 }
 \description{
 Reads the key-value metadata from the footer of parquet files, like the \code{source}, \code{license}, \code{notes} and

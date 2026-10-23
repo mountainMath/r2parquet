@@ -4,12 +4,19 @@
 \alias{collect_parquet}
 \title{collect a lazy DuckDB table of parquet data with its metadata}
 \usage{
-collect_parquet(tbl, attach_metadata = TRUE)
+collect_parquet(
+  tbl,
+  attach_metadata = TRUE,
+  language = getOption("r2parquet.language")
+)
 }
 \arguments{
 \item{tbl}{lazy DuckDB table, e.g. from \code{\link[=parquet_tbl]{parquet_tbl()}} or \code{\link[=st_filter.tbl_duckdb_connection]{sf::st_filter()}}.}
 
 \item{attach_metadata}{\code{TRUE} (default) or \code{FALSE}: attach the metadata of the parquet files as attributes.}
+
+\item{language}{language code like \code{"en"} or \code{"fr"} to collect the labels and columns in, see the Languages
+section, or \code{NULL} for the dataset as stored. Defaults to the \code{r2parquet.language} option.}
 }
 \value{
 a tibble, or an sf object if the table has GEOMETRY columns.
@@ -35,3 +42,32 @@ joins. The metadata of every table from \code{\link[=parquet_tbl]{parquet_tbl()}
 attached as the \code{parquet_sources} attribute, see \code{\link[=parquet_sources]{parquet_sources()}}, and columns the left-hand table has no
 label for get the labels of the other tables.
 }
+\section{Languages}{
+Datasets can carry their text in several languages, see the Metadata section of \code{\link[=data_to_parquet]{data_to_parquet()}}:
+labels and columns per language are named with the language as suffix, \code{label_fr} and \code{name_fr}, next to
+a plain \code{label} and \code{name} or without them, and the \code{language} entry names the language of the plain
+ones. With \code{language}, the result is in that language where the data has it:
+\itemize{
+\item column labels come from the \verb{label_<language>} entries, else from \code{label}, else from the label in the
+dataset's language;
+\item a column in that language takes the place and name of its plain column, \code{name_fr} gets collected as
+\code{name}, and the columns in the other languages get left out. The plain column stays where the data has
+none in the language asked for. The selection happens before the query runs, so the columns left out
+don't get read. Which suffixes are languages is known from the metadata, the \code{language} entry and the
+suffixes of the labels, so a column like \code{rate_men} next to \code{rate} is left alone.
+}
+
+The metadata attached (the \code{metadata} and \code{parquet_sources} attributes) describes the result in that
+language too: \code{title_fr}, \code{attribution_fr} and \code{label_fr} take the place of \code{title}, \code{attribution} and
+\code{label} (falling back to the plain entry and then to the dataset language's), the other languages' entries
+are left out, \code{columns} is keyed by the columns as collected and the \code{language} entry names the language
+delivered. Writing the result with that metadata therefore gives a correct dataset in one language. The
+metadata as stored, with all languages, is \code{parquet_metadata(tbl)} on the lazy table or the path. A
+dataset without anything in the language asked for is collected as stored, metadata included.
+
+Without \code{language} the result is the dataset as stored, with all its columns, labelled with the plain
+labels, else those in the dataset's language; columns with labels only in other languages get none. The
+default is the \code{r2parquet.language} option, so \code{options(r2parquet.language = "fr")} sets the language once
+for a session.
+}
+

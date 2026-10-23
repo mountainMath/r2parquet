@@ -12,7 +12,11 @@ parquet_tbl(path, hive_partitioning = TRUE, con = NULL, cache = NULL)
 
 \item{hive_partitioning}{\code{TRUE} (default) or \code{FALSE}: derive partition columns from \code{key=value} components
 of the file paths. This includes the directories above a single file, so reading
-\code{data/year=2021/data_0.parquet} adds a \code{year} column.}
+\code{data/year=2021/data_0.parquet} adds a \code{year} column. Partition values are read as strings, whatever
+they look like, so \code{PRUID=01} and \code{PRUID=10} give the same type; on \code{\link[=parquet_connection]{parquet_connection()}}, numbers
+compared with a partition column for equality (\code{==}, \code{!=}, \code{\%in\%}) are rendered as strings, with a
+message once per session, so that \code{filter(year == 2021)} only reads that partition. Order comparisons
+need the cast spelled out, \code{as.integer(year) > 2020}, since strings compare lexicographically.}
 
 \item{con}{DuckDB connection to create the table on. Tables can only be joined when they are on the same
 connection.

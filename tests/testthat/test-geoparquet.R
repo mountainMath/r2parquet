@@ -101,7 +101,8 @@ test_that("local directories of partitioned parquet files get read", {
   data_to_parquet(data,file.path(dir,"nc"),partition_by="high_sid")
   result <- collect_parquet(parquet_tbl(file.path(dir,"nc")))
   expect_equal(nrow(result),nrow(data))
-  expect_equal(sort(result$high_sid),sort(data$high_sid))
+  # partition values come back as strings
+  expect_equal(sort(result$high_sid),as.character(sort(data$high_sid)))
 })
 
 test_that("collecting no rows gives an empty sf object with the crs", {

@@ -10,8 +10,42 @@ parquet_cache <- new.env(parent=emptyenv())
 # the row group statistics no longer apply, so such a filter downloads every row group. Against a DOUBLE column
 # an integer literal is cast on the literal side, so the rewrite is harmless there. Only comparisons are
 # rewritten: in arithmetic `x * 1000.0` keeps integer columns from overflowing, which DuckDB reports as an
-# error instead of promoting.
+# error instead of promoting. Hive partition columns are the other case: their values are read as strings
+# (hive_types_autocast = false in duckdb_parquet_tbl, so `PRUID=01` and `PRUID=10` give the same type), and
+# a number against a VARCHAR column gets the column cast too, above the scan, so `PRUID == 59` would read every
+# partition. Numbers compared for equality with a partition column (`==`, `!=`, `%in%`) are therefore rendered
+# as string literals, which DuckDB prunes partitions on. Order comparisons are left alone: strings compare
+# lexicographically, and DuckDB refuses `PRUID > 10` on a VARCHAR column with a binder error asking for an
+# explicit cast, which is better than a silently wrong `PRUID > '10'`. The translation only sees column names,
+# not the table, so parquet_tbl() records the
+# partition columns of every table it creates in parquet_partitions; a numeric column of another table with
+# the same name is unaffected, DuckDB casts a string literal against a numeric column on the literal side.
 methods::setClass("r2parquet_connection",contains="duckdb_connection")
+
+# the names of the hive partition columns of the tables parquet_tbl created in the session
+parquet_partitions <- new.env(parent=emptyenv())
+
+# whether a translated expression is a reference to a partition column, by its name: dbplyr passes column
+# references to the translation as ident objects (as sql once rendered), other values as themselves
+is_partition_column <- function(x){
+  if (!(inherits(x,"ident") || inherits(x,"sql")) || length(x)!=1) return(FALSE)
+  name <- gsub('""','"',sub('^"(.*)"$',"\\1",as.character(x)))
+  exists(name,envir=parquet_partitions,inherits=FALSE)
+}
+
+# plain numbers compared with partition column x, as the strings partition values are read as, with a message
+# once per session; everything else is returned as is
+partition_literal <- function(x,column){
+  if (!is.numeric(x) || is.object(x) || length(x)==0 || !all(is.finite(x))) return(x)
+  literal <- ifelse(x==trunc(x),formatC(x,format="f",digits=0),as.character(x))
+  if (!isTRUE(parquet_cache$partition_literal_noted)) {
+    parquet_cache$partition_literal_noted <- TRUE
+    message("Comparing the partition column ",column," with the number ",format(x[1]),", rendered as the string \"",literal[1],
+            "\": hive partition values are read as strings, and a string lets DuckDB skip the other partitions. ",
+            "Write it as \"",literal[1],"\" to avoid this message, it is shown once per session.")
+  }
+  literal
+}
 
 # a connection as the package's connection class, the same underlying connection. Only the session connection
 # gets wrapped: dbplyr tells tables apart by the identity of their connection object, so a wrapped copy of a
@@ -38,15 +72,20 @@ integer_literal <- function(x){
 sql_translation.r2parquet_connection <- function(con){
   translation <- NextMethod()
   scalar <- translation$scalar
-  comparison <- function(operator){
+  comparison <- function(operator,equality=FALSE){
     infix <- dbplyr::sql_infix(operator)
-    function(x,y)infix(integer_literal(x),integer_literal(y))
+    function(x,y){
+      if (equality && is_partition_column(x)) return(infix(x,partition_literal(y,x)))
+      if (equality && is_partition_column(y)) return(infix(partition_literal(x,y),y))
+      infix(integer_literal(x),integer_literal(y))
+    }
   }
   parent_in <- scalar$`%in%`
   parent_between <- scalar$between
   translation$scalar <- dbplyr::sql_translator(.parent=scalar,
-    `==`=comparison("="),`!=`=comparison("<>"),`<`=comparison("<"),`<=`=comparison("<="),`>`=comparison(">"),`>=`=comparison(">="),
-    `%in%`=function(x,table)parent_in(x,integer_literal(table)),
+    `==`=comparison("=",equality=TRUE),`!=`=comparison("<>",equality=TRUE),
+    `<`=comparison("<"),`<=`=comparison("<="),`>`=comparison(">"),`>=`=comparison(">="),
+    `%in%`=function(x,table)parent_in(x,if (is_partition_column(x)) partition_literal(table,x) else integer_literal(table)),
     between=function(x,left,right)parent_between(x,integer_literal(left),integer_literal(right)))
   translation
 }
@@ -144,12 +183,18 @@ load_extension <- function(con,name){
   DBI::dbExecute(con,paste0("LOAD ",name))
 }
 
-# lazy table for parquet files readable by duckdb, filters and column selections get pushed down to the parquet scan
-duckdb_parquet_tbl <- function(con,urls,hive_partitioning=TRUE){
+# the scan of parquet files readable by duckdb, as SQL; partition values stay strings, DuckDB would otherwise
+# read PRUID=10 as an integer and PRUID=01 as a string (see the translation above for the filters on them)
+duckdb_parquet_sql <- function(con,urls,hive_partitioning=TRUE){
   urls <- paste0(DBI::dbQuoteString(con,urls),collapse=", ")
   if (grepl(", ",urls,fixed=TRUE)) urls <- paste0("[",urls,"]")
-  dplyr::tbl(con,dplyr::sql(paste0("SELECT * FROM read_parquet(",urls,
-                                   ", hive_partitioning = ",if (hive_partitioning) "true" else "false",")")))
+  paste0("SELECT * FROM read_parquet(",urls,", hive_partitioning = ",if (hive_partitioning) "true" else "false",
+         ", hive_types_autocast = false)")
+}
+
+# lazy table for parquet files readable by duckdb, filters and column selections get pushed down to the parquet scan
+duckdb_parquet_tbl <- function(con,urls,hive_partitioning=TRUE){
+  dplyr::tbl(con,dplyr::sql(duckdb_parquet_sql(con,urls,hive_partitioning)))
 }
 
 # glob pattern for the parquet files in local directories, other paths unchanged
@@ -284,7 +329,11 @@ read_error <- function(e,path,call=NULL){
 #'   (partitioned) parquet files, or a vector of these.
 #' @param hive_partitioning `TRUE` (default) or `FALSE`: derive partition columns from `key=value` components
 #'   of the file paths. This includes the directories above a single file, so reading
-#'   `data/year=2021/data_0.parquet` adds a `year` column.
+#'   `data/year=2021/data_0.parquet` adds a `year` column. Partition values are read as strings, whatever
+#'   they look like, so `PRUID=01` and `PRUID=10` give the same type; on [parquet_connection()], numbers
+#'   compared with a partition column for equality (`==`, `!=`, `%in%`) are rendered as strings, with a
+#'   message once per session, so that `filter(year == 2021)` only reads that partition. Order comparisons
+#'   need the cast spelled out, `as.integer(year) > 2020`, since strings compare lexicographically.
 #' @param con DuckDB connection to create the table on. Tables can only be joined when they are on the same
 #'   connection.
 #'   * `NULL` (default): [parquet_connection()], shared by all calls.
@@ -331,11 +380,18 @@ parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL) {
     files <- duckdb_parquet_paths(con,path)
     tbl <- tryCatch(duckdb_parquet_tbl(con,files,hive_partitioning=hive_partitioning),error=function(e)stop(read_error(e,path,call)))
   }
-  if (length(duckdb_geometry_columns(tbl))>0) load_extension(con,"spatial")
+  # the columns in the files themselves, described without hive partitioning (one bind, as the geometry check
+  # took before): GEOMETRY columns need the spatial extension, and the columns the table has beyond them are
+  # the partition columns, whose filters the translation renders as strings
+  file_columns <- DBI::dbGetQuery(con,paste0("DESCRIBE ",duckdb_parquet_sql(con,files,hive_partitioning=FALSE)))
+  if (any(grepl("^GEOMETRY",file_columns$column_type))) load_extension(con,"spatial")
+  partitions <- setdiff(colnames(tbl),file_columns$column_name)
+  for (column in partitions) assign(column,TRUE,envir=parquet_partitions)
   # for parquet_metadata, list_parquet, remove_parquet and collect_parquet, dbplyr keeps attributes through its
-  # verbs: the files the table reads (local copies for cached paths), and the paths as given
+  # verbs: the files the table reads (local copies for cached paths), the paths as given and the partition columns
   attr(tbl,"r2parquet_paths") <- files
   attr(tbl,"r2parquet_source") <- given
+  attr(tbl,"r2parquet_partitions") <- partitions
   # tables joined on the right lose their attributes, parquet_sources() finds them by the SQL of their scan
   assign(as.character(tbl$lazy_query$x),list(paths=files,source=given),envir=parquet_scans)
   tbl
@@ -347,7 +403,7 @@ parquet_scans <- new.env(parent=emptyenv())
 
 # the files a scan written by duckdb_parquet_tbl reads, from its SQL, nothing for other SQL
 scan_sql_paths <- function(sql){
-  pattern <- "^SELECT \\* FROM read_parquet\\((.*), hive_partitioning = (true|false)\\)$"
+  pattern <- "^SELECT \\* FROM read_parquet\\((.*), hive_partitioning = (true|false), hive_types_autocast = false\\)$"
   if (!grepl(pattern,sql)) return(character())
   urls <- sub(pattern,"\\1",sql)
   quoted <- regmatches(urls,gregexpr("'([^']|'')*'",urls))[[1]]
