@@ -76,7 +76,7 @@ geo_attributes |>
   filter(CMAUID == "933") |>
   select(DBUID, DAUID, CSDUID, CSDNAME, Population = DBPOP2021, Dwellings = DBTDWELL2021) |>
   data_to_parquet(private_path, sort_by = "DBUID",
-                  metadata = parquet_metadata(geo_attributes)[c("title_en", "title_fr", "attribution_en", "attribution_fr",
+                  metadata = parquet_metadata(geo_attributes)[c("languages", "title_en", "title_fr", "attribution_en", "attribution_fr",
                                                                 "licence_en", "licence_fr", "licence_url_en", "licence_url_fr")])
 ```
 

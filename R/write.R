@@ -67,8 +67,8 @@
 #'   `columns = list(pop = list(label = "Population", description = "..."))`; a string is short for the label.
 #'   `label` attributes of data frame columns, as set by the haven or labelled packages, get added
 #'   automatically.
-#' * `language` and `languages`: the language of the plain text, and every language the dataset holds text
-#'   in, see the Languages section.
+#' * `languages` and `language`: every language the dataset holds text in, and the language of its plain
+#'   text, see the Languages section.
 #' * `primary_key`: the columns that together identify the rows, one like `"DBUID"` or several for long
 #'   tables, like `c("DAUID", "characteristic")`. They have to exist, have no missing values and identify the
 #'   rows, which gets checked before writing, at the cost of an extra pass over a lazy table. It gets written
@@ -84,26 +84,24 @@
 #' column entries, `columns = list(pop = list(label_en = "Population", label_fr = "Population",
 #' description_fr = "..."))`, with or without a plain `label`; and a column holding another column's text in
 #' a language is named the same way, `name_fr` next to `name`, or `name_en` and `name_fr` without a plain
-#' `name`. Which suffixes mean a language is declared, nothing is guessed from the keys. The languages of a
-#' dataset are
-#' * the `language` entry: the language of its plain text (`title`, `label`) and plain columns, as a
-#'   language code like `"en"`;
+#' `name`. Which suffixes mean a language is an explicit contract, nothing is guessed from the keys. The
+#' languages of a dataset are
 #' * the `languages` entry: every language it holds text in, like `c("en", "fr")`, written as a JSON array;
-#' * the suffixes of the `label_<language>` and `description_<language>` keys of its column entries.
+#' * the `language` entry: the language of its plain text (`title`, `label`) and plain columns, as a
+#'   language code like `"en"`, only needed where there is plain text, and declared by that alone.
 #'
-#' Only a suffix in that set marks a variant: `source_url` next to `source` and `rate_men` next to `rate`
-#' are entries and columns of their own, and `title_fr` is the French `title` only when `fr` is a language
-#' of the dataset. The column labels usually declare the languages already, `languages` is for datasets
-#' whose column entries don't name them all. Language codes are lowercase, two or three letters with
-#' optional subtags after a hyphen (`"en"`, `"fra"`, `"pt-br"`), and a suffix has to match exactly,
-#' `name_FR` is no translation. No language is privileged: a bilingual dataset can carry only suffixed
-#' entries, labels and columns, and `language` is only needed where there is plain text, to say which
-#' language it is in.
+#' Only a declared suffix marks a variant: `source_url` next to `source` and `rate_men` next to `rate` are
+#' entries and columns of their own, and `title_fr` is the French `title` only when the dataset declares
+#' `fr`. Suffixed labels and descriptions in a language the metadata doesn't declare are refused, so a
+#' bilingual dataset has to say `languages = c("en", "fr")`. Language codes are lowercase, two or three
+#' letters with optional subtags after a hyphen (`"en"`, `"fra"`, `"pt-br"`), and a suffix has to match
+#' exactly, `name_FR` is no translation. No language is privileged: a bilingual dataset can carry only
+#' suffixed entries, labels and columns.
 #'
-#' Readers get one language at a time, where the language asked for counts as a language of the dataset
-#' too: [parquet_tbl()] and [select_language()] select the columns of that language under their plain names,
-#' [collect_parquet()] attaches its labels and [parquet_metadata()] resolves the entries, see the Languages
-#' section of [collect_parquet()] for the fallbacks.
+#' Readers get one language at a time: [parquet_tbl()] and [select_language()] select the columns of that
+#' language under their plain names, [collect_parquet()] attaches its labels and [parquet_metadata()]
+#' resolves the entries, see the Languages section of [collect_parquet()] for the fallbacks. A language the
+#' dataset doesn't declare leaves it as stored.
 #'
 #' Metadata doesn't get carried over by itself, since data read from parquet files describes something else
 #' once it got changed. With `metadata = NULL`, writing a lazy table from [parquet_tbl()] (the files of the

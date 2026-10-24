@@ -259,9 +259,9 @@ st_filter.tbl_r2parquet_connection <- st_filter.tbl_duckdb_connection
 #' Datasets can carry their text in several languages, see the Languages section of [data_to_parquet()] for
 #' the convention: labels and columns per language are named with the language as suffix, `label_fr` and
 #' `name_fr`, next to a plain `label` and `name` or without them, the `language` entry names the language of
-#' the plain ones, and which suffixes are languages is declared by the metadata (`language`, `languages` and
-#' the suffixes of the labels) plus the language asked for here, so a column like `rate_men` next to `rate`
-#' is left alone. With `language`, the result is in that language where the data has it:
+#' the plain ones, and which suffixes are languages is declared by the metadata (the `languages` and
+#' `language` entries), so a column like `rate_men` next to `rate` is left alone. With `language`, the result
+#' is in that language where the data has it:
 #' * column labels come from the `label_<language>` entries, else from `label`, else from the label in the
 #'   dataset's language;
 #' * a column in that language takes the place and name of its plain column, `name_fr` gets collected as
@@ -276,7 +276,7 @@ st_filter.tbl_r2parquet_connection <- st_filter.tbl_duckdb_connection
 #' and `languages` are left out, `columns` is keyed by the columns as collected and the `language` entry
 #' names the language delivered. Writing the result with that metadata therefore gives a correct dataset in one language. The
 #' metadata as stored, with all languages, is `parquet_metadata(tbl)` on the lazy table or the path. A
-#' dataset without anything in the language asked for is collected as stored, metadata included.
+#' dataset that doesn't declare the language asked for is collected as stored, metadata included.
 #'
 #' Without `language` the result is the dataset as stored, with all its columns, labelled with the plain
 #' labels, else those in the dataset's language; columns with labels only in other languages get none. A

@@ -52,9 +52,9 @@ label for get the labels of the other tables.
 Datasets can carry their text in several languages, see the Languages section of \code{\link[=data_to_parquet]{data_to_parquet()}} for
 the convention: labels and columns per language are named with the language as suffix, \code{label_fr} and
 \code{name_fr}, next to a plain \code{label} and \code{name} or without them, the \code{language} entry names the language of
-the plain ones, and which suffixes are languages is declared by the metadata (\code{language}, \code{languages} and
-the suffixes of the labels) plus the language asked for here, so a column like \code{rate_men} next to \code{rate}
-is left alone. With \code{language}, the result is in that language where the data has it:
+the plain ones, and which suffixes are languages is declared by the metadata (the \code{languages} and
+\code{language} entries), so a column like \code{rate_men} next to \code{rate} is left alone. With \code{language}, the result
+is in that language where the data has it:
 \itemize{
 \item column labels come from the \verb{label_<language>} entries, else from \code{label}, else from the label in the
 dataset's language;
@@ -71,7 +71,7 @@ language too: \code{title_fr}, \code{attribution_fr} and \code{label_fr} take th
 and \code{languages} are left out, \code{columns} is keyed by the columns as collected and the \code{language} entry
 names the language delivered. Writing the result with that metadata therefore gives a correct dataset in one language. The
 metadata as stored, with all languages, is \code{parquet_metadata(tbl)} on the lazy table or the path. A
-dataset without anything in the language asked for is collected as stored, metadata included.
+dataset that doesn't declare the language asked for is collected as stored, metadata included.
 
 Without \code{language} the result is the dataset as stored, with all its columns, labelled with the plain
 labels, else those in the dataset's language; columns with labels only in other languages get none. A

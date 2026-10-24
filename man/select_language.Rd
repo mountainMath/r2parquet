@@ -23,12 +23,12 @@ left out. \code{\link[=parquet_tbl]{parquet_tbl()}} does this itself when a lang
 after reading with \code{language = NULL}, or on a join of tables read without a language.
 }
 \details{
-Which suffixes are languages is known from the metadata of the tables the lazy table was read from (the
-\code{language} and \code{languages} entries and the suffixes of the labels, see the Languages section of
-\code{\link[=data_to_parquet]{data_to_parquet()}}), plus the language asked for, so a column like \code{rate_men} next to \code{rate} is left
-alone; the metadata of files in buckets and at URLs gets read once per table. A suffixed column without a
-plain column or a peer in another language is left alone too. A table without any column in the language
-is returned as it is. The table remembers the selection and the language, so \code{\link[=collect_parquet]{collect_parquet()}}, \code{\link[=parquet_sources]{parquet_sources()}}
+Which suffixes are languages is declared by the metadata of the tables the lazy table was read from (the
+\code{languages} and \code{language} entries, see the Languages section of \code{\link[=data_to_parquet]{data_to_parquet()}}), so a column like
+\code{rate_men} next to \code{rate} is left alone and a language none of the tables declares changes nothing; the
+metadata of files in buckets and at URLs gets read once per table. A suffixed column without a plain
+column or a peer in another language is left alone too. A table without any column in the language is
+returned as it is. The table remembers the selection and the language, so \code{\link[=collect_parquet]{collect_parquet()}}, \code{\link[=parquet_sources]{parquet_sources()}}
 and \code{\link[=parquet_metadata]{parquet_metadata()}} on it label \code{name} with the label of the column it came from, and the first two
 describe the result in that language when no language is passed to them, whatever the option says;
 \code{\link[=parquet_metadata]{parquet_metadata()}} returns the metadata as stored by default, as always.
