@@ -843,6 +843,8 @@ upload_parquet <- function(path,destination,purge_cache=TRUE,remove_stale=FALSE)
   uploaded <- r2_upload(path,r2_bucket,destination$path,stale=if (remove_stale && dir.exists(path)) r2_stale_mirror,
                         directory=destination$directory)
   if (purge_cache) r2_purge_cache_after_change(r2_bucket,c(uploaded$files,uploaded$stale,uploaded$manifests))
+  # tables reading the changed files, or the directory they went into, read their metadata again
+  forget_scans(bucket_url(r2_bucket,c(destination$path[nzchar(destination$path)],uploaded$files,uploaded$stale)))
   invisible(bucket_url(r2_bucket,uploaded$files))
 }
 
@@ -907,6 +909,8 @@ write_manifest <- function(path,purge_cache=TRUE) {
     if (purge_cache) r2_purge_cache_after_change(p$bucket,key)
     bucket_url(p$bucket,key)
   },character(1),USE.NAMES=FALSE)
+  # tables reading below the directory may have read a manifest that was behind
+  forget_scans(path)
   invisible(manifests)
 }
 
@@ -1016,6 +1020,7 @@ remove_parquet <- function(path,purge_cache=TRUE) {
     message(paste0("Removed ",plural(length(files),"local file"),"."))
     removed <- c(removed,files)
   }
+  forget_scans(path)
   invisible(removed)
 }
 

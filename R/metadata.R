@@ -498,6 +498,12 @@ warn_dropped_metadata <- function(data){
 #' get read instead with `from_files = TRUE`, and for paths without a manifest (or with one written before
 #' manifests recorded metadata), presigned URLs, local paths and tables that read local copies from the cache.
 #'
+#' A lazy table reads its metadata once and keeps it, for [collect_parquet()], [parquet_sources()] and the
+#' language selection. [data_to_parquet()], [upload_parquet()], [remove_parquet()], [write_manifest()],
+#' [cache_parquet()] and [remove_parquet_from_cache()] make the tables reading the paths they change read it
+#' again, so a table whose files were rewritten in place with [data_to_parquet()] describes the new files;
+#' files changed outside this session are read again with `from_files = TRUE`.
+#'
 #' @inheritSection upload_parquet Credentials
 #' @param x what to read the metadata of:
 #'   * URL, `r2://bucket/path`, `s3://bucket/path` or local path of a parquet file or of a directory of
@@ -563,8 +569,9 @@ left_scan <- function(x,scans=table_scans(x)){
 
 # the metadata of a parquet_scans entry, read once per table: the entry keeps what was read, since the
 # metadata gets looked up when the columns are selected in a language, when collecting and for the sources,
-# and manifests of large directories are not small; a new parquet_tbl() call on the paths replaces the entry.
-# from_files reads the footers afresh
+# and manifests of large directories are not small; a new parquet_tbl() call on the paths replaces the entry,
+# and the writers and removers drop what entries reading a changed path hold (forget_scans()), so a table
+# rewritten in place describes the new files. from_files reads the footers afresh
 scan_footers <- function(con,scan,from_files=FALSE){
   if (!isTRUE(from_files) && !is.null(scan$metadata)) return(scan$metadata)
   metadata <- scan_metadata(con,scan$paths,scan$source,from_files)

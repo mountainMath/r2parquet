@@ -411,6 +411,45 @@ test_that("tables keep their sources when the session's record of them is reset,
   expect_equal(r2parquet:::scan_sql_paths("SELECT 'a' AS id"),character())
 })
 
+test_that("forget_scans drops the metadata of the scans reading a changed path", {
+  scans <- r2parquet:::parquet_scans
+  seed <- function(key,paths,source=paths)assign(key,list(paths=paths,source=source,key=key,metadata=list(title=key)),envir=scans)
+  withr::defer(rm(list=c("file","dir","cached","url","other","below"),envir=scans))
+  reseed <- function(){
+    seed("file","r2://b/data/x.parquet")
+    seed("dir","r2://b/data/**/*.parquet","r2://b/data")
+    seed("cached",file.path(cache_directory(),"r2/acct/b/data/x.parquet"),"r2://b/data/x.parquet")
+    seed("url","https://h/data/x.parquet?X-Amz-Expires=1")
+    seed("other","r2://b/database/x.parquet")
+    seed("below","r2://b/data/sub/**/*.parquet","r2://b/data/sub/")
+  }
+  remembered <- function()Filter(function(key)!is.null(get(key,envir=scans)$metadata),c("file","dir","cached","url","other","below"))
+  reseed()
+  # a file: the scans of the file, the directory above it and its cached copy, not a directory sharing the prefix
+  r2parquet:::forget_scans("r2://b/data/x.parquet")
+  expect_equal(remembered(),c("url","other","below"))
+  reseed()
+  # a directory, with or without the slash, covers everything below
+  r2parquet:::forget_scans("r2://b/data/")
+  expect_equal(remembered(),c("url","other"))
+  reseed()
+  r2parquet:::forget_scans("https://h/data")
+  expect_equal(remembered(),c("file","dir","cached","other","below"))
+  reseed()
+  # the local copy by its local path
+  r2parquet:::forget_scans(file.path(cache_directory(),"r2/acct/b/data"))
+  expect_equal(remembered(),c("file","dir","url","other","below"))
+  # local files and directories compare normalised, so a symlinked temporary directory matches
+  root <- withr::local_tempdir()
+  local <- file.path(root,"local.parquet")
+  data_to_parquet(data.frame(id=1L),local,metadata=list(title="Local"))
+  tbl <- parquet_tbl(local)
+  key <- as.character(tbl$lazy_query$x)
+  expect_equal(parquet_metadata(tbl)$title,"Local")
+  r2parquet:::forget_scans(paste0(normalizePath(root),"/"))
+  expect_null(get(key,envir=scans)$metadata)
+})
+
 test_that("attributions that differ in their last word get combined", {
   expect_equal(combine_attributions(c("Statistics Canada Product ldb_000b21f_e","Statistics Canada Product 2021_92-151_X")),
                "Statistics Canada Product ldb_000b21f_e, 2021_92-151_X")
@@ -857,14 +896,16 @@ test_that("parquet_tbl selects the columns of the language set", {
   expect_null(attr(collect_parquet(english,language=NULL)$name,"label"))
   expect_equal(parquet_sources(english,language="fr")$language,"fr")
   expect_equal(unclass(parquet_metadata(english))$title_en,NULL)
-  # the metadata gets read once per table: the registry keeps it, and a new table on the path reads afresh
+  # the metadata gets read once per table: the registry keeps it until the path is written again
   scan <- get(as.character(parquet_tbl(path,language=NULL)$lazy_query$x),envir=r2parquet:::parquet_scans)
   expect_null(scan$metadata)
   tbl <- parquet_tbl(path)
-  scan <- get(r2parquet:::table_scans(tbl)[[1]]$key,envir=r2parquet:::parquet_scans)
+  key <- r2parquet:::table_scans(tbl)[[1]]$key
+  scan <- get(key,envir=r2parquet:::parquet_scans)
   expect_equal(names(scan$metadata$columns),c("name_en","name_fr"))
   data_to_parquet(df,path,metadata=list(title="Changed",languages=c("en","fr"),columns=list(name_en=list(label_en="Name",label_fr="Nom"),name_fr=list(label_en="Name",label_fr="Nom"))))
-  expect_null(parquet_metadata(tbl)$title)
+  expect_null(get(key,envir=r2parquet:::parquet_scans)$metadata)
+  expect_equal(parquet_metadata(tbl)$title,"Changed")
   expect_equal(parquet_metadata(tbl,from_files=TRUE)$title,"Changed")
   expect_equal(parquet_metadata(parquet_tbl(path))$title,"Changed")
 })

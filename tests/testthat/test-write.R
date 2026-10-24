@@ -207,6 +207,36 @@ test_that("partitioned datasets can be rewritten from a lazy table reading them"
   expect_equal(dir(dir,all.files=TRUE,no..=TRUE),"data")
 })
 
+test_that("rewriting a dataset in place gives the tables reading it the new metadata", {
+  dir <- withr::local_tempdir()
+  path <- file.path(dir,"data.parquet")
+  data_to_parquet(data.frame(id=1:3,name=c("a","b","c")),path,metadata=list(title="Old",columns=list(name="Old label")))
+  tbl <- parquet_tbl(path)
+  expect_equal(attr(collect_parquet(tbl)$name,"label"),"Old label")
+  # the rewrite reads the table's metadata, which the entry then holds, and replaces the file
+  data_to_parquet(dplyr::mutate(tbl,name=toupper(name)),path,
+                  metadata=utils::modifyList(parquet_metadata(tbl),list(title="New",columns=list(name="New label"))))
+  collected <- collect_parquet(tbl)
+  expect_equal(as.character(collected$name),c("A","B","C"))
+  expect_equal(attr(collected$name,"label"),"New label")
+  expect_equal(parquet_metadata(tbl)$title,"New")
+  expect_equal(parquet_sources(tbl)$title,"New")
+  # a partitioned dataset rewritten below a directory a table reads
+  partitioned <- file.path(dir,"partitioned")
+  data_to_parquet(data.frame(id=1:4,group=rep(c("a","b"),2)),partitioned,partition_by="group",metadata=list(title="Old"))
+  reader <- parquet_tbl(partitioned)
+  expect_equal(parquet_metadata(reader)$title,"Old")
+  data_to_parquet(data.frame(id=1:4,group=rep(c("a","b"),2)),partitioned,partition_by="group",metadata=list(title="New"))
+  expect_equal(parquet_metadata(reader)$title,"New")
+  # removing the file forgets it too, a table reading something else keeps its metadata
+  other <- parquet_tbl(file.path(dir,"data.parquet"))
+  expect_equal(parquet_metadata(other)$title,"New")
+  key <- as.character(reader$lazy_query$x)
+  remove_parquet(path)
+  expect_false(is.null(get(key,envir=r2parquet:::parquet_scans)$metadata))
+  expect_null(get(as.character(other$lazy_query$x),envir=r2parquet:::parquet_scans)$metadata)
+})
+
 test_that("failed partitioned writes leave the dataset alone and files get replaced by directories", {
   dir <- withr::local_tempdir()
   path <- file.path(dir,"data")

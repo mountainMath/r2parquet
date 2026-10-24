@@ -97,7 +97,8 @@ test_that("Cloudflare API errors are reported with their messages", {
 })
 
 test_that("cache purges go to the zones of enabled custom domains in batches", {
-  withr::local_envvar(R2_ACCOUNT_ID="abc")
+  # the maintainer's ~/.Renviron sets purge origins, which multiply the purges
+  withr::local_envvar(R2_ACCOUNT_ID="abc",R2PARQUET_PURGE_ORIGINS=NA)
   mock_cloudflare_api(list(
     "GET /accounts/abc/r2/buckets/b/domains/custom"=cloudflare_response(list(domains=list(
       list(domain="data.example.com",zoneId="z1",enabled=TRUE),

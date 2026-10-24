@@ -426,6 +426,42 @@ parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL,language
 # read, their metadata (scan_footers())
 parquet_scans <- new.env(parent=emptyenv())
 
+# drop the metadata recorded for the scans that read a changed path, so the next lookup reads it again: a
+# dataset rewritten in place with data_to_parquet(), uploaded, removed, or whose manifest or cached copy
+# changed. A scan reads the path when its files or the paths it was given are at or below the path, or the
+# path is below them, compared as directories (globs and trailing slashes stripped, local paths normalised
+# where they exist, bucket paths in their r2://bucket/path form); the entries stay since the tables still exist
+forget_scans <- function(path){
+  changed <- unlist(lapply(path,scan_roots))
+  for (key in ls(parquet_scans,all.names=TRUE)) {
+    entry <- get(key,envir=parquet_scans)
+    if (is.null(entry$metadata)) next
+    roots <- unlist(lapply(c(entry$paths,entry$source),scan_roots))
+    if (any(vapply(roots,function(root)any(vapply(changed,paths_overlap,logical(1),a=root)),logical(1)))) {
+      entry$metadata <- NULL
+      assign(key,entry,envir=parquet_scans)
+    }
+  }
+  invisible()
+}
+
+# the directory forms a path is compared under in forget_scans(): the path without the **/*.parquet glob of a
+# directory scan, query string or trailing slash, and for local paths also the normalised path (with symlinks
+# resolved, as on macOS where temporary files live in /var and /private/var alike) when it exists
+scan_roots <- function(path){
+  if (is_bucket_path(path)) {
+    p <- r2_split_path(path)
+    return(sub("/\\*\\*/\\*\\.parquet$","",bucket_url(p$bucket,p$path)))
+  }
+  if (is_url(path)) return(sub("/+$","",sub("[?#].*$","",path)))
+  path <- sub("(.)/+$","\\1",sub("/\\*\\*/\\*\\.parquet$","",gsub("\\\\","/",path)))
+  unique(c(path,gsub("\\\\","/",normalizePath(path,mustWork=FALSE))))
+}
+
+paths_overlap <- function(a,b){
+  a==b || startsWith(a,paste0(b,"/")) || startsWith(b,paste0(a,"/"))
+}
+
 # the files a scan written by duckdb_parquet_tbl reads, from its SQL, nothing for other SQL
 scan_sql_paths <- function(sql){
   pattern <- "^SELECT \\* FROM read_parquet\\((.*), hive_partitioning = (true|false), hive_types_autocast = false\\)$"

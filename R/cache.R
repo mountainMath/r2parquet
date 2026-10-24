@@ -458,6 +458,8 @@ cache_parquet <- function(path) {
     local <- sync_cache(location,source)
     forget_checks(local)
     cache_checks[[local]] <- TRUE
+    # tables reading the copies read their footers again, the sync may have replaced them
+    forget_scans(local)
     local
   })
 }
@@ -671,6 +673,7 @@ remove_parquet_from_cache <- function(path) {
     unlink(l,recursive=TRUE)
     prune_manifests(l,cache_dir)
     forget_checks(l)
+    forget_scans(l)
   }
   message(paste0("Removed ",length(removed)," file",if (length(removed)!=1) "s"," from the cache."))
   invisible(removed)

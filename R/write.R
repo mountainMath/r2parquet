@@ -46,7 +46,8 @@
 #' threaded, since multi threaded writes don't keep the sort order within partitions. They get written to a new
 #' directory next to `path` first and moved into place once complete, so a dataset can be rewritten from a lazy
 #' table reading it, and a failed write leaves the existing files as they were. A file at `path` gets replaced
-#' by the directory.
+#' by the directory. Lazy tables reading `path` see the new data and metadata afterwards, as long as the
+#' columns stayed the same.
 #'
 #' # Writing to R2 and S3
 #' Destinations in buckets get written to a temporary directory and uploaded via [upload_parquet()], into a bucket
@@ -142,7 +143,7 @@ data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_s
                             compression=c("zstd","snappy","gzip","brotli","lz4","lz4_raw","uncompressed"),purge_cache=TRUE) {
   if (!is.character(path) || length(path)!=1) stop("Expected a single path, got ",length(path),".")
   compression <- match.arg(compression)
-  if (is_bucket_path(path)) {
+  written <- if (is_bucket_path(path)) {
     r2_data_to_parquet(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,
                        remove_stale=remove_stale,metadata=metadata,
                        compression=compression,purge_cache=purge_cache)
@@ -150,6 +151,9 @@ data_to_parquet <- function(data,path,sort_by=NULL,partition_by=NULL,row_group_s
     local_data_to_parquet(data,path,sort_by=sort_by,partition_by=partition_by,row_group_size=row_group_size,
                           remove_stale=remove_stale,metadata=metadata,compression=compression)
   }
+  # tables reading the path, the one just written from included, read their metadata again
+  forget_scans(path)
+  invisible(written)
 }
 
 # write data to a local parquet file or directory of partitioned files

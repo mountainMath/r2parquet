@@ -97,7 +97,8 @@ them with hive partitioning, DuckDB as strings (\code{"001"} stays \code{"001"})
 threaded, since multi threaded writes don't keep the sort order within partitions. They get written to a new
 directory next to \code{path} first and moved into place once complete, so a dataset can be rewritten from a lazy
 table reading it, and a failed write leaves the existing files as they were. A file at \code{path} gets replaced
-by the directory.
+by the directory. Lazy tables reading \code{path} see the new data and metadata afterwards, as long as the
+columns stayed the same.
 }
 
 \section{Writing to R2 and S3}{

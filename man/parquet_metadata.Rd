@@ -69,6 +69,12 @@ footer read per file. \code{\link[=upload_parquet]{upload_parquet()}} and \code{
 with other tools are not reflected until \code{\link[=write_manifest]{write_manifest()}} rebuilds the manifest. The footers of the files
 get read instead with \code{from_files = TRUE}, and for paths without a manifest (or with one written before
 manifests recorded metadata), presigned URLs, local paths and tables that read local copies from the cache.
+
+A lazy table reads its metadata once and keeps it, for \code{\link[=collect_parquet]{collect_parquet()}}, \code{\link[=parquet_sources]{parquet_sources()}} and the
+language selection. \code{\link[=data_to_parquet]{data_to_parquet()}}, \code{\link[=upload_parquet]{upload_parquet()}}, \code{\link[=remove_parquet]{remove_parquet()}}, \code{\link[=write_manifest]{write_manifest()}},
+\code{\link[=cache_parquet]{cache_parquet()}} and \code{\link[=remove_parquet_from_cache]{remove_parquet_from_cache()}} make the tables reading the paths they change read it
+again, so a table whose files were rewritten in place with \code{\link[=data_to_parquet]{data_to_parquet()}} describes the new files;
+files changed outside this session are read again with \code{from_files = TRUE}.
 }
 \section{Credentials}{
 
