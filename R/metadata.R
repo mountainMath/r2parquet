@@ -204,8 +204,15 @@ metadata_strings <- function(metadata,columns,labels=NULL){
   if (!is.null(metadata[["language"]])) {
     metadata$language <- tryCatch(check_language(metadata[["language"]]),error=function(e)stop("metadata$",conditionMessage(e),call.=FALSE))
   }
+  # c(metadata, languages = c("en", "fr")) splices the vector into languages1 and languages2, the mistake
+  # behind every "en is not a declared language" so far
+  spliced <- grep("^languages[0-9]+$",names(metadata),value=TRUE)
+  if (length(spliced)>0 && is.null(metadata[["languages"]])) {
+    stop(paste0("metadata has the entries ",paste0(spliced,collapse=", ")," instead of languages: c(metadata, languages = c(...)) ",
+                "splices the vector into the list, use metadata$languages <- c(...) or c(metadata, list(languages = c(...)))."),call.=FALSE)
+  }
   # always an array, also for a single language
-  if (!is.null(metadata$languages)) {
+  if (!is.null(metadata[["languages"]])) {
     metadata$languages <- I(tryCatch(check_languages(metadata$languages),error=function(e)stop("metadata$",conditionMessage(e),call.=FALSE)))
   }
   # NULL and NA entries have nothing to write, a NA would end up as the string "NULL" in the footer

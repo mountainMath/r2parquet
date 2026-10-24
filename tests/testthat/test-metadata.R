@@ -569,6 +569,9 @@ test_that("the languages entry round trips as an array and gets checked", {
   expect_equal(names(collect_parquet(parquet_tbl(path),language="fr")),c("id","name"))
   expect_error(data_to_parquet(df,path,metadata=list(languages=c("en","french"))),"metadata\\$languages has to be a vector of language codes")
   expect_error(data_to_parquet(df,path,metadata=list(languages=1)),"metadata\\$languages has to be a vector of language codes")
+  # a vector spliced into the list by c() gets named, since the undeclared-language error would be misleading
+  expect_error(data_to_parquet(df,path,metadata=c(list(title_en="Profile",columns=list(id=list(label_en="Id"))),languages=c("en","fr"))),
+               "entries languages1, languages2 instead of languages.*c\\(metadata, list\\(languages = c\\(...\\)\\)\\)")
   expect_error(data_to_parquet(df,path,metadata=list(columns=list(id=list(label_English="x")))),"English is not a language code")
 })
 
