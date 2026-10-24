@@ -49,25 +49,27 @@ attached as the \code{parquet_sources} attribute, see \code{\link[=parquet_sourc
 label for get the labels of the other tables.
 }
 \section{Languages}{
-Datasets can carry their text in several languages, see the Metadata section of \code{\link[=data_to_parquet]{data_to_parquet()}}:
-labels and columns per language are named with the language as suffix, \code{label_fr} and \code{name_fr}, next to
-a plain \code{label} and \code{name} or without them, and the \code{language} entry names the language of the plain
-ones. With \code{language}, the result is in that language where the data has it:
+Datasets can carry their text in several languages, see the Languages section of \code{\link[=data_to_parquet]{data_to_parquet()}} for
+the convention: labels and columns per language are named with the language as suffix, \code{label_fr} and
+\code{name_fr}, next to a plain \code{label} and \code{name} or without them, the \code{language} entry names the language of
+the plain ones, and which suffixes are languages is declared by the metadata (\code{language}, \code{languages} and
+the suffixes of the labels) plus the language asked for here, so a column like \code{rate_men} next to \code{rate}
+is left alone. With \code{language}, the result is in that language where the data has it:
 \itemize{
 \item column labels come from the \verb{label_<language>} entries, else from \code{label}, else from the label in the
 dataset's language;
 \item a column in that language takes the place and name of its plain column, \code{name_fr} gets collected as
 \code{name}, and the columns in the other languages get left out. The plain column stays where the data has
-none in the language asked for. The selection happens before the query runs, so the columns left out
-don't get read. Which suffixes are languages is known from the metadata, the \code{language} entry and the
-suffixes of the labels, so a column like \code{rate_men} next to \code{rate} is left alone.
+none in the language asked for, and a suffixed column without a plain column or a peer in another
+language is left alone. The selection happens before the query runs, so the columns left out don't get
+read.
 }
 
 The metadata attached (the \code{metadata} and \code{parquet_sources} attributes) describes the result in that
 language too: \code{title_fr}, \code{attribution_fr} and \code{label_fr} take the place of \code{title}, \code{attribution} and
 \code{label} (falling back to the plain entry and then to the dataset language's), the other languages' entries
-are left out, \code{columns} is keyed by the columns as collected and the \code{language} entry names the language
-delivered. Writing the result with that metadata therefore gives a correct dataset in one language. The
+and \code{languages} are left out, \code{columns} is keyed by the columns as collected and the \code{language} entry
+names the language delivered. Writing the result with that metadata therefore gives a correct dataset in one language. The
 metadata as stored, with all languages, is \code{parquet_metadata(tbl)} on the lazy table or the path. A
 dataset without anything in the language asked for is collected as stored, metadata included.
 

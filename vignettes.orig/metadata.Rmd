@@ -21,11 +21,10 @@ library(dplyr)
 options(r2parquet.language = "en")
 ```
 
-The datasets in this bucket describe themselves in English and French, so we pick English for the session, [Languages](#languages) below explains what the option does.
 
 The package focuses on parquet because it is uniquely suited to hold large static dataasets that can be read strategically instead of downloading the entire file, although how effective it is at that at least partially depends on how well the choices made in ordering, partitioning and row groups when uploading the file suit the use case of the person consuming the data.
 
-Next to the data a parquet file carries a schema, statistics that let readers skip the parts they don't need, and free-form key-value metadata. `r2parquet` uses that metadata add important context, where the data comes from, under which licence, and what its columns mean, and it copies the description into a manifest next to the files on R2, where clients can read it without opening a single parquet file. This article walks through where these pieces live, for a single file, a directory holding several datasets and a partitioned dataset, using the public bucket behind `https://data.mountainmath.ca`.
+Next to the data a parquet file carries a schema, statistics that let readers skip the parts they don't need, and free-form key-value metadata. `r2parquet` uses that metadata to add important context, where the data comes from, under which licence, and what its columns mean, and it copies the description into a manifest next to the files on R2, where clients can read it without opening a single parquet file. This article walks through where these pieces live, for a single file, a directory holding several datasets and a partitioned dataset, using the public bucket behind `https://data.mountainmath.ca`.
 
 ## What is in a parquet file
 
@@ -59,27 +58,31 @@ DBI::dbGetQuery(con, paste0(
   DBI::dbQuoteString(con, db_url), ")"))
 ```
 
-`parquet_metadata()` reads these entries back as a list, parsing the JSON ones and leaving out `geo`: the crs of a geometry column lives in the column's type, which is where `collect_parquet()` takes it from. `from_files = TRUE` makes it read the footer of the file, we will see below what it reads otherwise. The list prints one line per entry, cut to the width of the console, with lists like the 830 geometries that were repaired when the file was written shown as compact JSON; the entries themselves are complete.
+`parquet_metadata()` reads these entries back as a list, parsing the JSON ones and leaving out `geo`: the crs of a geometry column lives in the column's type, which is where `collect_parquet()` takes it from. `from_files = TRUE` makes it read the footer of the file, we will see below what it reads otherwise. The list prints one line per entry, cut to the width of the console, with lists like the 830 geometries that were repaired when the file was written shown as compact JSON.
 
 ```{r}
 db_metadata <- parquet_metadata(db_url, from_files = TRUE)
 db_metadata
-db_metadata$processing
 ```
 
-The entries are free-form, the ones in this bucket describe provenance and licence, in two languages, which is what the `en` and `fr` columns of the printout are about. A `columns` entry, a list with one entry per column holding a label and a description, is the one entry `collect_parquet()` treats specially, the labels get attached to the collected columns as `label` attributes. Column labels can be seen in action in the partitioned dataset below. Three more entries have a fixed meaning: `primary_key` names the columns that together identify the rows, which `data_to_parquet()` checks before writing, one column for the files here and several for long tables like the partitioned dataset below, where rows are identified by area and characteristic. `processing` and `geometry_repairs` record geometries that `data_to_parquet()` repaired, how many and with which library, and which rows by their primary key.
+The entries are free-form, the ones in this bucket describe provenance and licence. Metadata can be multilingual, see [Languages](#languages) below. A `columns` entry, a list with one entry per column holding a label and a description, is the one entry `collect_parquet()` treats specially, the labels get attached to the collected columns as `label` attributes. Column labels can be seen in action in the partitioned dataset below. Three more entries have a fixed meaning: `primary_key` names the columns that together identify the rows, which `data_to_parquet()` checks before writing, one column for the files here and several for long tables like the partitioned dataset below, where rows are identified by area and characteristic. `processing` and `geometry_repairs` record geometries that `data_to_parquet()` repaired, how many and with which library, and which rows by their primary key.
 
 Metadata in the footer is part of the file, so changing it means writing the file again.
 
 ## Languages
 
-Statistics Canada publishes its data in English and French as equals, and the metadata convention follows that: text that exists in several languages is stored under suffixed keys, `title_en` and `title_fr`, `label_en` and `label_fr` in the column entries, and nothing is stored under a plain `title` or `label` unless the dataset has a language of its own, which the `language` entry then names. Columns can be translated the same way, the file describing the census profile characteristics below has `name_en` and `name_fr`. The datasets in this bucket have no plain entries, every text comes in the two languages, and the printout shows them side by side.
+Metadata can be multilingual, with any number of languages, and it does not have to be. Statistics Canada publishes its data in English and French as equals, and the metadata of the dissemination block file above follows that: text that exists in several languages is stored under keys with the language as suffix, `title_en` and `title_fr`, `label_en` and `label_fr` in the column entries, and nothing under a plain `title` or `label`:
 
 ```{r}
-parquet_metadata(db_url)
+db_metadata |> names()
+db_metadata$columns |> lapply(names) |> head(1)
 ```
 
-The stored metadata is the full set. A language resolves it to one: `parquet_metadata(language = "fr")` picks the French variant of every entry and column label, drops the others and records the language in the `language` entry, so the result is a complete description of the dataset in that language.
+Monolingual metadata stores plain `title` and `label` entries instead, and the two mix: a dataset with a language of its own, which the `language` entry then names, can carry a plain `title` with a `title_fr` next to it. Columns follow the same convention, the file describing the census profile characteristics below holds the names as `name_en` and `name_fr`.
+
+Which suffixes mean a language is declared, nothing is guessed from the keys. The languages of a dataset are its `language` entry, its `languages` entry, which lists every language it holds text in, and the suffixes of the `label` and `description` keys of its column entries, which is what declares English and French for this file. Only a suffix in that set marks a variant: `source_url` and `licence_url` above are entries of their own, not a `source` and a `licence` in a language called `url`, and a dataset whose column labels don't name all of its languages declares them with `languages = c("en", "fr")`. Language codes are lowercase, two or three letters with optional subtags like `pt-br`, and the Languages section of `?data_to_parquet` has the full set of rules.
+
+The stored metadata is the full set. A language resolves it to one: `parquet_metadata(language = "fr")` picks the French variant of every entry and column label, drops the others and records the language in the `language` entry, so the result is a complete description of the dataset in that language. An entry comes from the variant in the language asked for, else from the plain entry, else from the variant in the dataset's own language.
 
 ```{r}
 parquet_metadata(db_url, language = "fr")

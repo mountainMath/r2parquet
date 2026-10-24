@@ -3,16 +3,23 @@
 # parquet_kv_metadata(), and collect_parquet attaches it to the collected data as attributes. Entries are
 # strings in the footer, anything that is not a single value gets stored as JSON and parsed again when read.
 #
-# Languages: column entries hold labels and descriptions per language under suffixed keys, label_en and
-# label_fr, with the plain label as the version for readers that ask for no language, and the optional
-# language entry names the language of the plain text (label, title, notes) and of the plain columns, as a
-# language code like "en" or "fr". No language is privileged: a bilingual dataset can carry label_en and
-# label_fr and nothing else. A reader asking for a language gets the suffixed entry where there is one, else
-# the plain one, else the one in the dataset's language; a reader asking for none gets the plain one, else
-# the dataset language's, else no label. Top-level text (title, attribution, notes) follows the same rule
-# through resolve_language(), which collect_parquet(language=) applies to the metadata it attaches, so the
-# attached metadata describes the monolingual data it comes with; the metadata as stored stays available
-# from the lazy table or the path.
+# Languages: text is stored per language under keys with the language as suffix, title_fr next to title,
+# label_fr and description_fr in the column entries, and a column holding another column's text in a
+# language is named the same way, name_fr next to name. Which suffixes mean a language is declared, nothing
+# is guessed from the keys (an earlier version took paired two letter suffixes like title_en/title_fr for
+# languages, which made source_url and licence_url a matter of luck): the languages of a dataset
+# (metadata_languages()) are its language entry (the language of its plain text and plain columns), its
+# languages entry (every language it holds text in) and the suffixes of the label_* and description_* keys
+# of its column entries, whose base is a fixed word, plus, when reading, the language asked for. Only a
+# suffix in that set marks a variant, so source_url and rate_men are entries and columns of their own.
+# Codes are lowercase, two or three letters with optional subtags (check_language()), and a suffix has to
+# match exactly. No language is privileged: a bilingual dataset can carry label_en and label_fr and nothing
+# else. A reader asking for a language gets the suffixed entry where there is one, else the plain one, else
+# the one in the dataset's language; a reader asking for none gets the plain one, else the dataset
+# language's, else no label. Top-level text (title, attribution, notes) follows the same rule through
+# resolve_language(), which collect_parquet(language=) applies to the metadata it attaches, so the attached
+# metadata describes the monolingual data it comes with; the metadata as stored stays available from the
+# lazy table or the path. The spec for users is the Languages section of data_to_parquet().
 
 # the suffix of a language key like label_fr, "" for the plain key, NA for other keys
 language_suffix <- function(key,base){
@@ -34,17 +41,24 @@ column_text <- function(entry,language=NULL,base="label",dataset_language=NULL){
   NULL
 }
 
-# the languages a dataset holds text in, from its metadata: the language entry and the suffixes of the
-# label_xx and description_xx entries of its columns
+# the pattern of a language code: lowercase letters, with optional subtags of letters and digits after a
+# hyphen (en, fra, pt-br), the only characters a suffix can be matched on in a regular expression
+language_code <- "^[a-z]{2,3}(-[a-z0-9]+)*$"
+
+# the languages a dataset declares in its metadata (read with [[ since $language would match a lone languages
+# entry): the language entry (the language of the plain text), the
+# languages entry (every language it holds text in) and the suffixes of the label_xx and description_xx
+# entries of its columns. Nothing else counts as a language, see the note at the top
 metadata_languages <- function(metadata){
-  languages <- if (is.character(metadata$language)) metadata$language
+  languages <- c(if (is.character(metadata[["language"]])) metadata[["language"]],
+                 if (is.character(metadata$languages)) metadata$languages)
   for (entry in metadata$columns) {
     if (!is.list(entry)) next
     keys <- names(entry)
     languages <- c(languages,language_suffix(keys,"label"),language_suffix(keys,"description"))
   }
-  languages <- unique(languages[!is.na(languages) & languages!=""])
-  tolower(languages)
+  languages <- unique(tolower(languages[!is.na(languages)]))
+  languages[grepl(language_code,languages)]
 }
 
 # the columns to collect in a language: a named character vector of the columns to keep by their names in
@@ -55,9 +69,9 @@ metadata_languages <- function(metadata){
 # either. A lone suffixed column without a plain one or a peer in another language is left alone, as are
 # columns with other suffixes like rate_men
 language_columns <- function(columns,language,languages){
-  # language codes are letters, digits and hyphens, safe in a pattern
+  # the language asked for counts as one of the dataset's
   languages <- unique(tolower(c(languages,language)))
-  languages <- languages[grepl("^[a-z]{2,3}(-[a-z0-9]+)*$",languages)]
+  languages <- languages[grepl(language_code,languages)]
   if (length(languages)==0) return(NULL)
   pattern <- paste0("^(.+)_(",paste0(languages,collapse="|"),")$")
   suffixed <- grepl(pattern,columns)
@@ -96,10 +110,18 @@ table_language <- function(tbl,language,missing){
 # the language to resolve labels in, the language argument or the r2parquet.language option, checked
 check_language <- function(language){
   if (is.null(language)) return(NULL)
-  if (!is.character(language) || length(language)!=1 || is.na(language) || !grepl("^[A-Za-z]{2,3}(-[A-Za-z0-9]+)*$",language)) {
+  if (!is.character(language) || length(language)!=1 || is.na(language) || !grepl(language_code,tolower(language))) {
     stop('language has to be a language code like "en" or "fr".')
   }
   tolower(language)
+}
+
+# the languages metadata entry, checked: a vector of language codes, lowercased
+check_languages <- function(languages){
+  if (!is.character(languages) || length(languages)==0 || anyNA(languages) || !all(grepl(language_code,tolower(languages)))) {
+    stop('languages has to be a vector of language codes like c("en", "fr").')
+  }
+  unique(tolower(languages))
 }
 
 # a column entry in one language: label and description resolved through column_text(), the other
@@ -128,8 +150,9 @@ compose_selection <- function(recorded,selection){
 # dataset language's, the other languages' entries get dropped, the columns entries follow the columns
 # language_columns() selects for the data's columns, or the selection given (keyed by their names in the
 # result, entries for columns the data doesn't have stay), on top of the selection select_language() recorded
-# for the table, and the language entry names the language delivered. Metadata of a dataset with nothing in
-# the language stays as stored, like the data
+# for the table, the language entry names the language delivered and languages is left out. Metadata of a
+# dataset with nothing in the language, neither declared nor as the suffix of an entry or column, stays as
+# stored, like the data
 resolve_language <- function(metadata,language,columns=names(metadata$columns),selection=NULL,recorded=NULL){
   language <- check_language(language)
   metadata <- unclass(metadata)
@@ -138,12 +161,13 @@ resolve_language <- function(metadata,language,columns=names(metadata$columns),s
   # the stored columns the data's columns were selected from count as the data's columns too
   recorded <- recorded[names(recorded) %in% columns]
   stored <- unique(c(columns,unname(recorded)))
-  if (!(language %in% print_languages(metadata) || any(endsWith(stored,paste0("_",language))))) return(metadata)
-  languages <- unique(c(print_languages(metadata),language))
+  languages <- metadata_languages(metadata)
+  if (!(language %in% languages || any(endsWith(c(names(metadata),stored),paste0("_",language))))) return(metadata)
+  languages <- unique(c(languages,language))
   selection <- selection %||% language_columns(columns,language,languages) %||% stats::setNames(columns,columns)
   selection <- compose_selection(recorded,selection)
   columns <- unique(c(stored,unname(selection)))
-  dataset_language <- if (is.character(metadata$language) && length(metadata$language)==1) tolower(metadata$language)
+  dataset_language <- if (is.character(metadata[["language"]]) && length(metadata[["language"]])==1) tolower(metadata[["language"]])
   pattern <- paste0("^(.+)_(",paste0(languages,collapse="|"),")$")
   keys <- names(metadata)
   base <- ifelse(grepl(pattern,keys) & keys!="columns",sub(pattern,"\\1",keys),keys)
@@ -173,6 +197,7 @@ resolve_language <- function(metadata,language,columns=names(metadata$columns),s
       if (!is.null(text)) resolved[[b]] <- text else if (b %in% variants) resolved[b] <- metadata[b]
     }
   }
+  resolved$languages <- NULL
   resolved$language <- language
   resolved
 }
@@ -183,8 +208,12 @@ metadata_strings <- function(metadata,columns,labels=NULL){
     stop("metadata has to be a named list.")
   }
   if ("geo" %in% names(metadata)) stop("The metadata entry geo is reserved for the GeoParquet metadata.")
-  if (!is.null(metadata$language)) {
-    metadata$language <- tryCatch(check_language(metadata$language),error=function(e)stop("metadata$",conditionMessage(e),call.=FALSE))
+  if (!is.null(metadata[["language"]])) {
+    metadata$language <- tryCatch(check_language(metadata[["language"]]),error=function(e)stop("metadata$",conditionMessage(e),call.=FALSE))
+  }
+  # always an array, also for a single language
+  if (!is.null(metadata$languages)) {
+    metadata$languages <- I(tryCatch(check_languages(metadata$languages),error=function(e)stop("metadata$",conditionMessage(e),call.=FALSE)))
   }
   # NULL and NA entries have nothing to write, a NA would end up as the string "NULL" in the footer
   empty <- vapply(metadata,function(value)is.null(value) || (is.atomic(value) && length(value)==1 && is.na(value)),logical(1))
@@ -220,17 +249,24 @@ metadata_strings <- function(metadata,columns,labels=NULL){
   },character(1))
 }
 
-# column entries checked: labels and descriptions, plain or with a language suffix, have to be single strings.
-# A plain label is not required, label_en and label_fr alone are fine, see the languages note at the top
+# column entries checked: labels and descriptions, plain or with a language suffix, have to be single strings,
+# and the suffix has to be a language code, since it declares a language of the dataset. A plain label is not
+# required, label_en and label_fr alone are fine, see the languages note at the top
 check_column_languages <- function(columns){
   for (column in names(columns)) {
     entry <- columns[[column]]
     if (!is.list(entry)) next
     keys <- names(entry)
     for (base in c("label","description")) {
-      texts <- keys[!is.na(language_suffix(keys,base))]
+      suffix <- language_suffix(keys,base)
+      texts <- keys[!is.na(suffix)]
       bad <- texts[!vapply(entry[texts],function(value)is.character(value) && length(value)==1 && !is.na(value),logical(1))]
       if (length(bad)>0) stop(paste0("metadata$columns$",column,"$",bad[1]," has to be a single string."))
+      code <- suffix[!is.na(suffix) & suffix!=""]
+      bad <- code[!grepl(language_code,code)]
+      if (length(bad)>0) {
+        stop(paste0("metadata$columns$",column,"$",base,"_",bad[1],": ",bad[1],' is not a language code like "en" or "fr".'))
+      }
     }
   }
   columns
@@ -373,7 +409,7 @@ attach_parquet_metadata <- function(data,metadata,sources=list(),language=NULL,s
       if (!is.null(attr(data[[column]],"label"))) next
       origins <- unique(c(selection[column],column))
       for (origin in origins[!is.na(origins)]) {
-        label <- column_text(source$columns[[origin]],language,dataset_language=source$language)
+        label <- column_text(source$columns[[origin]],language,dataset_language=source[["language"]])
         if (!is.null(label)) {
           attr(data[[column]],"label") <- label
           break
@@ -467,8 +503,8 @@ warn_dropped_metadata <- function(data){
 #' @param language `NULL` (default) for the metadata as stored, with the entries of all languages, or a
 #'   language code like `"fr"` for the metadata as [collect_parquet()] attaches it when collecting in that
 #'   language, see its Languages section: `title_fr` and `label_fr` take the place of `title` and `label`, the
-#'   other languages' entries are left out, `columns` follows the columns collected and the `language` entry
-#'   names the language. Unlike [collect_parquet()], the `r2parquet.language` option does not apply, so that
+#'   other languages' entries are left out, `columns` follows the columns collected, the `language` entry
+#'   names the language and `languages` is left out. Unlike [collect_parquet()], the `r2parquet.language` option does not apply, so that
 #'   `parquet_metadata(tbl)` always returns everything the files hold.
 #' @param ... not used.
 #' @return a named list of the metadata entries, empty if the files have none (or the data was collected
@@ -570,10 +606,11 @@ parquet_metadata.default <- function(x,...) {
 #'
 #' @details
 #' Which suffixes are languages is known from the metadata of the tables the lazy table was read from (the
-#' `language` entry and the suffixes of the labels, see the Languages section of [collect_parquet()]), plus
-#' the language asked for, so a column like `rate_men` next to `rate` is left alone; the metadata of files in
-#' buckets and at URLs gets read once per table. A table without any column in the language is returned as
-#' it is. The table remembers the selection and the language, so [collect_parquet()], [parquet_sources()]
+#' `language` and `languages` entries and the suffixes of the labels, see the Languages section of
+#' [data_to_parquet()]), plus the language asked for, so a column like `rate_men` next to `rate` is left
+#' alone; the metadata of files in buckets and at URLs gets read once per table. A suffixed column without a
+#' plain column or a peer in another language is left alone too. A table without any column in the language
+#' is returned as it is. The table remembers the selection and the language, so [collect_parquet()], [parquet_sources()]
 #' and [parquet_metadata()] on it label `name` with the label of the column it came from, and the first two
 #' describe the result in that language when no language is passed to them, whatever the option says;
 #' [parquet_metadata()] returns the metadata as stored by default, as always.
@@ -783,29 +820,14 @@ format_metadata_value <- function(value){
   as.character(jsonlite::toJSON(value,auto_unbox=TRUE,null="null",na="null",digits=NA))
 }
 
-# the languages shown when printing: the dataset's languages plus the suffixes of top-level entries that come
-# with a plain entry or another suffixed one of the same base (title and title_fr, or title_en and title_fr).
-# Suffixes the dataset doesn't name as languages count only as two letters: licence_url next to licence is no
-# variant of licence, and three letter suffixes like url are common, while a three letter language code (fra)
-# has to come from the language entry or the column labels
-print_languages <- function(metadata){
-  keys <- names(metadata)
-  known <- metadata_languages(metadata)
-  match <- regmatches(keys,regexec("^(.+)_([a-z]{2,3})$",keys))
-  base <- vapply(match,function(m)if (length(m)==3) m[2] else NA_character_,"")
-  suffix <- vapply(match,function(m)if (length(m)==3) m[3] else NA_character_,"")
-  paired <- !is.na(base) & (base %in% keys | base %in% base[duplicated(base)]) & (nchar(suffix)==2 | suffix %in% known)
-  unique(c(known,suffix[paired]))
-}
-
 # a message, once per session, when metadata is resolved without a language and a dataset has text in several
 # languages but no language entry: nothing plain to fall back on, so no labels or attributions get resolved
 # until a language is asked for
 note_missing_language <- function(metadata){
   if (isTRUE(parquet_cache$language_noted)) return(invisible(FALSE))
-  peers <- Filter(function(m)is.list(m) && is.null(m$language) && length(print_languages(m))>0,metadata)
+  peers <- Filter(function(m)is.list(m) && is.null(m[["language"]]) && length(metadata_languages(m))>0,metadata)
   if (length(peers)==0) return(invisible(FALSE))
-  languages <- unique(unlist(lapply(peers,print_languages)))
+  languages <- unique(unlist(lapply(peers,metadata_languages)))
   parquet_cache$language_noted <- TRUE
   message("The data carries its text in ",paste0(languages,collapse=" and ")," with no plain text to fall back on, so no ",
           "labels or attributions are resolved without a language. Set options(r2parquet.language = \"",languages[1],
@@ -886,8 +908,8 @@ format.parquet_metadata <- function(x,width=getOption("width"),max_columns=20,..
   x <- unclass(x)
   if (length(x)==0) return("<parquet metadata: no entries>")
   columns <- if (is.list(x$columns) && !is.null(names(x$columns))) x$columns
-  languages <- print_languages(x)
-  dataset_language <- if (is.character(x$language) && length(x$language)==1) tolower(x$language)
+  languages <- metadata_languages(x)
+  dataset_language <- if (is.character(x[["language"]]) && length(x[["language"]])==1) tolower(x[["language"]])
   # the entries, with text in several languages (title and title_fr) consolidated into one row of cells
   rows <- language_rows(x,languages,dataset_language,function(entry){
     if (!is.null(columns) && identical(entry,columns)) {

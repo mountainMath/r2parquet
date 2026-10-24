@@ -510,24 +510,53 @@ test_that("metadata in several languages prints one column per language", {
   # the cells start at the same position in the header and the rows
   expect_equal(as.integer(regexpr("fr",lines[8])),as.integer(regexpr("Identifiant",lines[9])))
   expect_true(all(nchar(format(metadata,width=40),type="width")<=40))
-  # without a language entry plain text gets its own column, first; top-level peers give the languages
-  lines <- format(r2parquet:::new_parquet_metadata(list(title_en="Profile",title_fr="Profil",
-    columns=list(id=list(label="Identifier",label_fr="Identifiant")))),width=80)
+  # without a language entry plain text gets its own column, first; the languages are the ones declared, by
+  # the labels here: en is none, so title_en stays an entry of its own
+  stored <- list(title_en="Profile",title_fr="Profil",columns=list(id=list(label="Identifier",label_fr="Identifiant")))
+  lines <- format(r2parquet:::new_parquet_metadata(stored),width=80)
+  expect_match(lines[2],"^ +fr$")
+  expect_equal(lines[3:4],c("title_en  Profile","title     Profil"))
+  expect_match(lines[7],"^columns +plain +fr$")
+  expect_match(lines[8],"^  id +Identifier +Identifiant$")
+  # a languages entry declares them, and the variants consolidate
+  lines <- format(r2parquet:::new_parquet_metadata(c(stored,list(languages=c("en","fr")))),width=80)
   expect_match(lines[2],"^ +en +fr$")
   expect_match(lines[3],"^title +Profile +Profil$")
-  expect_match(lines[6],"^columns +plain +fr$")
-  expect_match(lines[7],"^  id +Identifier +Identifiant$")
-  # a three letter suffix next to its base is no language unless the dataset names it: licence_url stays an
-  # entry of its own, next to the resolved licence
+  # a suffix next to its base is no language unless the dataset declares it: licence_url and source_url stay
+  # entries of their own, next to the resolved licence
   resolved <- r2parquet:::new_parquet_metadata(list(licence="Open Licence",licence_url="https://example.org",title="Profile",language="en"))
-  expect_equal(r2parquet:::print_languages(resolved),"en")
+  expect_equal(r2parquet:::metadata_languages(resolved),"en")
   lines <- format(resolved,width=80)
   expect_equal(lines[2:3],c("licence      Open Licence","licence_url  https://example.org"))
-  expect_equal(r2parquet:::print_languages(list(title_eng="Profile",title_fra="Profil")),character(0))
-  expect_equal(r2parquet:::print_languages(list(title_eng="Profile",title_fra="Profil",language="eng",columns=list(id=list(label_fra="Id")))),c("eng","fra"))
-  # the resolver leaves licence_url alone as well
-  stored <- list(licence="Open Licence",licence_fr="Licence ouverte",licence_url="https://example.org")
-  expect_equal(r2parquet:::resolve_language(stored,"fr"),list(licence="Licence ouverte",licence_url="https://example.org",language="fr"))
+  expect_equal(r2parquet:::metadata_languages(list(title_eng="Profile",title_fra="Profil")),character(0))
+  expect_equal(r2parquet:::metadata_languages(list(title_eng="Profile",title_fra="Profil",language="eng",columns=list(id=list(label_fra="Id")))),c("eng","fra"))
+  expect_equal(r2parquet:::metadata_languages(list(languages=c("en","FR"),columns=list(id=list(label_fr="Id",label_en="Id")))),c("en","fr"))
+  # the resolver leaves licence_url alone as well, and picks the variant of source_url
+  stored <- list(licence="Open Licence",licence_fr="Licence ouverte",licence_url="https://example.org",
+                 source_url_en="https://example.org/en",source_url_fr="https://example.org/fr",languages=c("en","fr"))
+  expect_equal(r2parquet:::resolve_language(stored,"fr"),
+               list(licence="Licence ouverte",licence_url="https://example.org",source_url="https://example.org/fr",language="fr"))
+  # the language asked for counts as one of the dataset's, a language nothing is in leaves it as stored
+  expect_equal(r2parquet:::resolve_language(list(title="Profile",title_de="Profil"),"de"),list(title="Profil",language="de"))
+  expect_equal(r2parquet:::resolve_language(stored,"de"),stored)
+})
+
+test_that("the languages entry round trips as an array and gets checked", {
+  df <- data.frame(id=c("a","b"),name_en=c("Canada","Quebec"),name_fr=c("Canada","Québec"))
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(df,path,metadata=list(title_en="Profile",title_fr="Profil",languages="EN"))
+  result <- parquet_metadata(path)
+  expect_equal(result$languages,"en")
+  # fr is no language of this dataset, so title_fr is an entry of its own and name_fr no peer of name_en
+  expect_equal(names(collect_parquet(parquet_tbl(path),language="fr")),c("id","name"))
+  expect_equal(unclass(parquet_metadata(path,language="en")),list(title="Profile",title_fr="Profil",language="en"))
+  data_to_parquet(df,path,metadata=list(title_en="Profile",title_fr="Profil",languages=c("en","fr")))
+  expect_equal(parquet_metadata(path)$languages,c("en","fr"))
+  expect_equal(unclass(parquet_metadata(path,language="fr")),list(title="Profil",language="fr"))
+  expect_equal(names(collect_parquet(parquet_tbl(path),language="fr")),c("id","name"))
+  expect_error(data_to_parquet(df,path,metadata=list(languages=c("en","french"))),"metadata\\$languages has to be a vector of language codes")
+  expect_error(data_to_parquet(df,path,metadata=list(languages=1)),"metadata\\$languages has to be a vector of language codes")
+  expect_error(data_to_parquet(df,path,metadata=list(columns=list(id=list(label_English="x")))),"English is not a language code")
 })
 
 test_that("collect_parquet picks the labels and columns of a language", {
@@ -663,8 +692,11 @@ test_that("metadata collected in a language describes the result in that languag
   expect_equal(parquet_metadata(other)$title,"Profil du recensement")
   expect_equal(parquet_metadata(other)$language,"fr")
   expect_equal(attr(collect_parquet(parquet_tbl(other))$name,"label"),"Nom")
-  # the resolver on a plain list, including a title in several languages without a plain one
+  # the resolver on a plain list, including a title in several languages without a plain one: the language
+  # asked for counts, the other one only when declared
   resolved <- r2parquet:::resolve_language(list(title_en="Profile",title_fr="Profil"),"fr")
+  expect_equal(resolved,list(title_en="Profile",title="Profil",language="fr"))
+  resolved <- r2parquet:::resolve_language(list(title_en="Profile",title_fr="Profil",languages=c("en","fr")),"fr")
   expect_equal(resolved,list(title="Profil",language="fr"))
   expect_equal(r2parquet:::resolve_language(list(title="T"),NULL),list(title="T"))
 })

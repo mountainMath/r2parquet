@@ -313,7 +313,8 @@ read_error <- function(e,path,call=NULL){
 #' `name_fr` becomes `name`, or stands in for a plain column the data doesn't have, and the columns in the
 #' other languages get left out before anything is read, so a bilingual dataset read with
 #' `options(r2parquet.language = "fr")` has `name` and no `name_en`. Which suffixes are languages is known
-#' from the metadata of the files, which gets read once per table for this. The column names of the table
+#' from the metadata of the files (see the Languages section of [data_to_parquet()]), which gets read once
+#' per table for this. The column names of the table
 #' therefore depend on the language. `language = NULL` gives the columns as stored, for selecting them by
 #' hand or with [select_language()] later, which also works on joins of such tables.
 #'

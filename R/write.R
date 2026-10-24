@@ -67,15 +67,8 @@
 #'   `columns = list(pop = list(label = "Population", description = "..."))`; a string is short for the label.
 #'   `label` attributes of data frame columns, as set by the haven or labelled packages, get added
 #'   automatically.
-#' * `language`: the language of the plain text in the metadata and the data, as a language code like
-#'   `"en"` or `"fr"`. Labels and descriptions per language go into keys with the language as suffix,
-#'   `columns = list(pop = list(label_en = "Population", label_fr = "Population", description_fr = "..."))`,
-#'   with or without a plain `label`, and a column holding another column's text in a language is named
-#'   with the same suffix, `name_fr` next to `name`, or `name_en` and `name_fr` without a plain `name`. No
-#'   language is privileged: a bilingual dataset can carry only suffixed labels and columns, and `language`
-#'   is only needed where there is plain text, to say which language it is in. [parquet_tbl()] and
-#'   [select_language()] select the columns of the language asked for and [collect_parquet()] attaches its
-#'   labels, see the `language` arguments.
+#' * `language` and `languages`: the language of the plain text, and every language the dataset holds text
+#'   in, see the Languages section.
 #' * `primary_key`: the columns that together identify the rows, one like `"DBUID"` or several for long
 #'   tables, like `c("DAUID", "characteristic")`. They have to exist, have no missing values and identify the
 #'   rows, which gets checked before writing, at the cost of an extra pass over a lazy table. It gets written
@@ -84,6 +77,33 @@
 #'
 #' Single values get written as strings, anything else as JSON; `NULL` and `NA` entries get dropped with a
 #' warning. Changing the metadata means writing the data again.
+#'
+#' # Languages
+#' Text can be stored in several languages, under keys with the language as suffix: `title_fr` next to
+#' `title`, or `title_en` and `title_fr` without a plain `title`; `label_fr` and `description_fr` in the
+#' column entries, `columns = list(pop = list(label_en = "Population", label_fr = "Population",
+#' description_fr = "..."))`, with or without a plain `label`; and a column holding another column's text in
+#' a language is named the same way, `name_fr` next to `name`, or `name_en` and `name_fr` without a plain
+#' `name`. Which suffixes mean a language is declared, nothing is guessed from the keys. The languages of a
+#' dataset are
+#' * the `language` entry: the language of its plain text (`title`, `label`) and plain columns, as a
+#'   language code like `"en"`;
+#' * the `languages` entry: every language it holds text in, like `c("en", "fr")`, written as a JSON array;
+#' * the suffixes of the `label_<language>` and `description_<language>` keys of its column entries.
+#'
+#' Only a suffix in that set marks a variant: `source_url` next to `source` and `rate_men` next to `rate`
+#' are entries and columns of their own, and `title_fr` is the French `title` only when `fr` is a language
+#' of the dataset. The column labels usually declare the languages already, `languages` is for datasets
+#' whose column entries don't name them all. Language codes are lowercase, two or three letters with
+#' optional subtags after a hyphen (`"en"`, `"fra"`, `"pt-br"`), and a suffix has to match exactly,
+#' `name_FR` is no translation. No language is privileged: a bilingual dataset can carry only suffixed
+#' entries, labels and columns, and `language` is only needed where there is plain text, to say which
+#' language it is in.
+#'
+#' Readers get one language at a time, where the language asked for counts as a language of the dataset
+#' too: [parquet_tbl()] and [select_language()] select the columns of that language under their plain names,
+#' [collect_parquet()] attaches its labels and [parquet_metadata()] resolves the entries, see the Languages
+#' section of [collect_parquet()] for the fallbacks.
 #'
 #' Metadata doesn't get carried over by itself, since data read from parquet files describes something else
 #' once it got changed. With `metadata = NULL`, writing a lazy table from [parquet_tbl()] (the files of the

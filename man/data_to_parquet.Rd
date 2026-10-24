@@ -121,15 +121,8 @@ attaches it to collected data. Conventional entries:
 \code{columns = list(pop = list(label = "Population", description = "..."))}; a string is short for the label.
 \code{label} attributes of data frame columns, as set by the haven or labelled packages, get added
 automatically.
-\item \code{language}: the language of the plain text in the metadata and the data, as a language code like
-\code{"en"} or \code{"fr"}. Labels and descriptions per language go into keys with the language as suffix,
-\code{columns = list(pop = list(label_en = "Population", label_fr = "Population", description_fr = "..."))},
-with or without a plain \code{label}, and a column holding another column's text in a language is named
-with the same suffix, \code{name_fr} next to \code{name}, or \code{name_en} and \code{name_fr} without a plain \code{name}. No
-language is privileged: a bilingual dataset can carry only suffixed labels and columns, and \code{language}
-is only needed where there is plain text, to say which language it is in. \code{\link[=parquet_tbl]{parquet_tbl()}} and
-\code{\link[=select_language]{select_language()}} select the columns of the language asked for and \code{\link[=collect_parquet]{collect_parquet()}} attaches its
-labels, see the \code{language} arguments.
+\item \code{language} and \code{languages}: the language of the plain text, and every language the dataset holds text
+in, see the Languages section.
 \item \code{primary_key}: the columns that together identify the rows, one like \code{"DBUID"} or several for long
 tables, like \code{c("DAUID", "characteristic")}. They have to exist, have no missing values and identify the
 rows, which gets checked before writing, at the cost of an extra pass over a lazy table. It gets written
@@ -139,6 +132,35 @@ as a JSON array, and is how repaired geometries get listed.
 
 Single values get written as strings, anything else as JSON; \code{NULL} and \code{NA} entries get dropped with a
 warning. Changing the metadata means writing the data again.
+}
+
+\section{Languages}{
+Text can be stored in several languages, under keys with the language as suffix: \code{title_fr} next to
+\code{title}, or \code{title_en} and \code{title_fr} without a plain \code{title}; \code{label_fr} and \code{description_fr} in the
+column entries, \code{columns = list(pop = list(label_en = "Population", label_fr = "Population", description_fr = "..."))}, with or without a plain \code{label}; and a column holding another column's text in
+a language is named the same way, \code{name_fr} next to \code{name}, or \code{name_en} and \code{name_fr} without a plain
+\code{name}. Which suffixes mean a language is declared, nothing is guessed from the keys. The languages of a
+dataset are
+\itemize{
+\item the \code{language} entry: the language of its plain text (\code{title}, \code{label}) and plain columns, as a
+language code like \code{"en"};
+\item the \code{languages} entry: every language it holds text in, like \code{c("en", "fr")}, written as a JSON array;
+\item the suffixes of the \verb{label_<language>} and \verb{description_<language>} keys of its column entries.
+}
+
+Only a suffix in that set marks a variant: \code{source_url} next to \code{source} and \code{rate_men} next to \code{rate}
+are entries and columns of their own, and \code{title_fr} is the French \code{title} only when \code{fr} is a language
+of the dataset. The column labels usually declare the languages already, \code{languages} is for datasets
+whose column entries don't name them all. Language codes are lowercase, two or three letters with
+optional subtags after a hyphen (\code{"en"}, \code{"fra"}, \code{"pt-br"}), and a suffix has to match exactly,
+\code{name_FR} is no translation. No language is privileged: a bilingual dataset can carry only suffixed
+entries, labels and columns, and \code{language} is only needed where there is plain text, to say which
+language it is in.
+
+Readers get one language at a time, where the language asked for counts as a language of the dataset
+too: \code{\link[=parquet_tbl]{parquet_tbl()}} and \code{\link[=select_language]{select_language()}} select the columns of that language under their plain names,
+\code{\link[=collect_parquet]{collect_parquet()}} attaches its labels and \code{\link[=parquet_metadata]{parquet_metadata()}} resolves the entries, see the Languages
+section of \code{\link[=collect_parquet]{collect_parquet()}} for the fallbacks.
 
 Metadata doesn't get carried over by itself, since data read from parquet files describes something else
 once it got changed. With \code{metadata = NULL}, writing a lazy table from \code{\link[=parquet_tbl]{parquet_tbl()}} (the files of the

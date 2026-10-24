@@ -38,8 +38,8 @@ parquet_metadata(x, ...)
 \item{language}{\code{NULL} (default) for the metadata as stored, with the entries of all languages, or a
 language code like \code{"fr"} for the metadata as \code{\link[=collect_parquet]{collect_parquet()}} attaches it when collecting in that
 language, see its Languages section: \code{title_fr} and \code{label_fr} take the place of \code{title} and \code{label}, the
-other languages' entries are left out, \code{columns} follows the columns collected and the \code{language} entry
-names the language. Unlike \code{\link[=collect_parquet]{collect_parquet()}}, the \code{r2parquet.language} option does not apply, so that
+other languages' entries are left out, \code{columns} follows the columns collected, the \code{language} entry
+names the language and \code{languages} is left out. Unlike \code{\link[=collect_parquet]{collect_parquet()}}, the \code{r2parquet.language} option does not apply, so that
 \code{parquet_metadata(tbl)} always returns everything the files hold.}
 }
 \value{

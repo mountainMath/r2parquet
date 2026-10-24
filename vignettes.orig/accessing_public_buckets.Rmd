@@ -30,7 +30,6 @@ library(ggplot2)
 options(r2parquet.language = "en")
 ```
 
-The census datasets in the bucket describe themselves in English and French, the option picks the language for column labels and attributions, see the [Metadata and manifests](metadata.html) article.
 
 As an example we consider accessing dissemination block (DB) level geographic data from the 2021 Canadian census. For this we have prepared a parquet file in a public bucket, it can be reached by url.
 
@@ -51,6 +50,8 @@ This only reads the parquet metadata, the file carries several geographic identi
 ```{r}
 db_table |> parquet_metadata()
 ```
+
+Metadata information can be multi-lingual. Setting the `r2parquet.language` option as at the top of this vignette picks the language that will be used for labelling.
 
 A simple query would be to fetch the data for just the City of Vancouver. The query keeps every column, and the first time that happens with a remote table `collect_parquet()` says so: parquet is stored by column and only the selected columns get downloaded, so the message gives a `select()` of all the columns to paste into the query and prune to the ones needed.
 
@@ -141,4 +142,4 @@ data_mask |>
        caption=parquet_sources_attribution(data_mask, sep="\n")) 
 ```
 
-`st_filter()` on the lazy table returns every feature that intersects the mask, reading only the row groups whose bounding box intersects it, clipping the returned data with `st_intersection` makes for a prettier plot. Unlike on sf objects, `st_filter()` on lazy tables transforms the mask to the crs of the data automatically, `st_intersection()` needs the explicit transformation.
+`st_filter()` on the lazy table returns every feature that intersects the mask, reading only the row groups whose bounding box intersects it. Clipping the returned data with `st_intersection` makes for a prettier plot. Unlike on sf objects, `st_filter()` on lazy tables transforms the mask to the crs of the data automatically, `st_intersection()` needs the explicit transformation.
