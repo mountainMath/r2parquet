@@ -106,6 +106,7 @@ Similarly, we can fetch the data for Metro Vancouver. The remote parquet file is
 ``` r
 data_cma <- db_table |>
   filter(CMAUID=="933") |>
+  select(DBUID,geometry) |>
   collect_parquet()
 
 ggplot(data_cma) +
@@ -132,6 +133,7 @@ and join just the population counts onto the Metro Vancouver dissemination block
 ``` r
 data_cma <- db_table |>
   filter(CMAUID=="933") |>
+  select(DBUID,LANDAREA,geometry) |>
   left_join(parquet_tbl(geo_attributes_path) |>
               select(DBUID,Population=DBPOP2021),
             by="DBUID") |>
@@ -186,6 +188,7 @@ mask <- st_point(c(-79.3842, 43.6514)) |>
 
 data_mask <- db_table |>
   st_filter(mask) |>
+  select(DBUID,geometry) |>
   collect_parquet()
 
 data_mask |>
