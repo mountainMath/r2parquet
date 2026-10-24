@@ -18,6 +18,8 @@ params:
 library(r2parquet)
 library(dplyr)
 library(ggplot2)
+
+options(r2parquet.language = "en")
 ```
 
 `r2parquet` is designed around Cloudflare R2, but it can also interact with the S3 API. Buckets on Amazon S3, and on other services with an S3 compatible API like MinIO, are addressed as `s3://bucket/path` and work with the same functions as `r2://bucket/path`: `data_to_parquet()` and `upload_parquet()` write, `parquet_tbl()` reads, `list_parquet()` lists, `cache_parquet()` caches, `presigned_url()` shares, `remove_parquet()` removes, and directory uploads get their `_manifest.json` like on R2 (see the [Metadata and manifests](metadata.html) article). This article walks through uploading private and public data to S3.
@@ -66,8 +68,9 @@ geo_attributes |>
   filter(CMAUID == "933") |>
   select(DBUID, DAUID, CSDUID, CSDNAME, Population = DBPOP2021, Dwellings = DBTDWELL2021) |>
   data_to_parquet(private_path, sort_by = "DBUID",
-                  metadata = parquet_metadata(geo_attributes)[c("title", "attribution", "licence", "licence_url")])
-#> Uploading 85.5 kB in 1 parquet file to s3://mountainmath/test/vignette/private/van_db_attributes.parquet.
+                  metadata = parquet_metadata(geo_attributes)[c("title_en", "title_fr", "attribution_en", "attribution_fr",
+                                                                "licence_en", "licence_fr", "licence_url_en", "licence_url_fr")])
+#> Uploading 85.9 kB in 1 parquet file to s3://mountainmath/test/vignette/private/van_db_attributes.parquet.
 ```
 
 With credentials the file reads like any other.
@@ -132,6 +135,9 @@ cma_url <- paste0(public_url, "cma/")
 bc_cmas <- parquet_tbl(cma_url) |>
   filter(PRUID == "59") |>
   collect_parquet()
+#> Collecting all 9 columns of https://mountainmath.s3.ca-central-1.amazonaws.com/test/vignette/public/cma/. Parquet is stored by column and only the selected columns get downloaded, so select the ones you need: add
+#>   select(CMAUID, CMAPUID, DGUID, DGUIDP, CMANAME, CMATYPE, LANDAREA, geometry, PRUID)
+#> to the query and remove the columns you don't need. This message is shown once per session.
 
 ggplot(bc_cmas) +
   geom_sf(aes(fill = CMATYPE)) +
@@ -159,16 +165,30 @@ The manifest carries the metadata of the dataset, so `parquet_metadata()` reads 
 
 ``` r
 parquet_metadata(cma_url)
-#> <parquet metadata: 9 entries>
-#> licence           Statistics Canada Open Licence
-#> licence_url       https://www.statcan.gc.ca/en/terms-conditions/open-licence
-#> processing        Repaired 2 of 156 geometries that were invalid, via sf::st_ma…
-#> geometry_repairs  {"columns":"CMAPUID","rows":["35571","47705"]}
-#> title             2021 Census – Boundary files - Census metropolitan areas and …
-#> attribution       Statistics Canada Product lcma000b21f_e
+#> <parquet metadata: 18 entries>
+#>                   en                              fr
+#> licence           Statistics Canada Open Licence  Licence ouverte de Statistiqu…
+#> licence_url       https://www.statcan.gc.ca/en/…  https://www.statcan.gc.ca/fr/…
+#> title             2021 Census – Boundary files …  Recensement de 2021 – Fichier…
+#> source_url        https://www12.statcan.gc.ca/c…  https://www12.statcan.gc.ca/c…
+#> reference_guide   https://www12.statcan.gc.ca/c…  https://www12.statcan.gc.ca/c…
+#> attribution       Statistics Canada, 2021 Censu…  Statistique Canada, Fichier d…
+#> notes             One row per provincial part: …  Une ligne par partie provinci…
+#> columns           <9 columns, see below>
 #> primary_key       CMAPUID
-#> source_url        https://www12.statcan.gc.ca/census-recensement/alternative_al…
-#> reference_guide   https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/g…
+#> geometry_repairs  {"columns":"CMAPUID","rows":["35571","47705"]}
+#> processing        Repaired 2 of 156 geometries that were invalid, via sf::st_ma…
+#> 
+#> columns     en                                 fr
+#>   CMAUID    Census metropolitan area or cens…  Identificateur unique de la régi…
+#>   CMAPUID   CMA/CA provincial part ID: Provi…  Identificateur unique de la part…
+#>   DGUID     Dissemination geography unique i…  Identificateur unique de géograp…
+#>   DGUIDP    DGUID of the provincial part, fo…  IDUGD de la partie provinciale, …
+#>   CMANAME   CMA/CA name                        Nom de la RMR/AR
+#>   CMATYPE   CMA/CA type: B census metropolit…  Genre de RMR/AR: B région métrop…
+#>   LANDAREA  Land area (km²)                    Superficie des terres (km²)
+#>   PRUID     Province or territory ID           Identificateur unique de la prov…
+#>   geometry  Boundary, Statistics Canada Lamb…  Limites, projection conique conf…
 
 list_parquet(cma_url) |>
   mutate(path = sub(cma_url, "", path, fixed = TRUE)) |>
@@ -177,9 +197,9 @@ list_parquet(cma_url) |>
 #> # A tibble: 3 × 3
 #>   path                    size     cache     
 #>   <chr>                   <chr>    <chr>     
-#> 1 PRUID=10/data_0.parquet 168.6 kB not cached
-#> 2 PRUID=11/data_0.parquet 128.5 kB not cached
-#> 3 PRUID=12/data_0.parquet 845.5 kB not cached
+#> 1 PRUID=10/data_0.parquet 171.2 kB not cached
+#> 2 PRUID=11/data_0.parquet 131.2 kB not cached
+#> 3 PRUID=12/data_0.parquet 848.1 kB not cached
 ```
 
 Public URLs can be cached like any other, see the [Caching](caching.html) article. Keep public and private data under separate prefixes: a manifest lists every parquet file below its directory, so a public manifest above private files would publish their names and metadata. Manifests of directories above the public prefix, like the one `write_manifest()` writes for a whole bucket, stay private.

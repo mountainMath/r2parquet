@@ -17,7 +17,11 @@ knitr::opts_chunk$set(
 ```{r setup, message = FALSE}
 library(r2parquet)
 library(dplyr)
+
+options(r2parquet.language = "en")
 ```
+
+The datasets in this bucket describe themselves in English and French, so we pick English for the session, [Languages](#languages) below explains what the option does.
 
 The package focuses on parquet because it is uniquely suited to hold large static dataasets that can be read strategically instead of downloading the entire file, although how effective it is at that at least partially depends on how well the choices made in ordering, partitioning and row groups when uploading the file suit the use case of the person consuming the data.
 
@@ -63,9 +67,25 @@ db_metadata
 db_metadata$processing
 ```
 
-The entries are free-form, the ones in this bucket describe provenance and licence. A `columns` entry, a list with one entry per column holding a `label` and a `description`, is the one entry `collect_parquet()` treats specially, the labels get attached to the collected columns as `label` attributes. Column labels can be seen in action in the partitioned dataset below. Datasets with text in several languages carry it in suffixed entries and columns, `label_en` and `label_fr`, `name_en` and `name_fr`, with a `language` entry naming the language of any plain ones, and `collect_parquet(language = "fr")` picks the labels and columns of that language, leaving the other languages' columns out of the query. Three more entries have a fixed meaning: `primary_key` names the columns that together identify the rows, which `data_to_parquet()` checks before writing, one column for the files here and several for long tables like the partitioned dataset below, where rows are identified by area and characteristic. `processing` and `geometry_repairs` record geometries that `data_to_parquet()` repaired, how many and with which library, and which rows by their primary key.
+The entries are free-form, the ones in this bucket describe provenance and licence, in two languages, which is what the `en` and `fr` columns of the printout are about. A `columns` entry, a list with one entry per column holding a label and a description, is the one entry `collect_parquet()` treats specially, the labels get attached to the collected columns as `label` attributes. Column labels can be seen in action in the partitioned dataset below. Three more entries have a fixed meaning: `primary_key` names the columns that together identify the rows, which `data_to_parquet()` checks before writing, one column for the files here and several for long tables like the partitioned dataset below, where rows are identified by area and characteristic. `processing` and `geometry_repairs` record geometries that `data_to_parquet()` repaired, how many and with which library, and which rows by their primary key.
 
 Metadata in the footer is part of the file, so changing it means writing the file again.
+
+## Languages
+
+Statistics Canada publishes its data in English and French as equals, and the metadata convention follows that: text that exists in several languages is stored under suffixed keys, `title_en` and `title_fr`, `label_en` and `label_fr` in the column entries, and nothing is stored under a plain `title` or `label` unless the dataset has a language of its own, which the `language` entry then names. Columns can be translated the same way, the file describing the census profile characteristics below has `name_en` and `name_fr`. The datasets in this bucket have no plain entries, every text comes in the two languages, and the printout shows them side by side.
+
+```{r}
+parquet_metadata(db_url)
+```
+
+The stored metadata is the full set. A language resolves it to one: `parquet_metadata(language = "fr")` picks the French variant of every entry and column label, drops the others and records the language in the `language` entry, so the result is a complete description of the dataset in that language.
+
+```{r}
+parquet_metadata(db_url, language = "fr")
+```
+
+That is what `collect_parquet(language = )` attaches to the collected data, together with the labels in that language. The columns follow the same rule: `parquet_tbl(language = )` selects the translated columns of the asked language under their plain name on the lazy table, `name_en` or `name_fr` becomes `name`, and leaves the others out, before anything is read, so queries use `name` and the other language never gets downloaded. The default for the language is the `r2parquet.language` option, which we set at the top of this article: without it, and without a `language` entry, a dataset like this one has no plain text to fall back on, so no labels get attached and `parquet_sources_attribution()` has no attribution to return, which a message points out once per session. Set the option once per session, or pass `language` to `parquet_tbl()`, `collect_parquet()`, `parquet_sources()` and `parquet_sources_attribution()` where one dataset should come out in another language; `language = NULL` gives the columns as stored, and `select_language()` does the swap later on any lazy table, joins included. `parquet_metadata()` ignores the option on purpose, so the full metadata of a lazy table or path is always one call away.
 
 ## A directory with several datasets
 
@@ -104,7 +124,7 @@ list_parquet(census_url) |>
 `parquet_metadata()` reads the manifest for paths on R2 and at URLs, instead of the footers: for a file it looks for the manifest of the file's directory, or of the nearest directory above it that has one, and takes the file's entry, a single request that is the same for every file of a dataset. The result is the same as reading the footer above, as long as the manifest is current.
 
 ```{r}
-parquet_metadata(db_url)[c("title", "primary_key", "processing")]
+parquet_metadata(db_url)[c("title_en", "title_fr", "primary_key", "processing")]
 ```
 
 The manifest is current as long as the files only change through `upload_parquet()`, `data_to_parquet()` and `remove_parquet()`, which keep the manifests of the directories they touch and of the directories above up to date. Files changed with other tools are not reflected until `write_manifest()` rebuilds the manifest from a listing; `from_files = TRUE` bypasses the manifest and reads the footers.
@@ -115,7 +135,7 @@ Manifests are per directory and cover everything below, so a manifest in a highe
 
 A dataset can also be a directory of files, hive partitioned by the values of one or more columns, which is how `data_to_parquet(partition_by = )` writes it. The 2021 census profile for aggregate dissemination areas in the public bucket is such a dataset: one row per area and characteristic, partitioned by province, with the characteristics described in a small file next to it.
 
-Each partition is a directory named after the column and its value, holding the parquet file for that value. The partition column is not stored in the files, readers recover it from the directory names, typed by their values, so `PRUID` comes back as a number below. The dataset's manifest lists the partition files.
+Each partition is a directory named after the column and its value, holding the parquet file for that value. The partition column is not stored in the files, readers recover it from the directory names, as strings, so a province code like `"10"` stays a string and keeps its leading zeros. The dataset's manifest lists the partition files.
 
 ```{r}
 profile_url <- "https://data.mountainmath.ca/census/2021/profile_ADA/"
@@ -140,7 +160,7 @@ jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE)
 parquet_metadata(profile_url)
 ```
 
-`parquet_tbl()` reads the directory as one table, with `PRUID` coming from the paths, and a filter on it only opens the files of the matching partitions. Within a partition the rows are sorted by `characteristic_id`, so a filter on it only downloads the row groups holding that characteristic. The literal is written as `1L`, an integer like the column: a plain `1` is a double in R, which would make DuckDB cast the column instead of using its statistics and download every row group, so the package renders whole numbers in comparisons as integers, with a message the first time, see `?parquet_tbl`.
+`parquet_tbl()` reads the directory as one table, with `PRUID` coming from the paths, and a filter on it only opens the files of the matching partitions. Within a partition the rows are sorted by `characteristic_id`, so a filter on it only downloads the row groups holding that characteristic. The literal is written as `1L`, an integer like the column: a plain `1` is a double in R, which would make DuckDB cast the column instead of using its statistics and download every row group, so the package renders whole numbers in comparisons as integers, with a message the first time, see `?parquet_tbl`. Partition columns are strings, so `PRUID` is compared with `"59"`; a number there would make DuckDB cast the column instead and read every partition, which is why the package renders numbers against partition columns as strings as well.
 
 ```{r}
 parquet_tbl(profile_url) |>
@@ -149,22 +169,46 @@ parquet_tbl(profile_url) |>
   collect()
 ```
 
-`collect_parquet()` attaches the metadata to the result and the column labels to the columns, and `parquet_metadata()` on a lazy table reads the manifest of its source. Here we join the characteristic names from the file next to the dataset, both tables sit on the same DuckDB connection.
+`collect_parquet()` attaches the metadata to the result and the column labels to the columns, and `parquet_metadata()` on a lazy table reads the manifest of its source. Here we join the characteristic names from the file next to the dataset, both tables sit on the same DuckDB connection. The characteristics file stores the names in both languages, `name_en` and `name_fr`, and the session language makes `parquet_tbl()` select `name_en` as `name`, so the query selects `name` like any other column and `name_fr` never gets read.
 
 ```{r}
-characteristics <- parquet_tbl("https://data.mountainmath.ca/census/2021/profile_characteristics.parquet")
+characteristics_url <- "https://data.mountainmath.ca/census/2021/profile_characteristics.parquet"
+characteristics <- parquet_tbl(characteristics_url)
 
-area <- parquet_tbl(profile_url) |>
+colnames(characteristics)
+colnames(parquet_tbl(characteristics_url, language = NULL))
+
+area_query <- parquet_tbl(profile_url) |>
   filter(PRUID == "59", geo_uid == "59150002", characteristic_id <= 8L) |>
   inner_join(characteristics, by = "characteristic_id") |>
-  select(geo_uid, characteristic_id, name, total) |>
-  collect_parquet()
+  select(geo_uid, characteristic_id, name, total)
+
+area <- collect_parquet(area_query)
 
 area
 
 attr(area$total, "label")
 parquet_metadata(area)$notes
 ```
+
+The joined table contributes its own metadata, `parquet_sources()` lists every table that went into the result, with its attribution, and `parquet_sources_attribution()` joins them for a figure caption. Reading the tables in French gives the French names, labels and attributions with the same query; `select_language()` does the same swap on a table read with `language = NULL`, on joins too, for tables that were created before the language was decided.
+
+```{r}
+parquet_sources_attribution(area)
+
+area_fr <- parquet_tbl(profile_url, language = "fr") |>
+  filter(PRUID == "59", geo_uid == "59150002", characteristic_id <= 8L) |>
+  inner_join(parquet_tbl(characteristics_url, language = "fr"), by = "characteristic_id") |>
+  select(geo_uid, characteristic_id, name, total) |>
+  collect_parquet()
+
+area_fr
+
+attr(area_fr$total, "label")
+parquet_sources_attribution(area_fr)
+```
+
+The metadata attached to `area_fr` is the French description, with `language` set to `fr`, since the columns were selected in French; writing it out with `data_to_parquet(area_fr, metadata = parquet_metadata(area_fr))` gives a French dataset. The full bilingual metadata stays available from the lazy table, `parquet_metadata(area_query)`.
 
 Writing a partitioned dataset to R2 with `data_to_parquet(partition_by = )` writes the files and the manifest in one step, and removes the partitions of an earlier write that the new one no longer produces, so the manifest never lists partitions that are gone. Uploading a single partition into the directory later, with `data_to_parquet()` or `upload_parquet()`, patches the manifest with the new file instead of rebuilding it, and so does every upload and removal for the manifests of the directories above, which is how the `census/2021` manifest keeps listing the partition files.
 

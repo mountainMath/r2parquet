@@ -16,7 +16,8 @@ collect_parquet(
 \item{attach_metadata}{\code{TRUE} (default) or \code{FALSE}: attach the metadata of the parquet files as attributes.}
 
 \item{language}{language code like \code{"en"} or \code{"fr"} to collect the labels and columns in, see the Languages
-section, or \code{NULL} for the dataset as stored. Defaults to the \code{r2parquet.language} option.}
+section, or \code{NULL} for the dataset as stored. Defaults to the language the table's columns were selected
+in by \code{\link[=parquet_tbl]{parquet_tbl()}} or \code{\link[=select_language]{select_language()}}, else to the \code{r2parquet.language} option.}
 }
 \value{
 a tibble, or an sf object if the table has GEOMETRY columns.
@@ -33,6 +34,11 @@ geometries, e.g. from a left join, become empty geometries, since sf has no miss
 
 Reading the files fails with the errors described in the Errors section of \code{\link[=parquet_tbl]{parquet_tbl()}}, e.g. an
 \code{r2parquet_network_error} when the server can't be reached.
+
+Parquet is stored by column, so a query that keeps only the columns it needs downloads only those.
+Collecting a table on R2, S3 or at a URL that still has every column it was read with (nothing
+selected away, no summary) gives a message, once per session, with a \code{select()} of the columns it is
+about to fetch, to paste into the query and prune.
 
 For tables from \code{\link[=parquet_tbl]{parquet_tbl()}} the metadata of the parquet files (see \code{\link[=parquet_metadata]{parquet_metadata()}}) gets attached to
 the result: the whole list as the \code{metadata} attribute, and the \code{label} entries of \code{columns} as \code{label}
@@ -66,8 +72,15 @@ metadata as stored, with all languages, is \code{parquet_metadata(tbl)} on the l
 dataset without anything in the language asked for is collected as stored, metadata included.
 
 Without \code{language} the result is the dataset as stored, with all its columns, labelled with the plain
-labels, else those in the dataset's language; columns with labels only in other languages get none. The
-default is the \code{r2parquet.language} option, so \code{options(r2parquet.language = "fr")} sets the language once
-for a session.
+labels, else those in the dataset's language; columns with labels only in other languages get none. A
+dataset that carries its text in several languages without a \code{language} entry, as Statistics Canada's
+English and French data does, therefore gets no labels and no attribution until a language is asked for,
+which a message points out once per session. The default is the \code{r2parquet.language} option, so
+\code{options(r2parquet.language = "fr")} sets the language once for a session.
+
+With the option set, \code{\link[=parquet_tbl]{parquet_tbl()}} already selects the columns in that language, through
+\code{\link[=select_language]{select_language()}}, so the lazy table has \code{name} rather than \code{name_en} and \code{name_fr} and queries can
+use it; the labels then come from the stored column it stands in for, and a table whose columns were
+selected in a language is described in that language when none is passed here, whatever the option says.
 }
 

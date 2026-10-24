@@ -4,7 +4,13 @@
 \alias{parquet_tbl}
 \title{lazy table to query parquet files at URLs, on R2 or S3, or at local paths}
 \usage{
-parquet_tbl(path, hive_partitioning = TRUE, con = NULL, cache = NULL)
+parquet_tbl(
+  path,
+  hive_partitioning = TRUE,
+  con = NULL,
+  cache = NULL,
+  language = getOption("r2parquet.language")
+)
 }
 \arguments{
 \item{path}{URL, \verb{r2://bucket/path}, \verb{s3://bucket/path} or local path of a parquet file or a directory of
@@ -37,6 +43,10 @@ later calls reuse the result (see \code{\link[=clear_cache_checks]{clear_cache_c
 \item \code{"offline"}: read the copy without checking it against the remote files, current or not; fails for
 paths without a copy.
 }}
+
+\item{language}{language code like \code{"en"} or \code{"fr"}, or \code{NULL}: with a language, the columns the data
+holds in several languages get selected in that language under their plain names, see the Languages
+section. Defaults to the \code{r2parquet.language} option.}
 }
 \value{
 a lazy \code{dplyr} table on DuckDB.
@@ -74,6 +84,18 @@ which defeats the statistics it uses to skip row groups, so the filter downloads
 Comparisons with double columns are unaffected, and arithmetic is not rewritten (\code{x * 1000} stays a double
 multiplication). Write integers as \code{2021L} to avoid the message, and on a connection of your own passed as
 \code{con}, which keeps DuckDB's own translation.
+}
+
+\section{Languages}{
+Datasets can carry labels and columns in several languages, see the Languages section of
+\code{\link[=collect_parquet]{collect_parquet()}}. With a language the table gets its columns selected in that language through
+\code{\link[=select_language]{select_language()}}: a column in the language asked for takes the place and name of its plain column,
+\code{name_fr} becomes \code{name}, or stands in for a plain column the data doesn't have, and the columns in the
+other languages get left out before anything is read, so a bilingual dataset read with
+\code{options(r2parquet.language = "fr")} has \code{name} and no \code{name_en}. Which suffixes are languages is known
+from the metadata of the files, which gets read once per table for this. The column names of the table
+therefore depend on the language. \code{language = NULL} gives the columns as stored, for selecting them by
+hand or with \code{\link[=select_language]{select_language()}} later, which also works on joins of such tables.
 }
 
 \section{Errors}{

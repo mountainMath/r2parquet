@@ -66,21 +66,6 @@ test_that("list_parquet lists local files and the files of a table", {
   expect_error(list_parquet(1),"path")
 })
 
-# a local http server for the files of a directory, started in the background with python, NULL if that fails
-local_http_server <- function(root,envir=parent.frame()){
-  skip_on_os("windows")
-  skip_if(Sys.which("python3")=="","python3 not available")
-  port <- sample(20000:40000,1)
-  pid <- system(paste0("python3 -m http.server ",port," --bind 127.0.0.1 --directory ",shQuote(root)," >/dev/null 2>&1 & echo $!"),intern=TRUE)
-  withr::defer(tools::pskill(as.integer(pid)),envir=envir)
-  base <- paste0("http://127.0.0.1:",port)
-  for (i in 1:100) {
-    if (tryCatch(httr::status_code(httr::GET(paste0(base,"/"),httr::timeout(1)))<500,error=function(e)FALSE)) return(base)
-    Sys.sleep(0.1)
-  }
-  skip("could not start a local http server")
-}
-
 test_that("directories at URLs get read through their manifest", {
   skip_if_no_duckdb_extensions()
   root <- withr::local_tempdir()

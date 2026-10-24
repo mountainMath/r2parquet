@@ -26,7 +26,11 @@ knitr::opts_chunk$set(
 library(r2parquet)
 library(dplyr)
 library(ggplot2)
+
+options(r2parquet.language = "en")
 ```
+
+The census datasets in the bucket describe themselves in English and French, the option picks the language for column labels and attributions, see the [Metadata and manifests](metadata.html) article.
 
 As an example we consider accessing dissemination block (DB) level geographic data from the 2021 Canadian census. For this we have prepared a parquet file in a public bucket, it can be reached by url.
 
@@ -48,7 +52,7 @@ This only reads the parquet metadata, the file carries several geographic identi
 db_table |> parquet_metadata()
 ```
 
-A simple query would be to fetch the data for just the City of Vancouver.
+A simple query would be to fetch the data for just the City of Vancouver. The query keeps every column, and the first time that happens with a remote table `collect_parquet()` says so: parquet is stored by column and only the selected columns get downloaded, so the message gives a `select()` of all the columns to paste into the query and prune to the ones needed.
 
 ```{r fig-vancouver-csd, fig.cap="Example of using a remote geoparquet file"}
 data_csd <- db_table |>
@@ -58,7 +62,7 @@ data_csd <- db_table |>
 ggplot(data_csd) +
   geom_sf() +
   labs(title="City of Vancouver Dissemination Blocks",
-       caption=parquet_sources_attribution(data_csd))
+       caption=parquet_sources_attribution(data_csd, sep="\n"))
 ```
 
 Similarly, we can fetch the data for Metro Vancouver. The remote parquet file is over 300 MB in size, but both these queries run in less than a second because under the hood only the ranges for the data that's actually required are identified and read, with only limited unneeded data making the trip from R2 to the R session.
@@ -71,7 +75,7 @@ data_cma <- db_table |>
 ggplot(data_cma) +
   geom_sf() +
   labs(title="Metro Vancouver Dissemination Blocks",
-       caption=parquet_sources_attribution(data_cma))
+       caption=parquet_sources_attribution(data_cma, sep="\n"))
 ```
 
 To build on this we query the geographic attributes hosted at
@@ -94,7 +98,7 @@ parquet_sources(data_cma) |>
   transmute(file=basename(path),attribution)
 ```
 
-`parquet_sources_attribution()` turns these into one attribution for the caption, combining attributions that only differ in their last word.
+`parquet_sources_attribution()` turns these into one string for the caption, separated by `sep`, one per line here so the caption fits the figure; attributions that only differ in their last word, two products of one series say, get combined into one.
 
 ```{r fig-vancouver-density, fig.cap="Example of map using data from joined tables."}
 data_cma |>
@@ -108,7 +112,7 @@ data_cma |>
   scale_fill_viridis_d(option = "magma") +
   labs(title="Population density in Metro Vancouver",
        fill="Pop/ha",
-       caption=parquet_sources_attribution(data_cma))
+       caption=parquet_sources_attribution(data_cma, sep="\n"))
 ```
 
 
@@ -134,7 +138,7 @@ data_mask |>
   ggplot() +
   geom_sf() +
   labs(title="Dissemination blocks in central Toronto",
-       caption=parquet_sources_attribution(data_mask)) 
+       caption=parquet_sources_attribution(data_mask, sep="\n")) 
 ```
 
 `st_filter()` on the lazy table returns every feature that intersects the mask, reading only the row groups whose bounding box intersects it, clipping the returned data with `st_intersection` makes for a prettier plot. Unlike on sf objects, `st_filter()` on lazy tables transforms the mask to the crs of the data automatically, `st_intersection()` needs the explicit transformation.

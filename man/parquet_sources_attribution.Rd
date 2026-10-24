@@ -17,7 +17,8 @@ parquet_sources_attribution(
 \item{sep}{separator between attributions that don't get combined.}
 
 \item{language}{language code like \code{"fr"} for the attributions in that language (\code{attribution_fr}, falling
-back to \code{attribution}), or \code{NULL} for the plain ones, see \code{\link[=parquet_sources]{parquet_sources()}}. Defaults to the
+back to \code{attribution}), or \code{NULL} for the plain ones, see \code{\link[=parquet_sources]{parquet_sources()}}. Defaults, like
+\code{\link[=parquet_sources]{parquet_sources()}}, to the language a lazy table's columns were selected in, else to the
 \code{r2parquet.language} option.}
 }
 \value{

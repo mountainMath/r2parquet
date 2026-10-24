@@ -306,6 +306,17 @@ read_error <- function(e,path,call=NULL){
 #' multiplication). Write integers as `2021L` to avoid the message, and on a connection of your own passed as
 #' `con`, which keeps DuckDB's own translation.
 #'
+#' # Languages
+#' Datasets can carry labels and columns in several languages, see the Languages section of
+#' [collect_parquet()]. With a language the table gets its columns selected in that language through
+#' [select_language()]: a column in the language asked for takes the place and name of its plain column,
+#' `name_fr` becomes `name`, or stands in for a plain column the data doesn't have, and the columns in the
+#' other languages get left out before anything is read, so a bilingual dataset read with
+#' `options(r2parquet.language = "fr")` has `name` and no `name_en`. Which suffixes are languages is known
+#' from the metadata of the files, which gets read once per table for this. The column names of the table
+#' therefore depend on the language. `language = NULL` gives the columns as stored, for selecting them by
+#' hand or with [select_language()] later, which also works on joins of such tables.
+#'
 #' # Errors
 #' Paths without parquet files and denied requests fail with an error naming the path, of class
 #' `r2parquet_not_found` or `r2parquet_access_denied` (both also `r2parquet_error`) for use with
@@ -348,11 +359,15 @@ read_error <- function(e,path,call=NULL){
 #'   * `FALSE`: read the remote files directly.
 #'   * `"offline"`: read the copy without checking it against the remote files, current or not; fails for
 #'     paths without a copy.
+#' @param language language code like `"en"` or `"fr"`, or `NULL`: with a language, the columns the data
+#'   holds in several languages get selected in that language under their plain names, see the Languages
+#'   section. Defaults to the `r2parquet.language` option.
 #' @return a lazy `dplyr` table on DuckDB.
 #' @export
-parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL) {
+parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL,language=getOption("r2parquet.language")) {
   call <- sys.call()
   if (!is.character(path) || length(path)==0) stop("path has to be a character vector of paths.")
+  language <- check_language(language)
   given <- path
   if (is.null(con)) {
     con <- parquet_connection()
@@ -393,12 +408,21 @@ parquet_tbl <- function(path,hive_partitioning=TRUE,con=NULL,cache=NULL) {
   attr(tbl,"r2parquet_source") <- given
   attr(tbl,"r2parquet_partitions") <- partitions
   # tables joined on the right lose their attributes, parquet_sources() finds them by the SQL of their scan
-  assign(as.character(tbl$lazy_query$x),list(paths=files,source=given),envir=parquet_scans)
+  key <- as.character(tbl$lazy_query$x)
+  assign(key,list(paths=files,source=given,key=key),envir=parquet_scans)
+  # in a language, the columns in that language stand in for the plain ones and the others are left out
+  tbl <- select_language(tbl,language)
+  # the columns the table starts out with, for collect_parquet() to tell whether some were selected away;
+  # select_language() may have recorded the metadata in the entry in the meantime
+  entry <- get(key,envir=parquet_scans)
+  entry$columns <- colnames(tbl)
+  assign(key,entry,envir=parquet_scans)
   tbl
 }
 
 # the tables parquet_tbl created in the session, by the SQL of their scan: the files they read (local copies
-# for cached paths) and the paths as given
+# for cached paths), the paths as given, the key itself, the columns the table started out with and, once
+# read, their metadata (scan_footers())
 parquet_scans <- new.env(parent=emptyenv())
 
 # the files a scan written by duckdb_parquet_tbl reads, from its SQL, nothing for other SQL
@@ -426,7 +450,7 @@ table_scans <- function(x){
         source <- if (identical(paths,attr(x,"r2parquet_paths"))) attr(x,"r2parquet_source")
         # local and bucket directories are read as globs for the parquet files in them
         source <- source %||% sub("/\\*\\*/\\*\\.parquet$","",paths)
-        found[[key]] <<- list(paths=paths,source=source)
+        found[[key]] <<- list(paths=paths,source=source,key=key)
       }
     } else if (is.list(query)) {
       for (element in query) walk(element)

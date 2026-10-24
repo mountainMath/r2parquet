@@ -87,6 +87,12 @@ language_columns <- function(columns,language,languages){
   selection
 }
 
+# the language to describe a lazy table in: the language passed, checked, or, when none was passed, the
+# language select_language() selected its columns in, else the default (the r2parquet.language option)
+table_language <- function(tbl,language,missing){
+  if (missing) attr(tbl,"r2parquet_language") %||% check_language(language) else check_language(language)
+}
+
 # the language to resolve labels in, the language argument or the r2parquet.language option, checked
 check_language <- function(language){
   if (is.null(language)) return(NULL)
@@ -106,20 +112,37 @@ resolve_column_entry <- function(entry,language,dataset_language=NULL){
   c(text[!vapply(text,is.null,logical(1))],entry[is.na(language_suffix(keys,"label")) & is.na(language_suffix(keys,"description"))])
 }
 
+# a selection of columns (names in the result, values the columns selected) on top of the one recorded for
+# the table it selects from (its columns by the stored columns they come from): the result's columns by the
+# stored columns, columns the recorded selection doesn't know stand for themselves
+compose_selection <- function(recorded,selection){
+  if (is.null(recorded)) return(selection)
+  if (is.null(selection)) return(recorded)
+  origin <- unname(recorded[selection])
+  origin[is.na(origin)] <- selection[is.na(origin)]
+  stats::setNames(origin,names(selection))
+}
+
 # the metadata in one language, as collect_parquet(language=) delivers the data: entries in that language
 # (title_fr, label_fr) take the place of the plain ones, falling back to the plain entry and then to the
 # dataset language's, the other languages' entries get dropped, the columns entries follow the columns
 # language_columns() selects for the data's columns, or the selection given (keyed by their names in the
-# result, entries for columns the data doesn't have stay), and the language entry names the language delivered. Metadata of a dataset
-# with nothing in the language stays as stored, like the data
-resolve_language <- function(metadata,language,columns=names(metadata$columns),selection=NULL){
+# result, entries for columns the data doesn't have stay), on top of the selection select_language() recorded
+# for the table, and the language entry names the language delivered. Metadata of a dataset with nothing in
+# the language stays as stored, like the data
+resolve_language <- function(metadata,language,columns=names(metadata$columns),selection=NULL,recorded=NULL){
   language <- check_language(language)
   metadata <- unclass(metadata)
   if (is.null(language) || length(metadata)==0) return(metadata)
   columns <- as.character(columns)
-  if (!(language %in% print_languages(metadata) || any(endsWith(columns,paste0("_",language))))) return(metadata)
+  # the stored columns the data's columns were selected from count as the data's columns too
+  recorded <- recorded[names(recorded) %in% columns]
+  stored <- unique(c(columns,unname(recorded)))
+  if (!(language %in% print_languages(metadata) || any(endsWith(stored,paste0("_",language))))) return(metadata)
   languages <- unique(c(print_languages(metadata),language))
   selection <- selection %||% language_columns(columns,language,languages) %||% stats::setNames(columns,columns)
+  selection <- compose_selection(recorded,selection)
+  columns <- unique(c(stored,unname(selection)))
   dataset_language <- if (is.character(metadata$language) && length(metadata$language)==1) tolower(metadata$language)
   pattern <- paste0("^(.+)_(",paste0(languages,collapse="|"),")$")
   keys <- names(metadata)
@@ -129,8 +152,15 @@ resolve_language <- function(metadata,language,columns=names(metadata$columns),s
     variants <- keys[base==b]
     if (b=="columns" && is.list(metadata$columns) && !is.null(names(metadata$columns))) {
       entries <- metadata$columns
-      # the result's columns by the columns they come from, then the entries of columns the data doesn't have
-      origins <- c(selection,stats::setNames(nm=setdiff(names(entries),columns)))
+      # the result's columns by the columns they come from, then the entries of columns the data doesn't
+      # have, except the other languages' versions of columns the data has, which stored columns like
+      # name_fr beside a selected name_en are
+      others <- setdiff(names(entries),columns)
+      if (length(others)>0) {
+        kept <- language_columns(c(columns,others),language,languages) %||% stats::setNames(nm=c(columns,others))
+        others <- others[others %in% kept[names(kept)==unname(kept)]]
+      }
+      origins <- c(selection,stats::setNames(nm=others))
       resolved$columns <- list()
       for (name in names(origins)) {
         entry <- entries[[origins[[name]]]] %||% entries[[name]]
@@ -473,10 +503,37 @@ parquet_metadata.character <- function(x,from_files=FALSE,language=NULL,...) {
 #' @rdname parquet_metadata
 #' @export
 parquet_metadata.tbl_lazy <- function(x,from_files=FALSE,language=NULL,...) {
-  path <- attr(x,"r2parquet_paths")
-  if (is.null(path)) stop("The table was not created by parquet_tbl, pass the path of the parquet files instead.")
-  metadata <- scan_metadata(dbplyr::remote_con(x),path,attr(x,"r2parquet_source"),from_files)
-  new_parquet_metadata(resolve_language(metadata,language,colnames(x)))
+  if (is.null(attr(x,"r2parquet_paths"))) stop("The table was not created by parquet_tbl, pass the path of the parquet files instead.")
+  metadata <- scan_footers(dbplyr::remote_con(x),left_scan(x),from_files)
+  new_parquet_metadata(resolve_language(metadata,language,colnames(x),recorded=attr(x,"r2parquet_selection")))
+}
+
+# the parquet_scans entry of the table a lazy table from parquet_tbl was derived from (the left-hand table of
+# joins), found among its scans by the files it reads, or made up from its attributes for tables created
+# before parquet_scans was reset; NULL for tables not from parquet_tbl
+left_scan <- function(x,scans=table_scans(x)){
+  paths <- attr(x,"r2parquet_paths")
+  if (is.null(paths)) return(NULL)
+  for (scan in scans) if (identical(scan$paths,paths)) return(scan)
+  list(paths=paths,source=attr(x,"r2parquet_source"))
+}
+
+# the metadata of a parquet_scans entry, read once per table: the entry keeps what was read, since the
+# metadata gets looked up when the columns are selected in a language, when collecting and for the sources,
+# and manifests of large directories are not small; a new parquet_tbl() call on the paths replaces the entry.
+# from_files reads the footers afresh
+scan_footers <- function(con,scan,from_files=FALSE){
+  if (!isTRUE(from_files) && !is.null(scan$metadata)) return(scan$metadata)
+  metadata <- scan_metadata(con,scan$paths,scan$source,from_files)
+  key <- scan$key
+  if (!isTRUE(from_files) && !is.null(key) && exists(key,envir=parquet_scans,inherits=FALSE)) {
+    entry <- get(key,envir=parquet_scans)
+    if (identical(entry$paths,scan$paths)) {
+      entry$metadata <- metadata
+      assign(key,entry,envir=parquet_scans)
+    }
+  }
+  metadata
 }
 
 # the metadata of the files a table from parquet_tbl reads: the manifests of the paths the table was given serve
@@ -502,6 +559,57 @@ parquet_metadata.default <- function(x,...) {
   stop("x has to be a path, a vector of paths, a lazy DuckDB table from parquet_tbl or data collected with collect_parquet.")
 }
 
+#' select the columns of a lazy table in a language
+#'
+#' @description
+#' Selects, on a lazy table from [parquet_tbl()], the columns in one language under their plain names and
+#' leaves the columns in the other languages out, before the query runs, so they never get read: `name_fr`
+#' takes the place and name of `name`, or stands in for a `name` the data doesn't have, and `name_en` gets
+#' left out. [parquet_tbl()] does this itself when a language is set, this is the verb to do it later, e.g.
+#' after reading with `language = NULL`, or on a join of tables read without a language.
+#'
+#' @details
+#' Which suffixes are languages is known from the metadata of the tables the lazy table was read from (the
+#' `language` entry and the suffixes of the labels, see the Languages section of [collect_parquet()]), plus
+#' the language asked for, so a column like `rate_men` next to `rate` is left alone; the metadata of files in
+#' buckets and at URLs gets read once per table. A table without any column in the language is returned as
+#' it is. The table remembers the selection and the language, so [collect_parquet()], [parquet_sources()]
+#' and [parquet_metadata()] on it label `name` with the label of the column it came from, and the first two
+#' describe the result in that language when no language is passed to them, whatever the option says;
+#' [parquet_metadata()] returns the metadata as stored by default, as always.
+#'
+#' @param tbl lazy DuckDB table from [parquet_tbl()], or derived from one with `dplyr` verbs.
+#' @param language language code like `"en"` or `"fr"`, or `NULL` to return the table unchanged. Defaults to
+#'   the `r2parquet.language` option.
+#' @return the lazy table with the columns of the language selected.
+#' @examples
+#' \donttest{
+#' if (requireNamespace("curl", quietly = TRUE) && curl::has_internet()) {
+#'   characteristics <- parquet_tbl("https://data.mountainmath.ca/census/2021/profile_characteristics.parquet",
+#'                                  language = NULL)
+#'   colnames(characteristics)
+#'   colnames(select_language(characteristics, "fr"))
+#' }
+#' }
+#' @export
+select_language <- function(tbl,language=getOption("r2parquet.language")){
+  language <- check_language(language)
+  if (is.null(language)) return(tbl)
+  if (!inherits(tbl,"tbl_lazy")) stop("tbl has to be a lazy table from parquet_tbl.")
+  con <- dbplyr::remote_con(tbl)
+  scans <- table_scans(tbl)
+  left <- left_scan(tbl,scans)
+  if (!is.null(left) && !any(vapply(scans,function(scan)identical(scan$paths,left$paths),logical(1)))) scans <- c(list(left),scans)
+  languages <- unlist(lapply(scans,function(scan)metadata_languages(scan_footers(con,scan))))
+  columns <- colnames(tbl)
+  selection <- language_columns(columns,language,languages)
+  recorded <- attr(tbl,"r2parquet_selection") %||% stats::setNames(columns,columns)
+  if (!is.null(selection)) tbl <- dplyr::select(tbl,dplyr::all_of(selection))
+  attr(tbl,"r2parquet_selection") <- compose_selection(recorded,selection %||% stats::setNames(columns,columns))
+  attr(tbl,"r2parquet_language") <- language
+  tbl
+}
+
 #' metadata of all parquet sources of a table
 #'
 #' @description
@@ -524,7 +632,10 @@ parquet_metadata.default <- function(x,...) {
 #'   [parquet_metadata()].
 #' @param language language code like `"fr"` for the metadata of each source in that language, as
 #'   [collect_parquet()] attaches it (`attribution_fr` becomes `attribution`, see its Languages section), or
-#'   `NULL` for the metadata as stored. Defaults to the `r2parquet.language` option, like [collect_parquet()].
+#'   `NULL` for the metadata as stored. Defaults, like [collect_parquet()], to the language the columns of a
+#'   lazy table were selected in by [parquet_tbl()] or [select_language()], else to the `r2parquet.language`
+#'   option. Without a language, a source with text in several languages and no `language` entry has no plain
+#'   `attribution` to return, which a message points out once per session.
 #' @param ... not used.
 #' @return a tibble with one row per source table, left-hand table first: `path`, the path(s) passed to
 #'   [parquet_tbl()], separated by `", "`; a column for each metadata entry that holds a single value in any of
@@ -552,7 +663,9 @@ parquet_sources <- function(x,...) UseMethod("parquet_sources")
 parquet_sources.tbl_lazy <- function(x,from_files=FALSE,language=getOption("r2parquet.language"),...) {
   scans <- table_scans(x)
   con <- dbplyr::remote_con(x)
-  metadata <- lapply(scans,function(scan)scan_metadata(con,scan$paths,scan$source,from_files))
+  metadata <- lapply(scans,function(scan)scan_footers(con,scan,from_files))
+  language <- table_language(x,language,missing(language))
+  if (is.null(language)) note_missing_language(metadata)
   parquet_sources_table(scan_paths(scans),lapply(metadata,resolve_language,language))
 }
 
@@ -561,6 +674,7 @@ parquet_sources.tbl_lazy <- function(x,from_files=FALSE,language=getOption("r2pa
 parquet_sources.data.frame <- function(x,language=getOption("r2parquet.language"),...) {
   sources <- attr(x,"parquet_sources")
   if (is.null(sources)) return(parquet_sources_table(character(0),list()))
+  if (is.null(check_language(language))) note_missing_language(sources$metadata)
   parquet_sources_table(sources$path,lapply(sources$metadata,resolve_language,language))
 }
 
@@ -585,7 +699,8 @@ parquet_sources.default <- function(x,...) {
 #'   [collect_parquet()].
 #' @param sep separator between attributions that don't get combined.
 #' @param language language code like `"fr"` for the attributions in that language (`attribution_fr`, falling
-#'   back to `attribution`), or `NULL` for the plain ones, see [parquet_sources()]. Defaults to the
+#'   back to `attribution`), or `NULL` for the plain ones, see [parquet_sources()]. Defaults, like
+#'   [parquet_sources()], to the language a lazy table's columns were selected in, else to the
 #'   `r2parquet.language` option.
 #' @return a string, or `NULL` if none of the sources has an attribution, which leaves out a caption passed to
 #'   [ggplot2::labs()].
@@ -605,7 +720,8 @@ parquet_sources.default <- function(x,...) {
 #' }
 #' @export
 parquet_sources_attribution <- function(x,sep=" | ",language=getOption("r2parquet.language")){
-  combine_attributions(parquet_sources(x,language=language)[["attribution"]],sep)
+  sources <- if (missing(language)) parquet_sources(x) else parquet_sources(x,language=language)
+  combine_attributions(sources[["attribution"]],sep)
 }
 
 # attributions as one string, the ones that differ only in their last word combined, NULL without any
@@ -668,14 +784,35 @@ format_metadata_value <- function(value){
 }
 
 # the languages shown when printing: the dataset's languages plus the suffixes of top-level entries that come
-# with a plain entry or another suffixed one of the same base (title and title_fr, or title_en and title_fr)
+# with a plain entry or another suffixed one of the same base (title and title_fr, or title_en and title_fr).
+# Suffixes the dataset doesn't name as languages count only as two letters: licence_url next to licence is no
+# variant of licence, and three letter suffixes like url are common, while a three letter language code (fra)
+# has to come from the language entry or the column labels
 print_languages <- function(metadata){
   keys <- names(metadata)
+  known <- metadata_languages(metadata)
   match <- regmatches(keys,regexec("^(.+)_([a-z]{2,3})$",keys))
   base <- vapply(match,function(m)if (length(m)==3) m[2] else NA_character_,"")
   suffix <- vapply(match,function(m)if (length(m)==3) m[3] else NA_character_,"")
-  paired <- !is.na(base) & (base %in% keys | base %in% base[duplicated(base)])
-  unique(c(metadata_languages(metadata),suffix[paired]))
+  paired <- !is.na(base) & (base %in% keys | base %in% base[duplicated(base)]) & (nchar(suffix)==2 | suffix %in% known)
+  unique(c(known,suffix[paired]))
+}
+
+# a message, once per session, when metadata is resolved without a language and a dataset has text in several
+# languages but no language entry: nothing plain to fall back on, so no labels or attributions get resolved
+# until a language is asked for
+note_missing_language <- function(metadata){
+  if (isTRUE(parquet_cache$language_noted)) return(invisible(FALSE))
+  peers <- Filter(function(m)is.list(m) && is.null(m$language) && length(print_languages(m))>0,metadata)
+  if (length(peers)==0) return(invisible(FALSE))
+  languages <- unique(unlist(lapply(peers,print_languages)))
+  parquet_cache$language_noted <- TRUE
+  message("The data carries its text in ",paste0(languages,collapse=" and ")," with no plain text to fall back on, so no ",
+          "labels or attributions are resolved without a language. Set options(r2parquet.language = \"",languages[1],
+          "\") for the session, or pass language = \"",languages[1],"\" to collect_parquet(), parquet_sources() or ",
+          "parquet_sources_attribution(); parquet_metadata() returns the metadata in all languages. This message is ",
+          "shown once per session.")
+  invisible(TRUE)
 }
 
 # the text of a consolidated row in a language, "" without one

@@ -73,8 +73,9 @@
 #'   with or without a plain `label`, and a column holding another column's text in a language is named
 #'   with the same suffix, `name_fr` next to `name`, or `name_en` and `name_fr` without a plain `name`. No
 #'   language is privileged: a bilingual dataset can carry only suffixed labels and columns, and `language`
-#'   is only needed where there is plain text, to say which language it is in. [collect_parquet()] picks
-#'   the labels and columns of the language asked for, see its `language` argument.
+#'   is only needed where there is plain text, to say which language it is in. [parquet_tbl()] and
+#'   [select_language()] select the columns of the language asked for and [collect_parquet()] attaches its
+#'   labels, see the `language` arguments.
 #' * `primary_key`: the columns that together identify the rows, one like `"DBUID"` or several for long
 #'   tables, like `c("DAUID", "characteristic")`. They have to exist, have no missing values and identify the
 #'   rows, which gets checked before writing, at the cost of an extra pass over a lazy table. It gets written

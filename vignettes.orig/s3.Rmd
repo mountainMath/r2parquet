@@ -27,6 +27,8 @@ knitr::opts_chunk$set(
 library(r2parquet)
 library(dplyr)
 library(ggplot2)
+
+options(r2parquet.language = "en")
 ```
 
 `r2parquet` is designed around Cloudflare R2, but it can also interact with the S3 API. Buckets on Amazon S3, and on other services with an S3 compatible API like MinIO, are addressed as `s3://bucket/path` and work with the same functions as `r2://bucket/path`: `data_to_parquet()` and `upload_parquet()` write, `parquet_tbl()` reads, `list_parquet()` lists, `cache_parquet()` caches, `presigned_url()` shares, `remove_parquet()` removes, and directory uploads get their `_manifest.json` like on R2 (see the [Metadata and manifests](metadata.html) article). This article walks through uploading private and public data to S3.
@@ -74,7 +76,8 @@ geo_attributes |>
   filter(CMAUID == "933") |>
   select(DBUID, DAUID, CSDUID, CSDNAME, Population = DBPOP2021, Dwellings = DBTDWELL2021) |>
   data_to_parquet(private_path, sort_by = "DBUID",
-                  metadata = parquet_metadata(geo_attributes)[c("title", "attribution", "licence", "licence_url")])
+                  metadata = parquet_metadata(geo_attributes)[c("title_en", "title_fr", "attribution_en", "attribution_fr",
+                                                                "licence_en", "licence_fr", "licence_url_en", "licence_url_fr")])
 ```
 
 With credentials the file reads like any other.

@@ -15,7 +15,11 @@ vignette: >
 ``` r
 library(r2parquet)
 library(dplyr)
+
+options(r2parquet.language = "en")
 ```
+
+The datasets in this bucket describe themselves in English and French, so we pick English for the session, [Languages](#languages) below explains what the option does.
 
 The package focuses on parquet because it is uniquely suited to hold large static dataasets that can be read strategically instead of downloading the entire file, although how effective it is at that at least partially depends on how well the choices made in ordering, partitioning and row groups when uploading the file suit the use case of the person consuming the data.
 
@@ -56,28 +60,46 @@ The key-value metadata holds whatever `data_to_parquet(metadata = )` was given w
 DBI::dbGetQuery(con, paste0(
   "SELECT decode(key) AS key, left(decode(value), 60) AS value FROM parquet_kv_metadata(",
   DBI::dbQuoteString(con, db_url), ")"))
-#>                 key
-#> 1             title
-#> 2        source_url
-#> 3   reference_guide
-#> 4           licence
-#> 5       licence_url
-#> 6       attribution
-#> 7       primary_key
-#> 8  geometry_repairs
-#> 9        processing
-#> 10              geo
+#>                   key
+#> 1            title_en
+#> 2            title_fr
+#> 3       source_url_en
+#> 4       source_url_fr
+#> 5  reference_guide_en
+#> 6  reference_guide_fr
+#> 7          licence_en
+#> 8          licence_fr
+#> 9      licence_url_en
+#> 10     licence_url_fr
+#> 11     attribution_en
+#> 12     attribution_fr
+#> 13           notes_en
+#> 14           notes_fr
+#> 15            columns
+#> 16        primary_key
+#> 17   geometry_repairs
+#> 18         processing
+#> 19                geo
 #>                                                           value
-#> 1           2021 Census – Boundary files - Dissemination blocks
-#> 2  https://www12.statcan.gc.ca/census-recensement/alternative_a
-#> 3  https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/
-#> 4                                Statistics Canada Open Licence
-#> 5    https://www.statcan.gc.ca/en/terms-conditions/open-licence
-#> 6                       Statistics Canada Product ldb_000b21f_e
-#> 7                                                     ["DBUID"]
-#> 8  {"columns":["DBUID"],"rows":[["10010273010"],["10010667008"]
-#> 9  Repaired 830 of 498,547 geometries that were invalid, via sf
-#> 10 {"version":"2.0.0","primary_column":"geometry","columns":{"g
+#> 1           2021 Census – Boundary files – Dissemination blocks
+#> 2  Recensement de 2021 – Fichiers des limites – Îlots de diffus
+#> 3  https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-
+#> 4  https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-
+#> 5  https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/
+#> 6  https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/
+#> 7                                Statistics Canada Open Licence
+#> 8                         Licence ouverte de Statistique Canada
+#> 9    https://www.statcan.gc.ca/en/terms-conditions/open-licence
+#> 10               https://www.statcan.gc.ca/fr/reference/licence
+#> 11 Statistics Canada, 2021 Census dissemination block boundary 
+#> 12 Statistique Canada, Fichier des limites des îlots de diffusi
+#> 13 The identifiers of the containing geographies come from the 
+#> 14 Les identificateurs des géographies englobantes proviennent 
+#> 15 {"DBUID":{"label_en":"Dissemination block ID","label_fr":"Id
+#> 16                                                    ["DBUID"]
+#> 17 {"columns":["DBUID"],"rows":[["10010273010"],["10010667008"]
+#> 18 Repaired 830 of 498,547 geometries that were invalid, via sf
+#> 19 {"version":"2.0.0","primary_column":"geometry","columns":{"g
 ```
 
 `parquet_metadata()` reads these entries back as a list, parsing the JSON ones and leaving out `geo`: the crs of a geometry column lives in the column's type, which is where `collect_parquet()` takes it from. `from_files = TRUE` makes it read the footer of the file, we will see below what it reads otherwise. The list prints one line per entry, cut to the width of the console, with lists like the 830 geometries that were repaired when the file was written shown as compact JSON; the entries themselves are complete.
@@ -86,23 +108,115 @@ DBI::dbGetQuery(con, paste0(
 ``` r
 db_metadata <- parquet_metadata(db_url, from_files = TRUE)
 db_metadata
-#> <parquet metadata: 9 entries>
-#> title             2021 Census – Boundary files - Dissemination blocks
-#> source_url        https://www12.statcan.gc.ca/census-recensement/alternative_al…
-#> reference_guide   https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/g…
-#> licence           Statistics Canada Open Licence
-#> licence_url       https://www.statcan.gc.ca/en/terms-conditions/open-licence
-#> attribution       Statistics Canada Product ldb_000b21f_e
+#> <parquet metadata: 18 entries>
+#>                   en                              fr
+#> title             2021 Census – Boundary files …  Recensement de 2021 – Fichier…
+#> source_url        https://www12.statcan.gc.ca/c…  https://www12.statcan.gc.ca/c…
+#> reference_guide   https://www12.statcan.gc.ca/c…  https://www12.statcan.gc.ca/c…
+#> licence           Statistics Canada Open Licence  Licence ouverte de Statistiqu…
+#> licence_url       https://www.statcan.gc.ca/en/…  https://www.statcan.gc.ca/fr/…
+#> attribution       Statistics Canada, 2021 Censu…  Statistique Canada, Fichier d…
+#> notes             The identifiers of the contai…  Les identificateurs des géogr…
+#> columns           <13 columns, see below>
 #> primary_key       DBUID
 #> geometry_repairs  {"columns":"DBUID","rows":["10010273010","10010667008","10010…
 #> processing        Repaired 830 of 498,547 geometries that were invalid, via sf:…
+#> 
+#> columns     en                                 fr
+#>   DBUID     Dissemination block ID             Identificateur unique de l'îlot …
+#>   DAUID     Dissemination area ID              Identificateur unique de l'aire …
+#>   CTUID     Census tract ID                    Identificateur unique du secteur…
+#>   CSDUID    Census subdivision ID              Identificateur unique de la subd…
+#>   CMAUID    Census metropolitan area or cens…  Identificateur unique de la régi…
+#>   CMAPUID   CMA/CA provincial part ID: Provi…  Identificateur unique de la part…
+#>   CDUID     Census division ID                 Identificateur unique de la divi…
+#>   PRUID     Province or territory ID           Identificateur unique de la prov…
+#>   DGUID     Dissemination geography unique i…  Identificateur unique de géograp…
+#>   DBRPLAMX  Representative point, x (Lambert)  Point représentatif, x (Lambert)
+#>   DBRPLAMY  Representative point, y (Lambert)  Point représentatif, y (Lambert)
+#>   LANDAREA  Land area (km²)                    Superficie des terres (km²)
+#>   geometry  Boundary, Statistics Canada Lamb…  Limites, projection conique conf…
 db_metadata$processing
 #> [1] "Repaired 830 of 498,547 geometries that were invalid, via sf::st_make_valid (GEOS 3.13.0), keeping multi geometry types. The repaired rows are listed in geometry_repairs by DBUID."
 ```
 
-The entries are free-form, the ones in this bucket describe provenance and licence. A `columns` entry, a list with one entry per column holding a `label` and a `description`, is the one entry `collect_parquet()` treats specially, the labels get attached to the collected columns as `label` attributes. Column labels can be seen in action in the partitioned dataset below. Datasets with text in several languages carry it in suffixed entries and columns, `label_en` and `label_fr`, `name_en` and `name_fr`, with a `language` entry naming the language of any plain ones, and `collect_parquet(language = "fr")` picks the labels and columns of that language, leaving the other languages' columns out of the query. Three more entries have a fixed meaning: `primary_key` names the columns that together identify the rows, which `data_to_parquet()` checks before writing, one column for the files here and several for long tables like the partitioned dataset below, where rows are identified by area and characteristic. `processing` and `geometry_repairs` record geometries that `data_to_parquet()` repaired, how many and with which library, and which rows by their primary key.
+The entries are free-form, the ones in this bucket describe provenance and licence, in two languages, which is what the `en` and `fr` columns of the printout are about. A `columns` entry, a list with one entry per column holding a label and a description, is the one entry `collect_parquet()` treats specially, the labels get attached to the collected columns as `label` attributes. Column labels can be seen in action in the partitioned dataset below. Three more entries have a fixed meaning: `primary_key` names the columns that together identify the rows, which `data_to_parquet()` checks before writing, one column for the files here and several for long tables like the partitioned dataset below, where rows are identified by area and characteristic. `processing` and `geometry_repairs` record geometries that `data_to_parquet()` repaired, how many and with which library, and which rows by their primary key.
 
 Metadata in the footer is part of the file, so changing it means writing the file again.
+
+## Languages
+
+Statistics Canada publishes its data in English and French as equals, and the metadata convention follows that: text that exists in several languages is stored under suffixed keys, `title_en` and `title_fr`, `label_en` and `label_fr` in the column entries, and nothing is stored under a plain `title` or `label` unless the dataset has a language of its own, which the `language` entry then names. Columns can be translated the same way, the file describing the census profile characteristics below has `name_en` and `name_fr`. The datasets in this bucket have no plain entries, every text comes in the two languages, and the printout shows them side by side.
+
+
+``` r
+parquet_metadata(db_url)
+#> <parquet metadata: 18 entries>
+#>                   en                              fr
+#> licence           Statistics Canada Open Licence  Licence ouverte de Statistiqu…
+#> licence_url       https://www.statcan.gc.ca/en/…  https://www.statcan.gc.ca/fr/…
+#> title             2021 Census – Boundary files …  Recensement de 2021 – Fichier…
+#> source_url        https://www12.statcan.gc.ca/c…  https://www12.statcan.gc.ca/c…
+#> reference_guide   https://www12.statcan.gc.ca/c…  https://www12.statcan.gc.ca/c…
+#> attribution       Statistics Canada, 2021 Censu…  Statistique Canada, Fichier d…
+#> notes             The identifiers of the contai…  Les identificateurs des géogr…
+#> columns           <13 columns, see below>
+#> primary_key       DBUID
+#> geometry_repairs  {"columns":"DBUID","rows":["10010273010","10010667008","10010…
+#> processing        Repaired 830 of 498,547 geometries that were invalid, via sf:…
+#> 
+#> columns     en                                 fr
+#>   DBUID     Dissemination block ID             Identificateur unique de l'îlot …
+#>   DAUID     Dissemination area ID              Identificateur unique de l'aire …
+#>   CTUID     Census tract ID                    Identificateur unique du secteur…
+#>   CSDUID    Census subdivision ID              Identificateur unique de la subd…
+#>   CMAUID    Census metropolitan area or cens…  Identificateur unique de la régi…
+#>   CMAPUID   CMA/CA provincial part ID: Provi…  Identificateur unique de la part…
+#>   CDUID     Census division ID                 Identificateur unique de la divi…
+#>   PRUID     Province or territory ID           Identificateur unique de la prov…
+#>   DGUID     Dissemination geography unique i…  Identificateur unique de géograp…
+#>   DBRPLAMX  Representative point, x (Lambert)  Point représentatif, x (Lambert)
+#>   DBRPLAMY  Representative point, y (Lambert)  Point représentatif, y (Lambert)
+#>   LANDAREA  Land area (km²)                    Superficie des terres (km²)
+#>   geometry  Boundary, Statistics Canada Lamb…  Limites, projection conique conf…
+```
+
+The stored metadata is the full set. A language resolves it to one: `parquet_metadata(language = "fr")` picks the French variant of every entry and column label, drops the others and records the language in the `language` entry, so the result is a complete description of the dataset in that language.
+
+
+``` r
+parquet_metadata(db_url, language = "fr")
+#> <parquet metadata: 12 entries>
+#> licence           Licence ouverte de Statistique Canada
+#> licence_url       https://www.statcan.gc.ca/fr/reference/licence
+#> title             Recensement de 2021 – Fichiers des limites – Îlots de diffusi…
+#> source_url        https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-p…
+#> reference_guide   https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/g…
+#> attribution       Statistique Canada, Fichier des limites des îlots de diffusio…
+#> notes             Les identificateurs des géographies englobantes proviennent d…
+#> columns           <13 columns, see below>
+#> primary_key       DBUID
+#> geometry_repairs  {"columns":"DBUID","rows":["10010273010","10010667008","10010…
+#> processing        Repaired 830 of 498,547 geometries that were invalid, via sf:…
+#> language          fr
+#> 
+#> columns
+#>   DBUID     Identificateur unique de l'îlot de diffusion
+#>   DAUID     Identificateur unique de l'aire de diffusion
+#>   CTUID     Identificateur unique du secteur de recensement
+#>   CSDUID    Identificateur unique de la subdivision de recensement
+#>   CMAUID    Identificateur unique de la région métropolitaine de recensement ou…
+#>   CMAPUID   Identificateur unique de la partie provinciale de la RMR/AR: Code d…
+#>   CDUID     Identificateur unique de la division de recensement
+#>   PRUID     Identificateur unique de la province ou du territoire
+#>   DGUID     Identificateur unique de géographie de diffusion (IDUGD)
+#>   DBRPLAMX  Point représentatif, x (Lambert)
+#>   DBRPLAMY  Point représentatif, y (Lambert)
+#>   LANDAREA  Superficie des terres (km²)
+#>   geometry  Limites, projection conique conforme de Lambert de Statistique Cana…
+```
+
+That is what `collect_parquet(language = )` attaches to the collected data, together with the labels in that language. The columns follow the same rule: `parquet_tbl(language = )` selects the translated columns of the asked language under their plain name on the lazy table, `name_en` or `name_fr` becomes `name`, and leaves the others out, before anything is read, so queries use `name` and the other language never gets downloaded. The default for the language is the `r2parquet.language` option, which we set at the top of this article: without it, and without a `language` entry, a dataset like this one has no plain text to fall back on, so no labels get attached and `parquet_sources_attribution()` has no attribution to return, which a message points out once per session. Set the option once per session, or pass `language` to `parquet_tbl()`, `collect_parquet()`, `parquet_sources()` and `parquet_sources_attribution()` where one dataset should come out in another language; `language = NULL` gives the columns as stored, and `select_language()` does the swap later on any lazy table, joins included. `parquet_metadata()` ignores the option on purpose, so the full metadata of a lazy table or path is always one call away.
 
 ## A directory with several datasets
 
@@ -131,19 +245,87 @@ jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE)
 #> {
 #>   "directory": true,
 #>   "metadata": {
-#>     "licence": "Statistics Canada Open Licence",
-#>     "licence_url": "https://www.statcan.gc.ca/en/terms-conditions/open-licence"
+#>     "licence_en": "Statistics Canada Open Licence",
+#>     "licence_fr": "Licence ouverte de Statistique Canada",
+#>     "licence_url_en": "https://www.statcan.gc.ca/en/terms-conditions/open-licence",
+#>     "licence_url_fr": "https://www.statcan.gc.ca/fr/reference/licence"
 #>   },
 #>   "files": [
 #>     {
 #>       "path": "ldb_000b21f_e.parquet",
-#>       "size": 330186915,
-#>       "etag": "c330cd385a75b7eb5103c915dd6a6763",
-#>       "modified": "2026-10-19T18:05:26Z",
+#>       "size": 330189447,
+#>       "etag": "828cc476d028ba6d616ed6cfa4f0a6b0",
+#>       "modified": "2026-10-23T23:16:40Z",
 #>       "metadata": {
-#>         "title": "2021 Census – Boundary files - Dissemination blocks",
-#>         "attribution": "Statistics Canada Product ldb_000b21f_e",
-#>         "processing": "Repaired 830 of 498,547 geometries that were invalid, via sf::st_make_valid (GEOS 3.13.0), keeping multi geometry types. The repaired rows are listed in geometry_repairs by DBUID.",
+#>         "title_en": "2021 Census – Boundary files – Dissemination blocks",
+#>         "title_fr": "Recensement de 2021 – Fichiers des limites – Îlots de diffusion",
+#>         "source_url_en": "https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/ldb_000b21f_e.zip",
+#>         "source_url_fr": "https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/ldb_000b21f_f.zip",
+#>         "reference_guide_en": "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21",
+#>         "reference_guide_fr": "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-fra.cfm?year=21",
+#>         "attribution_en": "Statistics Canada, 2021 Census dissemination block boundary file ldb_000b21f_e",
+#>         "attribution_fr": "Statistique Canada, Fichier des limites des îlots de diffusion du Recensement de 2021, ldb_000b21f_e",
+#>         "notes_en": "The identifiers of the containing geographies come from the Geographic Attribute File (92-151-X).",
+#>         "notes_fr": "Les identificateurs des géographies englobantes proviennent du Fichier des attributs géographiques (92-151-X).",
+#>         "columns": {
+#>           "DBUID": {
+#>             "label_en": "Dissemination block ID",
+#>             "label_fr": "Identificateur unique de l'îlot de diffusion"
+#>           },
+#>           "DAUID": {
+#>             "label_en": "Dissemination area ID",
+#>             "label_fr": "Identificateur unique de l'aire de diffusion"
+#>           },
+#>           "CTUID": {
+#>             "label_en": "Census tract ID",
+#>             "label_fr": "Identificateur unique du secteur de recensement"
+#>           },
+#>           "CSDUID": {
+#>             "label_en": "Census subdivision ID",
+#>             "label_fr": "Identificateur unique de la subdivision de recensement"
+#>           },
+#>           "CMAUID": {
+#>             "label_en": "Census metropolitan area or census agglomeration ID",
+#>             "label_fr": "Identificateur unique de la région métropolitaine de recensement ou de l'agglomération de recensement"
+#>           },
+#>           "CMAPUID": {
+#>             "label_en": "CMA/CA provincial part ID",
+#>             "label_fr": "Identificateur unique de la partie provinciale de la RMR/AR",
+#>             "description_en": "Province code followed by the CMA/CA code, unique within CMA/CAs spanning two provinces",
+#>             "description_fr": "Code de la province suivi du code de la RMR/AR, distinct pour les RMR/AR chevauchant deux provinces"
+#>           },
+#>           "CDUID": {
+#>             "label_en": "Census division ID",
+#>             "label_fr": "Identificateur unique de la division de recensement"
+#>           },
+#>           "PRUID": {
+#>             "label_en": "Province or territory ID",
+#>             "label_fr": "Identificateur unique de la province ou du territoire"
+#>           },
+#>           "DGUID": {
+#>             "label_en": "Dissemination geography unique identifier (DGUID)",
+#>             "label_fr": "Identificateur unique de géographie de diffusion (IDUGD)"
+#>           },
+#>           "DBRPLAMX": {
+#>             "label_en": "Representative point, x (Lambert)",
+#>             "label_fr": "Point représentatif, x (Lambert)"
+#>           },
+#>           "DBRPLAMY": {
+#>             "label_en": "Representative point, y (Lambert)",
+#>             "label_fr": "Point représentatif, y (Lambert)"
+#>           },
+#>           "LANDAREA": {
+#>             "label_en": "Land area (km²)",
+#>             "label_fr": "Superficie des terres (km²)"
+#>           },
+#>           "geometry": {
+#>             "label_en": "Boundary, Statistics Canada Lambert conformal conic",
+#>             "label_fr": "Limites, projection conique conforme de Lambert de Statistique Canada"
+#>           }
+#>         },
+#>         "primary_key": [
+#>           "DBUID"
+#>         ],
 #>         "geometry_repairs": {
 #>           "columns": [
 #>             "DBUID"
@@ -160,21 +342,48 @@ jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE)
 #>             ]
 #>           ]
 #>         },
-#>         "primary_key": [
-#>           "DBUID"
-#>         ],
-#>         "source_url": "https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=ldb_000b21f_e.zip&k=%20%20%20248570&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/ldb_000b21f_e.zip",
-#>         "reference_guide": "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21"
+#>         "processing": "Repaired 830 of 498,547 geometries that were invalid, via sf::st_make_valid (GEOS 3.13.0), keeping multi geometry types. The repaired rows are listed in geometry_repairs by DBUID."
 #>       }
 #>     },
 #>     {
 #>       "path": "lada000b21f_e/PRUID=10/data_0.parquet",
-#>       "size": 11808537,
-#>       "etag": "d789c88b46837f3f3fc085671fe4e280",
-#>       "modified": "2026-10-19T18:15:54Z",
+#>       "size": 11809440,
+#>       "etag": "e12d24335170f77365ca06fa5bb224a6",
+#>       "modified": "2026-10-23T23:18:53Z",
 #>       "metadata": {
-#>         "processing": "Repaired 44 of 5,433 geometries that were invalid, via sf::st_make_valid (GEOS 3.13.0), keeping multi geometry types. The repaired rows are listed in geometry_repairs by ADAUID.",
-#>         "title": "2021 Census – Boundary files - Aggregate dissemination areas",
+#>         "title_en": "2021 Census – Boundary files – Aggregate dissemination areas",
+#>         "title_fr": "Recensement de 2021 – Fichiers des limites – Aires de diffusion agrégées",
+#>         "source_url_en": "https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lada000b21f_e.zip",
+#>         "source_url_fr": "https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lada000b21f_f.zip",
+#>         "reference_guide_en": "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21",
+#>         "reference_guide_fr": "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-fra.cfm?year=21",
+#>         "attribution_en": "Statistics Canada, 2021 Census aggregate dissemination area boundary file lada000b21f_e",
+#>         "attribution_fr": "Statistique Canada, Fichier des limites des aires de diffusion agrégées du Recensement de 2021, lada000b21f_e",
+#>         "columns": {
+#>           "ADAUID": {
+#>             "label_en": "Aggregate dissemination area ID",
+#>             "label_fr": "Identificateur unique de l'aire de diffusion agrégée"
+#>           },
+#>           "DGUID": {
+#>             "label_en": "Dissemination geography unique identifier (DGUID)",
+#>             "label_fr": "Identificateur unique de géographie de diffusion (IDUGD)"
+#>           },
+#>           "LANDAREA": {
+#>             "label_en": "Land area (km²)",
+#>             "label_fr": "Superficie des terres (km²)"
+#>           },
+#>           "geometry": {
+#>             "label_en": "Boundary, Statistics Canada Lambert conformal conic",
+#>             "label_fr": "Limites, projection conique conforme de Lambert de Statistique Canada"
+#>           },
+#>           "PRUID": {
+#>             "label_en": "Province or territory ID",
+#>             "label_fr": "Identificateur unique de la province ou du territoire"
+#>           }
+#>         },
+#>         "primary_key": [
+#>           "ADAUID"
+#>         ],
 #>         "geometry_repairs": {
 #>           "columns": [
 #>             "ADAUID"
@@ -191,90 +400,105 @@ jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE)
 #>             ]
 #>           ]
 #>         },
-#>         "primary_key": [
-#>           "ADAUID"
-#>         ],
-#>         "columns": {
-#>           "ADAUID": {
-#>             "label": "Aggregate dissemination area unique identifier"
-#>           },
-#>           "DGUID": {
-#>             "label": "Dissemination geography unique identifier"
-#>           },
-#>           "LANDAREA": {
-#>             "label": "Land area in square kilometres"
-#>           },
-#>           "PRUID": {
-#>             "label": "Province or territory unique identifier"
-#>           }
-#>         },
-#>         "attribution": "Statistics Canada Product lada000b21f_e",
-#>         "reference_guide": "https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/guide/index2021-eng.cfm?year=21",
-#>         "source_url": "https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm?l=eng&dispext=zip&teng=lada000b21f_e.zip&k=%20%20%20%2096469&loc=//www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lada000b21f_e.zip"
+#>         "processing": "Repaired 44 of 5,433 geometries that were invalid, via sf::st_make_valid (GEOS 3.13.0), keeping multi geometry types. The repaired rows are listed in geometry_repairs by ADAUID."
 #>       }
 #>     },
 #>     {
 #>       "path": "profile_ADA/PRUID=10/data_0.parquet",
-#>       "size": 853184,
-#>       "etag": "f5530645ce5c5495e4aed671a4750d67",
-#>       "modified": "2026-10-19T18:21:49Z",
+#>       "size": 857578,
+#>       "etag": "c745e8ebfe901b59bf8c72a983b0f2e0",
+#>       "modified": "2026-10-23T23:20:09Z",
 #>       "metadata": {
-#>         "title": "2021 Census Profile – Aggregate dissemination areas",
-#>         "attribution": "Statistics Canada Product 98-401-X2021012",
+#>         "title_en": "2021 Census Profile – Aggregate dissemination areas",
+#>         "title_fr": "Profil du recensement de 2021 – Aires de diffusion agrégées",
+#>         "source_url_en": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/download-telecharger/comp/GetFile.cfm?Lang=E&FILETYPE=CSV&GEONO=012",
+#>         "source_url_fr": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/download-telecharger/comp/GetFile.cfm?Lang=F&FILETYPE=CSV&GEONO=012",
+#>         "reference_guide_en": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/about-apropos.cfm?Lang=E",
+#>         "reference_guide_fr": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/about-apropos.cfm?Lang=F",
+#>         "attribution_en": "Statistics Canada, 2021 Census Profile, product 98-401-X2021012",
+#>         "attribution_fr": "Statistique Canada, Profil du recensement de 2021, produit 98-401-X2021012",
+#>         "notes_en": "Symbols: x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised. Characteristics are described in profile_characteristics.parquet, geographies in profile_ADA_geographies.parquet.",
+#>         "notes_fr": "Symboles : x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé. Les caractéristiques sont décrites dans profile_characteristics.parquet, les géographies dans profile_ADA_geographies.parquet.",
 #>         "columns": {
 #>           "geo_uid": {
-#>             "label": "Aggregate dissemination area unique identifier"
+#>             "label_en": "Aggregate dissemination area ID",
+#>             "label_fr": "Identificateur unique de l'aire de diffusion agrégée"
 #>           },
 #>           "PRUID": {
-#>             "label": "Province or territory unique identifier"
+#>             "label_en": "Province or territory ID",
+#>             "label_fr": "Identificateur unique de la province ou du territoire"
 #>           },
 #>           "characteristic_id": {
-#>             "label": "Characteristic identifier, see profile_characteristics.parquet"
+#>             "label_en": "Characteristic ID",
+#>             "label_fr": "Identificateur de la caractéristique",
+#>             "description_en": "See profile_characteristics.parquet",
+#>             "description_fr": "Voir profile_characteristics.parquet"
 #>           },
 #>           "total": {
-#>             "label": "Count, total"
+#>             "label_en": "Count, total",
+#>             "label_fr": "Chiffre, total"
 #>           },
 #>           "men": {
-#>             "label": "Count, men+"
+#>             "label_en": "Count, men+",
+#>             "label_fr": "Chiffre, hommes+"
 #>           },
 #>           "women": {
-#>             "label": "Count, women+"
+#>             "label_en": "Count, women+",
+#>             "label_fr": "Chiffre, femmes+"
 #>           },
 #>           "rate_total": {
-#>             "label": "Rate, total"
+#>             "label_en": "Rate, total",
+#>             "label_fr": "Taux, total"
 #>           },
 #>           "rate_men": {
-#>             "label": "Rate, men+"
+#>             "label_en": "Rate, men+",
+#>             "label_fr": "Taux, hommes+"
 #>           },
 #>           "rate_women": {
-#>             "label": "Rate, women+"
+#>             "label_en": "Rate, women+",
+#>             "label_fr": "Taux, femmes+"
 #>           },
 #>           "symbol_total": {
-#>             "label": "Symbol for the total count"
+#>             "label_en": "Symbol for the total count",
+#>             "label_fr": "Symbole du chiffre total",
+#>             "description_en": "x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>             "description_fr": "x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé"
 #>           },
 #>           "symbol_men": {
-#>             "label": "Symbol for the men+ count"
+#>             "label_en": "Symbol for the men+ count",
+#>             "label_fr": "Symbole du chiffre hommes+",
+#>             "description_en": "x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>             "description_fr": "x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé"
 #>           },
 #>           "symbol_women": {
-#>             "label": "Symbol for the women+ count"
+#>             "label_en": "Symbol for the women+ count",
+#>             "label_fr": "Symbole du chiffre femmes+",
+#>             "description_en": "x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>             "description_fr": "x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé"
 #>           },
 #>           "symbol_rate_total": {
-#>             "label": "Symbol for the total rate"
+#>             "label_en": "Symbol for the total rate",
+#>             "label_fr": "Symbole du taux total",
+#>             "description_en": "x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>             "description_fr": "x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé"
 #>           },
 #>           "symbol_rate_men": {
-#>             "label": "Symbol for the men+ rate"
+#>             "label_en": "Symbol for the men+ rate",
+#>             "label_fr": "Symbole du taux hommes+",
+#>             "description_en": "x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>             "description_fr": "x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé"
 #>           },
 #>           "symbol_rate_women": {
-#>             "label": "Symbol for the women+ rate"
+#>             "label_en": "Symbol for the women+ rate",
+#>             "label_fr": "Symbole du taux femmes+",
+#>             "description_en": "x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>             "description_fr": "x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé"
 #>           }
 #>         },
-#>         "notes": "Symbols: x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
 #>         "primary_key": [
 #>           "geo_uid",
 #>           "characteristic_id"
-#>         ],
-#>         "source_url": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/download-telecharger/comp/GetFile.cfm?Lang=E&FILETYPE=CSV&GEONO=012",
-#>         "reference_guide": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/about-apropos.cfm?Lang=E"
+#>         ]
 #>       }
 #>     }
 #>   ]
@@ -293,16 +517,16 @@ list_parquet(census_url) |>
 #> # A tibble: 31 × 3
 #>    path                                  size     modified           
 #>    <chr>                                 <chr>    <dttm>             
-#>  1 2021_92-151_X.parquet                 10.2 MB  2026-10-19 17:54:22
-#>  2 lada000b21f_e/PRUID=10/data_0.parquet 11.8 MB  2026-10-19 18:15:54
-#>  3 lada000b21f_e/PRUID=11/data_0.parquet 450.6 kB 2026-10-19 18:15:54
-#>  4 lada000b21f_e/PRUID=12/data_0.parquet 3.4 MB   2026-10-19 18:15:55
-#>  5 lada000b21f_e/PRUID=13/data_0.parquet 1.8 MB   2026-10-19 18:15:55
-#>  6 lada000b21f_e/PRUID=24/data_0.parquet 25.3 MB  2026-10-19 18:15:57
-#>  7 lada000b21f_e/PRUID=35/data_0.parquet 40.4 MB  2026-10-19 18:15:59
-#>  8 lada000b21f_e/PRUID=46/data_0.parquet 2.9 MB   2026-10-19 18:16:00
-#>  9 lada000b21f_e/PRUID=47/data_0.parquet 1.2 MB   2026-10-19 18:16:01
-#> 10 lada000b21f_e/PRUID=48/data_0.parquet 2.3 MB   2026-10-19 18:16:01
+#>  1 2021_92-151_X.parquet                 10.2 MB  2026-10-23 23:05:56
+#>  2 lada000b21f_e/PRUID=10/data_0.parquet 11.8 MB  2026-10-23 23:18:53
+#>  3 lada000b21f_e/PRUID=11/data_0.parquet 451.5 kB 2026-10-23 23:18:53
+#>  4 lada000b21f_e/PRUID=12/data_0.parquet 3.4 MB   2026-10-23 23:18:53
+#>  5 lada000b21f_e/PRUID=13/data_0.parquet 1.8 MB   2026-10-23 23:18:53
+#>  6 lada000b21f_e/PRUID=24/data_0.parquet 25.3 MB  2026-10-23 23:18:53
+#>  7 lada000b21f_e/PRUID=35/data_0.parquet 40.4 MB  2026-10-23 23:18:53
+#>  8 lada000b21f_e/PRUID=46/data_0.parquet 2.9 MB   2026-10-23 23:18:53
+#>  9 lada000b21f_e/PRUID=47/data_0.parquet 1.2 MB   2026-10-23 23:18:53
+#> 10 lada000b21f_e/PRUID=48/data_0.parquet 2.3 MB   2026-10-23 23:18:53
 #> # ℹ 21 more rows
 ```
 
@@ -310,9 +534,10 @@ list_parquet(census_url) |>
 
 
 ``` r
-parquet_metadata(db_url)[c("title", "primary_key", "processing")]
-#> <parquet metadata: 3 entries>
-#> title        2021 Census – Boundary files - Dissemination blocks
+parquet_metadata(db_url)[c("title_en", "title_fr", "primary_key", "processing")]
+#> <parquet metadata: 4 entries>
+#>              en                                fr
+#> title        2021 Census – Boundary files – …  Recensement de 2021 – Fichiers …
 #> primary_key  DBUID
 #> processing   Repaired 830 of 498,547 geometries that were invalid, via sf::st_m…
 ```
@@ -325,7 +550,7 @@ Manifests are per directory and cover everything below, so a manifest in a highe
 
 A dataset can also be a directory of files, hive partitioned by the values of one or more columns, which is how `data_to_parquet(partition_by = )` writes it. The 2021 census profile for aggregate dissemination areas in the public bucket is such a dataset: one row per area and characteristic, partitioned by province, with the characteristics described in a small file next to it.
 
-Each partition is a directory named after the column and its value, holding the parquet file for that value. The partition column is not stored in the files, readers recover it from the directory names, typed by their values, so `PRUID` comes back as a number below. The dataset's manifest lists the partition files.
+Each partition is a directory named after the column and its value, holding the parquet file for that value. The partition column is not stored in the files, readers recover it from the directory names, as strings, so a province code like `"10"` stays a string and keeps its leading zeros. The dataset's manifest lists the partition files.
 
 
 ``` r
@@ -337,19 +562,19 @@ list_parquet(profile_url) |>
 #> # A tibble: 13 × 3
 #>    path                    size     modified           
 #>    <chr>                   <chr>    <dttm>             
-#>  1 PRUID=10/data_0.parquet 853.2 kB 2026-10-19 18:21:49
-#>  2 PRUID=11/data_0.parquet 294.3 kB 2026-10-19 18:21:49
-#>  3 PRUID=12/data_0.parquet 1.5 MB   2026-10-19 18:21:50
-#>  4 PRUID=13/data_0.parquet 1.3 MB   2026-10-19 18:21:50
-#>  5 PRUID=24/data_0.parquet 14.8 MB  2026-10-19 18:21:51
-#>  6 PRUID=35/data_0.parquet 23 MB    2026-10-19 18:21:53
-#>  7 PRUID=46/data_0.parquet 2.4 MB   2026-10-19 18:21:54
-#>  8 PRUID=47/data_0.parquet 2.7 MB   2026-10-19 18:21:54
-#>  9 PRUID=48/data_0.parquet 5.8 MB   2026-10-19 18:21:55
-#> 10 PRUID=59/data_0.parquet 9.8 MB   2026-10-19 18:21:56
-#> 11 PRUID=60/data_0.parquet 240.5 kB 2026-10-19 18:21:56
-#> 12 PRUID=61/data_0.parquet 302.5 kB 2026-10-19 18:21:57
-#> 13 PRUID=62/data_0.parquet 266 kB   2026-10-19 18:21:57
+#>  1 PRUID=10/data_0.parquet 857.6 kB 2026-10-23 23:20:09
+#>  2 PRUID=11/data_0.parquet 298.7 kB 2026-10-23 23:20:09
+#>  3 PRUID=12/data_0.parquet 1.5 MB   2026-10-23 23:20:09
+#>  4 PRUID=13/data_0.parquet 1.3 MB   2026-10-23 23:20:09
+#>  5 PRUID=24/data_0.parquet 14.8 MB  2026-10-23 23:20:09
+#>  6 PRUID=35/data_0.parquet 23 MB    2026-10-23 23:20:09
+#>  7 PRUID=46/data_0.parquet 2.4 MB   2026-10-23 23:20:09
+#>  8 PRUID=47/data_0.parquet 2.7 MB   2026-10-23 23:20:09
+#>  9 PRUID=48/data_0.parquet 5.8 MB   2026-10-23 23:20:09
+#> 10 PRUID=59/data_0.parquet 9.8 MB   2026-10-23 23:20:09
+#> 11 PRUID=60/data_0.parquet 244.9 kB 2026-10-23 23:20:09
+#> 12 PRUID=61/data_0.parquet 306.9 kB 2026-10-23 23:20:09
+#> 13 PRUID=62/data_0.parquet 270.4 kB 2026-10-23 23:20:09
 ```
 
 The files were written together, so they share their metadata, `columns` included, and the manifest carries it once, at the dataset level, while the file entries only list the files; `columns` is never repeated per file. We show the first two entries.
@@ -363,58 +588,94 @@ jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE)
 #> {
 #>   "directory": true,
 #>   "metadata": {
-#>     "title": "2021 Census Profile – Aggregate dissemination areas",
-#>     "source_url": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/download-telecharger/comp/GetFile.cfm?Lang=E&FILETYPE=CSV&GEONO=012",
-#>     "reference_guide": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/about-apropos.cfm?Lang=E",
-#>     "licence": "Statistics Canada Open Licence",
-#>     "licence_url": "https://www.statcan.gc.ca/en/terms-conditions/open-licence",
-#>     "attribution": "Statistics Canada Product 98-401-X2021012",
-#>     "notes": "Symbols: x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>     "title_en": "2021 Census Profile – Aggregate dissemination areas",
+#>     "title_fr": "Profil du recensement de 2021 – Aires de diffusion agrégées",
+#>     "source_url_en": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/download-telecharger/comp/GetFile.cfm?Lang=E&FILETYPE=CSV&GEONO=012",
+#>     "source_url_fr": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/download-telecharger/comp/GetFile.cfm?Lang=F&FILETYPE=CSV&GEONO=012",
+#>     "reference_guide_en": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/about-apropos.cfm?Lang=E",
+#>     "reference_guide_fr": "https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/details/about-apropos.cfm?Lang=F",
+#>     "licence_en": "Statistics Canada Open Licence",
+#>     "licence_fr": "Licence ouverte de Statistique Canada",
+#>     "licence_url_en": "https://www.statcan.gc.ca/en/terms-conditions/open-licence",
+#>     "licence_url_fr": "https://www.statcan.gc.ca/fr/reference/licence",
+#>     "attribution_en": "Statistics Canada, 2021 Census Profile, product 98-401-X2021012",
+#>     "attribution_fr": "Statistique Canada, Profil du recensement de 2021, produit 98-401-X2021012",
+#>     "notes_en": "Symbols: x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised. Characteristics are described in profile_characteristics.parquet, geographies in profile_ADA_geographies.parquet.",
+#>     "notes_fr": "Symboles : x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé. Les caractéristiques sont décrites dans profile_characteristics.parquet, les géographies dans profile_ADA_geographies.parquet.",
 #>     "columns": {
 #>       "geo_uid": {
-#>         "label": "Aggregate dissemination area unique identifier"
+#>         "label_en": "Aggregate dissemination area ID",
+#>         "label_fr": "Identificateur unique de l'aire de diffusion agrégée"
 #>       },
 #>       "PRUID": {
-#>         "label": "Province or territory unique identifier"
+#>         "label_en": "Province or territory ID",
+#>         "label_fr": "Identificateur unique de la province ou du territoire"
 #>       },
 #>       "characteristic_id": {
-#>         "label": "Characteristic identifier, see profile_characteristics.parquet"
+#>         "label_en": "Characteristic ID",
+#>         "label_fr": "Identificateur de la caractéristique",
+#>         "description_en": "See profile_characteristics.parquet",
+#>         "description_fr": "Voir profile_characteristics.parquet"
 #>       },
 #>       "total": {
-#>         "label": "Count, total"
+#>         "label_en": "Count, total",
+#>         "label_fr": "Chiffre, total"
 #>       },
 #>       "men": {
-#>         "label": "Count, men+"
+#>         "label_en": "Count, men+",
+#>         "label_fr": "Chiffre, hommes+"
 #>       },
 #>       "women": {
-#>         "label": "Count, women+"
+#>         "label_en": "Count, women+",
+#>         "label_fr": "Chiffre, femmes+"
 #>       },
 #>       "rate_total": {
-#>         "label": "Rate, total"
+#>         "label_en": "Rate, total",
+#>         "label_fr": "Taux, total"
 #>       },
 #>       "rate_men": {
-#>         "label": "Rate, men+"
+#>         "label_en": "Rate, men+",
+#>         "label_fr": "Taux, hommes+"
 #>       },
 #>       "rate_women": {
-#>         "label": "Rate, women+"
+#>         "label_en": "Rate, women+",
+#>         "label_fr": "Taux, femmes+"
 #>       },
 #>       "symbol_total": {
-#>         "label": "Symbol for the total count"
+#>         "label_en": "Symbol for the total count",
+#>         "label_fr": "Symbole du chiffre total",
+#>         "description_en": "x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>         "description_fr": "x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé"
 #>       },
 #>       "symbol_men": {
-#>         "label": "Symbol for the men+ count"
+#>         "label_en": "Symbol for the men+ count",
+#>         "label_fr": "Symbole du chiffre hommes+",
+#>         "description_en": "x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>         "description_fr": "x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé"
 #>       },
 #>       "symbol_women": {
-#>         "label": "Symbol for the women+ count"
+#>         "label_en": "Symbol for the women+ count",
+#>         "label_fr": "Symbole du chiffre femmes+",
+#>         "description_en": "x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>         "description_fr": "x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé"
 #>       },
 #>       "symbol_rate_total": {
-#>         "label": "Symbol for the total rate"
+#>         "label_en": "Symbol for the total rate",
+#>         "label_fr": "Symbole du taux total",
+#>         "description_en": "x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>         "description_fr": "x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé"
 #>       },
 #>       "symbol_rate_men": {
-#>         "label": "Symbol for the men+ rate"
+#>         "label_en": "Symbol for the men+ rate",
+#>         "label_fr": "Symbole du taux hommes+",
+#>         "description_en": "x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>         "description_fr": "x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé"
 #>       },
 #>       "symbol_rate_women": {
-#>         "label": "Symbol for the women+ rate"
+#>         "label_en": "Symbol for the women+ rate",
+#>         "label_fr": "Symbole du taux femmes+",
+#>         "description_en": "x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised",
+#>         "description_fr": "x confidentiel en vertu des dispositions de la Loi sur la statistique, F trop peu fiable pour être publié, .. indisponible pour une période de référence précise, ... n'ayant pas lieu de figurer, r révisé"
 #>       }
 #>     },
 #>     "primary_key": [
@@ -425,15 +686,15 @@ jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE)
 #>   "files": [
 #>     {
 #>       "path": "PRUID=10/data_0.parquet",
-#>       "size": 853184,
-#>       "etag": "f5530645ce5c5495e4aed671a4750d67",
-#>       "modified": "2026-10-19T18:21:49Z"
+#>       "size": 857578,
+#>       "etag": "c745e8ebfe901b59bf8c72a983b0f2e0",
+#>       "modified": "2026-10-23T23:20:09Z"
 #>     },
 #>     {
 #>       "path": "PRUID=11/data_0.parquet",
-#>       "size": 294342,
-#>       "etag": "a9bcc0358b2901da95059f581c19b50b",
-#>       "modified": "2026-10-19T18:21:49Z"
+#>       "size": 298736,
+#>       "etag": "050bd6d8b538ced101001921027d4cb3",
+#>       "modified": "2026-10-23T23:20:09Z"
 #>     }
 #>   ]
 #> }
@@ -444,36 +705,37 @@ jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE)
 
 ``` r
 parquet_metadata(profile_url)
-#> <parquet metadata: 9 entries>
-#> title            2021 Census Profile – Aggregate dissemination areas
-#> source_url       https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof…
-#> reference_guide  https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof…
-#> licence          Statistics Canada Open Licence
-#> licence_url      https://www.statcan.gc.ca/en/terms-conditions/open-licence
-#> attribution      Statistics Canada Product 98-401-X2021012
-#> notes            Symbols: x suppressed to meet the confidentiality requirements…
+#> <parquet metadata: 16 entries>
+#>                  en                              fr
+#> title            2021 Census Profile – Aggrega…  Profil du recensement de 2021…
+#> source_url       https://www12.statcan.gc.ca/c…  https://www12.statcan.gc.ca/c…
+#> reference_guide  https://www12.statcan.gc.ca/c…  https://www12.statcan.gc.ca/c…
+#> licence          Statistics Canada Open Licence  Licence ouverte de Statistiqu…
+#> licence_url      https://www.statcan.gc.ca/en/…  https://www.statcan.gc.ca/fr/…
+#> attribution      Statistics Canada, 2021 Censu…  Statistique Canada, Profil du…
+#> notes            Symbols: x suppressed to meet…  Symboles : x confidentiel en …
 #> columns          <15 columns, see below>
 #> primary_key      geo_uid, characteristic_id
 #> 
-#> columns
-#>   geo_uid            Aggregate dissemination area unique identifier
-#>   PRUID              Province or territory unique identifier
-#>   characteristic_id  Characteristic identifier, see profile_characteristics.par…
-#>   total              Count, total
-#>   men                Count, men+
-#>   women              Count, women+
-#>   rate_total         Rate, total
-#>   rate_men           Rate, men+
-#>   rate_women         Rate, women+
-#>   symbol_total       Symbol for the total count
-#>   symbol_men         Symbol for the men+ count
-#>   symbol_women       Symbol for the women+ count
-#>   symbol_rate_total  Symbol for the total rate
-#>   symbol_rate_men    Symbol for the men+ rate
-#>   symbol_rate_women  Symbol for the women+ rate
+#> columns              en                            fr
+#>   geo_uid            Aggregate dissemination are…  Identificateur unique de l'…
+#>   PRUID              Province or territory ID      Identificateur unique de la…
+#>   characteristic_id  Characteristic ID: See prof…  Identificateur de la caract…
+#>   total              Count, total                  Chiffre, total
+#>   men                Count, men+                   Chiffre, hommes+
+#>   women              Count, women+                 Chiffre, femmes+
+#>   rate_total         Rate, total                   Taux, total
+#>   rate_men           Rate, men+                    Taux, hommes+
+#>   rate_women         Rate, women+                  Taux, femmes+
+#>   symbol_total       Symbol for the total count:…  Symbole du chiffre total: x…
+#>   symbol_men         Symbol for the men+ count: …  Symbole du chiffre hommes+:…
+#>   symbol_women       Symbol for the women+ count…  Symbole du chiffre femmes+:…
+#>   symbol_rate_total  Symbol for the total rate: …  Symbole du taux total: x co…
+#>   symbol_rate_men    Symbol for the men+ rate: x…  Symbole du taux hommes+: x …
+#>   symbol_rate_women  Symbol for the women+ rate:…  Symbole du taux femmes+: x …
 ```
 
-`parquet_tbl()` reads the directory as one table, with `PRUID` coming from the paths, and a filter on it only opens the files of the matching partitions. Within a partition the rows are sorted by `characteristic_id`, so a filter on it only downloads the row groups holding that characteristic. The literal is written as `1L`, an integer like the column: a plain `1` is a double in R, which would make DuckDB cast the column instead of using its statistics and download every row group, so the package renders whole numbers in comparisons as integers, with a message the first time, see `?parquet_tbl`.
+`parquet_tbl()` reads the directory as one table, with `PRUID` coming from the paths, and a filter on it only opens the files of the matching partitions. Within a partition the rows are sorted by `characteristic_id`, so a filter on it only downloads the row groups holding that characteristic. The literal is written as `1L`, an integer like the column: a plain `1` is a double in R, which would make DuckDB cast the column instead of using its statistics and download every row group, so the package renders whole numbers in comparisons as integers, with a message the first time, see `?parquet_tbl`. Partition columns are strings, so `PRUID` is compared with `"59"`; a number there would make DuckDB cast the column instead and read every partition, which is why the package renders numbers against partition columns as strings as well.
 
 
 ``` r
@@ -483,21 +745,30 @@ parquet_tbl(profile_url) |>
   collect()
 #> # A tibble: 1 × 3
 #>   PRUID Population Areas
-#>   <dbl>      <dbl> <dbl>
-#> 1    59    5000879  1008
+#>   <chr>      <dbl> <dbl>
+#> 1 59       5000879  1008
 ```
 
-`collect_parquet()` attaches the metadata to the result and the column labels to the columns, and `parquet_metadata()` on a lazy table reads the manifest of its source. Here we join the characteristic names from the file next to the dataset, both tables sit on the same DuckDB connection.
+`collect_parquet()` attaches the metadata to the result and the column labels to the columns, and `parquet_metadata()` on a lazy table reads the manifest of its source. Here we join the characteristic names from the file next to the dataset, both tables sit on the same DuckDB connection. The characteristics file stores the names in both languages, `name_en` and `name_fr`, and the session language makes `parquet_tbl()` select `name_en` as `name`, so the query selects `name` like any other column and `name_fr` never gets read.
 
 
 ``` r
-characteristics <- parquet_tbl("https://data.mountainmath.ca/census/2021/profile_characteristics.parquet")
+characteristics_url <- "https://data.mountainmath.ca/census/2021/profile_characteristics.parquet"
+characteristics <- parquet_tbl(characteristics_url)
 
-area <- parquet_tbl(profile_url) |>
+colnames(characteristics)
+#> [1] "characteristic_id" "name"              "level"            
+#> [4] "note"
+colnames(parquet_tbl(characteristics_url, language = NULL))
+#> [1] "characteristic_id" "name_en"           "name_fr"          
+#> [4] "level"             "note"
+
+area_query <- parquet_tbl(profile_url) |>
   filter(PRUID == "59", geo_uid == "59150002", characteristic_id <= 8L) |>
   inner_join(characteristics, by = "characteristic_id") |>
-  select(geo_uid, characteristic_id, name, total) |>
-  collect_parquet()
+  select(geo_uid, characteristic_id, name, total)
+
+area <- collect_parquet(area_query)
 
 area
 #> # A tibble: 8 × 4
@@ -515,8 +786,42 @@ area
 attr(area$total, "label")
 #> [1] "Count, total"
 parquet_metadata(area)$notes
-#> [1] "Symbols: x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised"
+#> [1] "Symbols: x suppressed to meet the confidentiality requirements of the Statistics Act, F too unreliable to be published, .. not available for a specific reference period, ... not applicable, r revised. Characteristics are described in profile_characteristics.parquet, geographies in profile_ADA_geographies.parquet."
 ```
+
+The joined table contributes its own metadata, `parquet_sources()` lists every table that went into the result, with its attribution, and `parquet_sources_attribution()` joins them for a figure caption. Reading the tables in French gives the French names, labels and attributions with the same query; `select_language()` does the same swap on a table read with `language = NULL`, on joins too, for tables that were created before the language was decided.
+
+
+``` r
+parquet_sources_attribution(area)
+#> [1] "Statistics Canada, 2021 Census Profile, product 98-401-X2021012"
+
+area_fr <- parquet_tbl(profile_url, language = "fr") |>
+  filter(PRUID == "59", geo_uid == "59150002", characteristic_id <= 8L) |>
+  inner_join(parquet_tbl(characteristics_url, language = "fr"), by = "characteristic_id") |>
+  select(geo_uid, characteristic_id, name, total) |>
+  collect_parquet()
+
+area_fr
+#> # A tibble: 8 × 4
+#>   geo_uid  characteristic_id name                                          total
+#>   <chr>                <int> <chr>                                         <dbl>
+#> 1 59150002                 1 Population, 2021                             4256  
+#> 2 59150002                 2 Population, 2016                             3680  
+#> 3 59150002                 3 Variation en pourcentage de la population, …   15.7
+#> 4 59150002                 4 Total des logements privés                   2036  
+#> 5 59150002                 5 Logements privés occupés par des résidents … 1724  
+#> 6 59150002                 6 Densité de la population au kilomètre carré    84.9
+#> 7 59150002                 7 Superficie des terres en kilomètres carrés     50.1
+#> 8 59150002                 8 Total - Groupes d'âge de la population - Do… 4260
+
+attr(area_fr$total, "label")
+#> [1] "Chiffre, total"
+parquet_sources_attribution(area_fr)
+#> [1] "Statistique Canada, Profil du recensement de 2021, produit 98-401-X2021012"
+```
+
+The metadata attached to `area_fr` is the French description, with `language` set to `fr`, since the columns were selected in French; writing it out with `data_to_parquet(area_fr, metadata = parquet_metadata(area_fr))` gives a French dataset. The full bilingual metadata stays available from the lazy table, `parquet_metadata(area_query)`.
 
 Writing a partitioned dataset to R2 with `data_to_parquet(partition_by = )` writes the files and the manifest in one step, and removes the partitions of an earlier write that the new one no longer produces, so the manifest never lists partitions that are gone. Uploading a single partition into the directory later, with `data_to_parquet()` or `upload_parquet()`, patches the manifest with the new file instead of rebuilding it, and so does every upload and removal for the manifests of the directories above, which is how the `census/2021` manifest keeps listing the partition files.
 

@@ -31,7 +31,10 @@ parquet_sources(x, ...)
 
 \item{language}{language code like \code{"fr"} for the metadata of each source in that language, as
 \code{\link[=collect_parquet]{collect_parquet()}} attaches it (\code{attribution_fr} becomes \code{attribution}, see its Languages section), or
-\code{NULL} for the metadata as stored. Defaults to the \code{r2parquet.language} option, like \code{\link[=collect_parquet]{collect_parquet()}}.}
+\code{NULL} for the metadata as stored. Defaults, like \code{\link[=collect_parquet]{collect_parquet()}}, to the language the columns of a
+lazy table were selected in by \code{\link[=parquet_tbl]{parquet_tbl()}} or \code{\link[=select_language]{select_language()}}, else to the \code{r2parquet.language}
+option. Without a language, a source with text in several languages and no \code{language} entry has no plain
+\code{attribution} to return, which a message points out once per session.}
 }
 \value{
 a tibble with one row per source table, left-hand table first: \code{path}, the path(s) passed to

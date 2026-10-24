@@ -66,6 +66,9 @@ for (v in wanted) {
                        function(p) p$value)
   # a failing chunk would otherwise end up as an error message in the vignette
   knitr::opts_chunk$set(error = FALSE)
+  # the package's once-per-session messages start over for each vignette, so that
+  # what a vignette shows doesn't depend on which others were knitted before it
+  rm(list = grep("_noted$", names(parquet_cache), value = TRUE), envir = parquet_cache)
   knitr::knit(src, paste0(v, ".Rmd"), envir = env)
 
   # Say so in the file itself, so an edit to the wrong copy is obvious.

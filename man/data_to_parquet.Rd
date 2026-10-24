@@ -127,8 +127,9 @@ automatically.
 with or without a plain \code{label}, and a column holding another column's text in a language is named
 with the same suffix, \code{name_fr} next to \code{name}, or \code{name_en} and \code{name_fr} without a plain \code{name}. No
 language is privileged: a bilingual dataset can carry only suffixed labels and columns, and \code{language}
-is only needed where there is plain text, to say which language it is in. \code{\link[=collect_parquet]{collect_parquet()}} picks
-the labels and columns of the language asked for, see its \code{language} argument.
+is only needed where there is plain text, to say which language it is in. \code{\link[=parquet_tbl]{parquet_tbl()}} and
+\code{\link[=select_language]{select_language()}} select the columns of the language asked for and \code{\link[=collect_parquet]{collect_parquet()}} attaches its
+labels, see the \code{language} arguments.
 \item \code{primary_key}: the columns that together identify the rows, one like \code{"DBUID"} or several for long
 tables, like \code{c("DAUID", "characteristic")}. They have to exist, have no missing values and identify the
 rows, which gets checked before writing, at the cost of an extra pass over a lazy table. It gets written

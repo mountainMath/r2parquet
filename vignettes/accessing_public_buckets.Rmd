@@ -16,7 +16,11 @@ vignette: >
 library(r2parquet)
 library(dplyr)
 library(ggplot2)
+
+options(r2parquet.language = "en")
 ```
+
+The census datasets in the bucket describe themselves in English and French, the option picks the language for column labels and attributions, see the [Metadata and manifests](metadata.html) article.
 
 As an example we consider accessing dissemination block (DB) level geographic data from the 2021 Canadian census. For this we have prepared a parquet file in a public bucket, it can be reached by url.
 
@@ -42,30 +46,51 @@ This only reads the parquet metadata, the file carries several geographic identi
 
 ``` r
 db_table |> parquet_metadata()
-#> <parquet metadata: 9 entries>
-#> licence           Statistics Canada Open Licence
-#> licence_url       https://www.statcan.gc.ca/en/terms-conditions/open-licence
-#> title             2021 Census – Boundary files - Dissemination blocks
-#> attribution       Statistics Canada Product ldb_000b21f_e
-#> processing        Repaired 830 of 498,547 geometries that were invalid, via sf:…
-#> geometry_repairs  {"columns":"DBUID","rows":["10010273010","10010667008","10010…
+#> <parquet metadata: 18 entries>
+#>                   en                              fr
+#> licence           Statistics Canada Open Licence  Licence ouverte de Statistiqu…
+#> licence_url       https://www.statcan.gc.ca/en/…  https://www.statcan.gc.ca/fr/…
+#> title             2021 Census – Boundary files …  Recensement de 2021 – Fichier…
+#> source_url        https://www12.statcan.gc.ca/c…  https://www12.statcan.gc.ca/c…
+#> reference_guide   https://www12.statcan.gc.ca/c…  https://www12.statcan.gc.ca/c…
+#> attribution       Statistics Canada, 2021 Censu…  Statistique Canada, Fichier d…
+#> notes             The identifiers of the contai…  Les identificateurs des géogr…
+#> columns           <13 columns, see below>
 #> primary_key       DBUID
-#> source_url        https://www12.statcan.gc.ca/census-recensement/alternative_al…
-#> reference_guide   https://www12.statcan.gc.ca/census-recensement/2021/geo/ref/g…
+#> geometry_repairs  {"columns":"DBUID","rows":["10010273010","10010667008","10010…
+#> processing        Repaired 830 of 498,547 geometries that were invalid, via sf:…
+#> 
+#> columns     en                                 fr
+#>   DBUID     Dissemination block ID             Identificateur unique de l'îlot …
+#>   DAUID     Dissemination area ID              Identificateur unique de l'aire …
+#>   CTUID     Census tract ID                    Identificateur unique du secteur…
+#>   CSDUID    Census subdivision ID              Identificateur unique de la subd…
+#>   CMAUID    Census metropolitan area or cens…  Identificateur unique de la régi…
+#>   CMAPUID   CMA/CA provincial part ID: Provi…  Identificateur unique de la part…
+#>   CDUID     Census division ID                 Identificateur unique de la divi…
+#>   PRUID     Province or territory ID           Identificateur unique de la prov…
+#>   DGUID     Dissemination geography unique i…  Identificateur unique de géograp…
+#>   DBRPLAMX  Representative point, x (Lambert)  Point représentatif, x (Lambert)
+#>   DBRPLAMY  Representative point, y (Lambert)  Point représentatif, y (Lambert)
+#>   LANDAREA  Land area (km²)                    Superficie des terres (km²)
+#>   geometry  Boundary, Statistics Canada Lamb…  Limites, projection conique conf…
 ```
 
-A simple query would be to fetch the data for just the City of Vancouver.
+A simple query would be to fetch the data for just the City of Vancouver. The query keeps every column, and the first time that happens with a remote table `collect_parquet()` says so: parquet is stored by column and only the selected columns get downloaded, so the message gives a `select()` of all the columns to paste into the query and prune to the ones needed.
 
 
 ``` r
 data_csd <- db_table |>
   filter(CSDUID=="5915022") |>
   collect_parquet()
+#> Collecting all 13 columns of https://data.mountainmath.ca/census/2021/ldb_000b21f_e.parquet. Parquet is stored by column and only the selected columns get downloaded, so select the ones you need: add
+#>   select(DBUID, DAUID, CTUID, CSDUID, CMAUID, CMAPUID, CDUID, PRUID, DGUID, DBRPLAMX, DBRPLAMY, LANDAREA, geometry)
+#> to the query and remove the columns you don't need. This message is shown once per session.
 
 ggplot(data_csd) +
   geom_sf() +
   labs(title="City of Vancouver Dissemination Blocks",
-       caption=parquet_sources_attribution(data_csd))
+       caption=parquet_sources_attribution(data_csd, sep="\n"))
 ```
 
 <div class="figure">
@@ -84,7 +109,7 @@ data_cma <- db_table |>
 ggplot(data_cma) +
   geom_sf() +
   labs(title="Metro Vancouver Dissemination Blocks",
-       caption=parquet_sources_attribution(data_cma))
+       caption=parquet_sources_attribution(data_cma, sep="\n"))
 ```
 
 <div class="figure">
@@ -113,13 +138,13 @@ data_cma <- db_table |>
 parquet_sources(data_cma) |>
   transmute(file=basename(path),attribution)
 #> # A tibble: 2 × 2
-#>   file                  attribution                            
-#>   <chr>                 <chr>                                  
-#> 1 ldb_000b21f_e.parquet Statistics Canada Product ldb_000b21f_e
-#> 2 2021_92-151_X.parquet Statistics Canada Product 2021_92-151_X
+#>   file                  attribution                                             
+#>   <chr>                 <chr>                                                   
+#> 1 ldb_000b21f_e.parquet Statistics Canada, 2021 Census dissemination block boun…
+#> 2 2021_92-151_X.parquet Statistics Canada, 2021 Census Geographic Attribute Fil…
 ```
 
-`parquet_sources_attribution()` turns these into one attribution for the caption, combining attributions that only differ in their last word.
+`parquet_sources_attribution()` turns these into one string for the caption, separated by `sep`, one per line here so the caption fits the figure; attributions that only differ in their last word, two products of one series say, get combined into one.
 
 
 ``` r
@@ -134,7 +159,7 @@ data_cma |>
   scale_fill_viridis_d(option = "magma") +
   labs(title="Population density in Metro Vancouver",
        fill="Pop/ha",
-       caption=parquet_sources_attribution(data_cma))
+       caption=parquet_sources_attribution(data_cma, sep="\n"))
 ```
 
 <div class="figure">
@@ -167,7 +192,7 @@ data_mask |>
   ggplot() +
   geom_sf() +
   labs(title="Dissemination blocks in central Toronto",
-       caption=parquet_sources_attribution(data_mask)) 
+       caption=parquet_sources_attribution(data_mask, sep="\n")) 
 ```
 
 <div class="figure">

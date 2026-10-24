@@ -242,6 +242,11 @@ st_filter.tbl_r2parquet_connection <- st_filter.tbl_duckdb_connection
 #' Reading the files fails with the errors described in the Errors section of [parquet_tbl()], e.g. an
 #' `r2parquet_network_error` when the server can't be reached.
 #'
+#' Parquet is stored by column, so a query that keeps only the columns it needs downloads only those.
+#' Collecting a table on R2, S3 or at a URL that still has every column it was read with (nothing
+#' selected away, no summary) gives a message, once per session, with a `select()` of the columns it is
+#' about to fetch, to paste into the query and prune.
+#'
 #' For tables from [parquet_tbl()] the metadata of the parquet files (see [parquet_metadata()]) gets attached to
 #' the result: the whole list as the `metadata` attribute, and the `label` entries of `columns` as `label`
 #' attributes of the columns, as the haven and labelled packages use them. The files are looked up through the
@@ -272,31 +277,44 @@ st_filter.tbl_r2parquet_connection <- st_filter.tbl_duckdb_connection
 #' dataset without anything in the language asked for is collected as stored, metadata included.
 #'
 #' Without `language` the result is the dataset as stored, with all its columns, labelled with the plain
-#' labels, else those in the dataset's language; columns with labels only in other languages get none. The
-#' default is the `r2parquet.language` option, so `options(r2parquet.language = "fr")` sets the language once
-#' for a session.
+#' labels, else those in the dataset's language; columns with labels only in other languages get none. A
+#' dataset that carries its text in several languages without a `language` entry, as Statistics Canada's
+#' English and French data does, therefore gets no labels and no attribution until a language is asked for,
+#' which a message points out once per session. The default is the `r2parquet.language` option, so
+#' `options(r2parquet.language = "fr")` sets the language once for a session.
+#'
+#' With the option set, [parquet_tbl()] already selects the columns in that language, through
+#' [select_language()], so the lazy table has `name` rather than `name_en` and `name_fr` and queries can
+#' use it; the labels then come from the stored column it stands in for, and a table whose columns were
+#' selected in a language is described in that language when none is passed here, whatever the option says.
 #'
 #' @param tbl lazy DuckDB table, e.g. from [parquet_tbl()] or [`sf::st_filter()`][st_filter.tbl_duckdb_connection].
 #' @param attach_metadata `TRUE` (default) or `FALSE`: attach the metadata of the parquet files as attributes.
 #' @param language language code like `"en"` or `"fr"` to collect the labels and columns in, see the Languages
-#'   section, or `NULL` for the dataset as stored. Defaults to the `r2parquet.language` option.
+#'   section, or `NULL` for the dataset as stored. Defaults to the language the table's columns were selected
+#'   in by [parquet_tbl()] or [select_language()], else to the `r2parquet.language` option.
 #' @return a tibble, or an sf object if the table has GEOMETRY columns.
 #' @export
 collect_parquet <- function(tbl,attach_metadata=TRUE,language=getOption("r2parquet.language")) {
   call <- sys.call()
-  language <- check_language(language)
+  # a table whose columns select_language() picked in a language is described in that language, unless
+  # another one (or none) is asked for
+  language <- table_language(tbl,language,missing(language))
   con <- dbplyr::remote_con(tbl)
   scans <- table_scans(tbl)
   read_metadata <- isTRUE(attach_metadata) || !is.null(language)
-  metadata <- if (read_metadata) lapply(scans,function(scan)scan_metadata(con,scan$paths,scan$source))
+  metadata <- if (read_metadata) lapply(scans,function(scan)scan_footers(con,scan))
   # the metadata attribute is the left-hand table's, which need not be from parquet_tbl
   paths <- attr(tbl,"r2parquet_paths")
   left <- match(list(paths),lapply(scans,function(scan)scan$paths))
-  left_metadata <- if (!read_metadata || is.null(paths)) NULL else if (is.na(left)) scan_metadata(con,paths,attr(tbl,"r2parquet_source")) else metadata[[left]]
+  left_metadata <- if (!read_metadata || is.null(paths)) NULL else if (is.na(left)) scan_footers(con,left_scan(tbl,scans)) else metadata[[left]]
   # in a language, the columns in that language take the place of their plain columns and the other
-  # languages' columns get left out, before collecting so they don't get read
+  # languages' columns get left out, before collecting so they don't get read; select_language() may have
+  # done that already, its selection maps the columns back to the stored ones for the labels
   columns <- colnames(tbl)
+  note_unselected_columns(columns,scans)
   selection <- NULL
+  recorded <- attr(tbl,"r2parquet_selection")
   if (!is.null(language)) {
     languages <- unlist(lapply(c(list(left_metadata),metadata),metadata_languages))
     selection <- language_columns(columns,language,languages)
@@ -319,12 +337,30 @@ collect_parquet <- function(tbl,attach_metadata=TRUE,language=getOption("r2parqu
   if (isTRUE(attach_metadata)) {
     # in a language the metadata describes the result: entries in that language in place of the plain ones,
     # columns as collected, so the labels are the plain ones of the resolved metadata
+    if (is.null(language)) note_missing_language(c(list(left_metadata),metadata))
     if (!is.null(language)) {
-      left_metadata <- resolve_language(left_metadata,language,columns,selection)
+      left_metadata <- resolve_language(left_metadata,language,columns,selection,recorded)
       metadata <- lapply(metadata,resolve_language,language)
     }
     data <- attach_parquet_metadata(data,left_metadata,metadata)
     if (length(scans)>0) attr(data,"parquet_sources") <- parquet_sources_table(scan_paths(scans),metadata)
   }
   data
+}
+
+# a message, once per session, when a table on R2, S3 or at a URL gets collected with every column it was
+# read with (recorded by parquet_tbl() in its parquet_scans entry): parquet is stored by column and only the
+# selected ones get downloaded, so the message gives the select() of the columns to paste in and prune.
+# Tables recovered from their SQL have no columns recorded and give none
+note_unselected_columns <- function(columns,scans){
+  if (isTRUE(parquet_cache$columns_noted)) return(invisible(FALSE))
+  for (scan in scans) {
+    if (is.null(scan$columns) || !all(is_remote(scan$paths)) || !all(scan$columns %in% columns)) next
+    parquet_cache$columns_noted <- TRUE
+    message("Collecting all ",length(columns)," columns of ",paste0(scan$source,collapse=", "),". Parquet is stored by ",
+            "column and only the selected columns get downloaded, so select the ones you need: add\n  select(",
+            paste0(columns,collapse=", "),")\nto the query and remove the columns you don't need. This message is shown once per session.")
+    return(invisible(TRUE))
+  }
+  invisible(FALSE)
 }

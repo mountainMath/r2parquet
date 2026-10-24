@@ -517,6 +517,17 @@ test_that("metadata in several languages prints one column per language", {
   expect_match(lines[3],"^title +Profile +Profil$")
   expect_match(lines[6],"^columns +plain +fr$")
   expect_match(lines[7],"^  id +Identifier +Identifiant$")
+  # a three letter suffix next to its base is no language unless the dataset names it: licence_url stays an
+  # entry of its own, next to the resolved licence
+  resolved <- r2parquet:::new_parquet_metadata(list(licence="Open Licence",licence_url="https://example.org",title="Profile",language="en"))
+  expect_equal(r2parquet:::print_languages(resolved),"en")
+  lines <- format(resolved,width=80)
+  expect_equal(lines[2:3],c("licence      Open Licence","licence_url  https://example.org"))
+  expect_equal(r2parquet:::print_languages(list(title_eng="Profile",title_fra="Profil")),character(0))
+  expect_equal(r2parquet:::print_languages(list(title_eng="Profile",title_fra="Profil",language="eng",columns=list(id=list(label_fra="Id")))),c("eng","fra"))
+  # the resolver leaves licence_url alone as well
+  stored <- list(licence="Open Licence",licence_fr="Licence ouverte",licence_url="https://example.org")
+  expect_equal(r2parquet:::resolve_language(stored,"fr"),list(licence="Licence ouverte",licence_url="https://example.org",language="fr"))
 })
 
 test_that("collect_parquet picks the labels and columns of a language", {
@@ -528,7 +539,7 @@ test_that("collect_parquet picks the labels and columns of a language", {
     name_fr=list(label="Name, French",label_fr="Nom"),rate="Rate",rate_men=list(label="Rate, men",label_de="Rate, Männer"))))
   tbl <- parquet_tbl(path)
   # without a language the data comes as stored
-  plain <- collect_parquet(tbl)
+  plain <- suppressMessages(collect_parquet(tbl))
   expect_equal(names(plain),names(df))
   expect_equal(attr(plain$id,"label"),"Identifier")
   # in French the French columns take the place of the plain ones, the other languages go
@@ -568,6 +579,44 @@ test_that("collect_parquet picks the labels and columns of a language", {
   expect_equal(unclass(parquet_metadata(tbl,language="fr")),attr(french,"metadata"))
   expect_equal(parquet_metadata(tbl)$language,"en")
   expect_equal(unclass(parquet_metadata(spanish)),unclass(parquet_metadata(tbl)))
+})
+
+test_that("metadata in several languages without a plain one asks for a language once", {
+  df <- data.frame(id=c("a","b"),name_en=c("Canada","Quebec"),name_fr=c("Canada","Québec"),value=1:2)
+  path <- withr::local_tempfile(fileext=".parquet")
+  metadata <- list(title_en="Census profile",title_fr="Profil du recensement",
+                   attribution_en="Statistics Canada",attribution_fr="Statistique Canada",
+                   columns=list(id=list(label_en="Identifier",label_fr="Identifiant")))
+  data_to_parquet(df,path,metadata=metadata)
+  tbl <- parquet_tbl(path)
+  withr::local_options(r2parquet.language=NULL)
+  assign("language_noted",FALSE,envir=r2parquet:::parquet_cache)
+  # nothing resolves without a language, and the message says how to set one, once
+  expect_message(collected <- collect_parquet(tbl),'options\\(r2parquet.language = "en"\\).*once per session')
+  expect_null(attr(collected$id,"label"))
+  expect_equal(names(collected),c("id","name_en","name_fr","value"))
+  expect_null(parquet_sources_attribution(collected))
+  expect_no_message(collect_parquet(tbl))
+  expect_no_message(parquet_sources_attribution(tbl))
+  # the sources and attributions give the message too
+  assign("language_noted",FALSE,envir=r2parquet:::parquet_cache)
+  expect_message(expect_null(parquet_sources_attribution(tbl)),"r2parquet.language")
+  assign("language_noted",FALSE,envir=r2parquet:::parquet_cache)
+  expect_message(parquet_sources(collected),"r2parquet.language")
+  # with a language, or the option, there is nothing to say
+  assign("language_noted",FALSE,envir=r2parquet:::parquet_cache)
+  expect_no_message(english <- collect_parquet(tbl,language="en"))
+  expect_equal(attr(english$id,"label"),"Identifier")
+  expect_equal(names(english),c("id","name","value"))
+  expect_equal(parquet_sources_attribution(english),"Statistics Canada")
+  withr::with_options(list(r2parquet.language="fr"),expect_no_message(expect_equal(parquet_sources_attribution(tbl),"Statistique Canada")))
+  # parquet_metadata returns everything and stays quiet
+  expect_no_message(parquet_metadata(tbl))
+  # a dataset with a language of its own has plain text to fall back on
+  other <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(df,other,metadata=c(metadata,list(language="en",attribution="Statistics Canada")))
+  expect_no_message(collect_parquet(parquet_tbl(other)))
+  expect_false(isTRUE(get("language_noted",envir=r2parquet:::parquet_cache)))
 })
 
 test_that("metadata collected in a language describes the result in that language", {
@@ -629,7 +678,7 @@ test_that("datasets with only suffixed labels and columns privilege no language"
   expect_null(parquet_metadata(path)$language)
   tbl <- parquet_tbl(path)
   # as stored, without a language: labels only where there is a plain one
-  plain <- collect_parquet(tbl)
+  plain <- suppressMessages(collect_parquet(tbl))
   expect_equal(names(plain),names(df))
   expect_null(attr(plain$id,"label"))
   expect_equal(attr(plain$value,"label"),"Value")
@@ -671,4 +720,158 @@ test_that("language columns of joined tables get picked too", {
   expect_equal(as.character(result$name),c("Un","Deux"))
   expect_equal(attr(result$name,"label"),"Nom")
   expect_equal(attr(result$id,"label"),"Identifier")
+})
+
+test_that("select_language picks the columns of a language on the lazy table", {
+  df <- data.frame(id=c("a","b"),name_en=c("One","Two"),name_fr=c("Un","Deux"),rate_men=c(0.1,0.2),value=1:2)
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(df,path,metadata=list(title_en="Numbers",title_fr="Nombres",columns=list(
+    name_en=list(label_en="Name",label_fr="Nom"),name_fr=list(label_en="Name, French",label_fr="Nom"),
+    value=list(label_en="Value",label_fr="Valeur"))))
+  # without a language the table has the columns as stored
+  withr::local_options(r2parquet.language=NULL)
+  tbl <- parquet_tbl(path)
+  expect_equal(colnames(tbl),names(df))
+  expect_null(attr(tbl,"r2parquet_selection"))
+  expect_identical(select_language(tbl,NULL),tbl)
+  expect_error(select_language(tbl,"english"),"language code")
+  expect_error(select_language(df,"en"),"lazy table")
+  # the column in the language stands in for the plain one, the other language is left out before reading
+  french <- select_language(tbl,"fr")
+  expect_equal(colnames(french),c("id","name","rate_men","value"))
+  expect_match(dbplyr::remote_query(french),"name_fr")
+  expect_no_match(dbplyr::remote_query(french),"name_en")
+  expect_equal(attr(french,"r2parquet_selection"),c(id="id",name="name_fr",rate_men="rate_men",value="value"))
+  expect_equal(attr(french,"r2parquet_language"),"fr")
+  # the table keeps what parquet_tbl recorded, so listing and metadata still work
+  expect_equal(attr(french,"r2parquet_paths"),attr(tbl,"r2parquet_paths"))
+  expect_equal(list_parquet(french)$path,path)
+  # collecting labels the column with the label of the stored column it came from and describes the result
+  # in the language the columns were selected in, without the option set
+  collected <- collect_parquet(french)
+  expect_equal(names(collected),c("id","name","rate_men","value"))
+  expect_equal(as.character(collected$name),c("Un","Deux"))
+  expect_equal(attr(collected$name,"label"),"Nom")
+  expect_equal(attr(collected$value,"label"),"Valeur")
+  metadata <- parquet_metadata(collected)
+  expect_equal(metadata$title,"Nombres")
+  expect_equal(metadata$language,"fr")
+  expect_equal(names(metadata$columns),c("name","value"))
+  expect_equal(parquet_sources(collected)$title,"Nombres")
+  # the metadata as stored stays available from the table, and resolves through the selection
+  expect_equal(unclass(parquet_metadata(french))$title_en,"Numbers")
+  expect_equal(names(parquet_metadata(french,language="fr")$columns),c("name","value"))
+  expect_equal(parquet_metadata(french,language="fr")$columns$name$label,"Nom")
+  # dplyr verbs in between keep the selection; the entry of a column selected away stays, as always, the
+  # other language's version of a selected column doesn't
+  subset <- dplyr::filter(french,value==1L) |> dplyr::select(id,name)
+  collected <- collect_parquet(subset)
+  expect_equal(as.character(collected$name),"Un")
+  expect_equal(attr(collected$name,"label"),"Nom")
+  expect_equal(names(parquet_metadata(collected)$columns),c("name","value"))
+  # another language asked for when collecting describes the data in that language
+  english_labels <- collect_parquet(french,language="en")
+  expect_equal(as.character(english_labels$name),c("Un","Deux"))
+  expect_equal(attr(english_labels$name,"label"),"Name, French")
+  # selecting again in another language has nothing left to swap and keeps the columns
+  expect_equal(colnames(select_language(french,"en")),colnames(french))
+  # a table without a column in the language is returned as it is, with the language recorded
+  data_to_parquet(data.frame(id=c("a","b"),value=1:2),path,metadata=list(columns=list(value=list(label_en="Value",label_fr="Valeur"))))
+  tbl <- parquet_tbl(path)
+  expect_equal(colnames(select_language(tbl,"fr")),c("id","value"))
+  expect_equal(attr(collect_parquet(select_language(tbl,"fr"))$value,"label"),"Valeur")
+})
+
+test_that("parquet_tbl selects the columns of the language set", {
+  df <- data.frame(id=c("a","b"),name_en=c("One","Two"),name_fr=c("Un","Deux"),value=1:2)
+  path <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(df,path,metadata=list(columns=list(name_en=list(label_en="Name",label_fr="Nom"),name_fr=list(label_en="Name",label_fr="Nom"))))
+  expect_error(parquet_tbl(path,language="english"),"language code")
+  # the argument
+  tbl <- parquet_tbl(path,language="en")
+  expect_equal(colnames(tbl),c("id","name","value"))
+  expect_equal(attr(tbl,"r2parquet_selection"),c(id="id",name="name_en",value="value"))
+  expect_equal(attr(collect_parquet(tbl)$name,"label"),"Name")
+  expect_equal(as.character(collect_parquet(tbl)$name),c("One","Two"))
+  # the option, and language = NULL for the columns as stored
+  withr::local_options(r2parquet.language="fr")
+  tbl <- parquet_tbl(path)
+  expect_equal(colnames(tbl),c("id","name","value"))
+  expect_equal(as.character(collect_parquet(tbl)$name),c("Un","Deux"))
+  expect_equal(attr(collect_parquet(tbl)$name,"label"),"Nom")
+  expect_equal(colnames(parquet_tbl(path,language=NULL)),names(df))
+  # a table read in another language than the option is described in its own language unless one is passed
+  english <- parquet_tbl(path,language="en")
+  expect_equal(attr(collect_parquet(english)$name,"label"),"Name")
+  expect_equal(parquet_metadata(collect_parquet(english))$language,"en")
+  expect_equal(parquet_sources(english)$language,"en")
+  expect_equal(parquet_sources(collect_parquet(english))$language,"en")
+  expect_equal(attr(collect_parquet(english,language="fr")$name,"label"),"Nom")
+  expect_null(attr(collect_parquet(english,language=NULL)$name,"label"))
+  expect_equal(parquet_sources(english,language="fr")$language,"fr")
+  expect_equal(unclass(parquet_metadata(english))$title_en,NULL)
+  # the metadata gets read once per table: the registry keeps it, and a new table on the path reads afresh
+  scan <- get(as.character(parquet_tbl(path,language=NULL)$lazy_query$x),envir=r2parquet:::parquet_scans)
+  expect_null(scan$metadata)
+  tbl <- parquet_tbl(path)
+  scan <- get(r2parquet:::table_scans(tbl)[[1]]$key,envir=r2parquet:::parquet_scans)
+  expect_equal(names(scan$metadata$columns),c("name_en","name_fr"))
+  data_to_parquet(df,path,metadata=list(title="Changed",columns=list(name_en=list(label_en="Name",label_fr="Nom"),name_fr=list(label_en="Name",label_fr="Nom"))))
+  expect_null(parquet_metadata(tbl)$title)
+  expect_equal(parquet_metadata(tbl,from_files=TRUE)$title,"Changed")
+  expect_equal(parquet_metadata(parquet_tbl(path))$title,"Changed")
+})
+
+test_that("select_language works on joins of tables read without a language", {
+  left <- withr::local_tempfile(fileext=".parquet")
+  right <- withr::local_tempfile(fileext=".parquet")
+  data_to_parquet(data.frame(id=c("a","b"),label_en=c("A","B"),label_fr=c("A (fr)","B (fr)")),left,
+                  metadata=list(columns=list(label_en=list(label_en="Label",label_fr="Étiquette"),label_fr=list(label_en="Label",label_fr="Étiquette"))))
+  data_to_parquet(data.frame(id=c("a","b"),name=c("One","Two"),name_fr=c("Un","Deux")),right,
+                  metadata=list(language="en",columns=list(name=list(label="Name",label_fr="Nom"))))
+  withr::local_options(r2parquet.language=NULL)
+  joined <- dplyr::left_join(parquet_tbl(left),parquet_tbl(right),by="id")
+  expect_equal(colnames(joined),c("id","label_en","label_fr","name","name_fr"))
+  french <- select_language(joined,"fr")
+  expect_equal(colnames(french),c("id","label","name"))
+  collected <- collect_parquet(french)
+  expect_equal(as.character(collected$label),c("A (fr)","B (fr)"))
+  expect_equal(as.character(collected$name),c("Un","Deux"))
+  expect_equal(attr(collected$label,"label"),"Étiquette")
+  expect_equal(attr(collected$name,"label"),"Nom")
+  expect_equal(parquet_sources(french)$language,c("fr","fr"))
+  # tables read in a language join on their plain names
+  withr::local_options(r2parquet.language="fr")
+  joined <- dplyr::left_join(parquet_tbl(left),parquet_tbl(right),by="id")
+  expect_equal(colnames(joined),c("id","label","name"))
+  collected <- collect_parquet(joined)
+  expect_equal(as.character(collected$name),c("Un","Deux"))
+  expect_equal(attr(collected$label,"label"),"Étiquette")
+  expect_equal(attr(collected$name,"label"),"Nom")
+})
+
+test_that("collecting every column of a remote table suggests a select, once per session", {
+  skip_if_no_duckdb_extensions()
+  root <- withr::local_tempdir()
+  df <- data.frame(id=1:3,name=c("a","b","c"),value=c(1.5,2.5,3.5))
+  data_to_parquet(df,file.path(root,"data.parquet"))
+  base <- local_http_server(root)
+  reset <- function()assign("columns_noted",FALSE,envir=r2parquet:::parquet_cache)
+  reset()
+  withr::defer(reset())
+  # a local table gives no message, nor a remote one with columns selected away or summarised
+  expect_silent(collect_parquet(parquet_tbl(file.path(root,"data.parquet"))))
+  tbl <- parquet_tbl(paste0(base,"/data.parquet"))
+  expect_silent(collect_parquet(dplyr::select(tbl,id,value)))
+  expect_silent(collect_parquet(dplyr::summarise(tbl,n=dplyr::n())))
+  expect_silent(collect_parquet(dplyr::count(dplyr::left_join(dplyr::select(tbl,id,name),dplyr::select(tbl,id,value),by="id"))))
+  # with every column still there, the message gives the select() of the columns to prune, also after a
+  # filter or mutate, and only once per session
+  expect_message(collect_parquet(dplyr::filter(tbl,id>1L)),"select\\(id, name, value\\)")
+  expect_silent(collect_parquet(dplyr::mutate(tbl,double=value*2)))
+  reset()
+  expect_message(collect_parquet(dplyr::mutate(tbl,double=value*2)),"select\\(id, name, value, double\\)")
+  reset()
+  # a joined table keeps the message when all columns of a remote table come along
+  expect_message(collect_parquet(dplyr::left_join(tbl,dplyr::select(tbl,id,other=value),by="id")),"all 4 columns of http")
 })

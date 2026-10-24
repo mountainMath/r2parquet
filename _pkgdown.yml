@@ -10,6 +10,7 @@ reference:
   contents:
   - parquet_tbl
   - st_filter.tbl_duckdb_connection
+  - select_language
   - collect_parquet
   - parquet_metadata
   - parquet_sources

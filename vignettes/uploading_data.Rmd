@@ -192,6 +192,9 @@ con <- parquet_tbl("r2://test/census/2021/lcma000b21f_e.parquet")
 data <- con |>
   filter(CMAUID == "462") |>
   collect_parquet()
+#> Collecting all 9 columns of r2://test/census/2021/lcma000b21f_e.parquet. Parquet is stored by column and only the selected columns get downloaded, so select the ones you need: add
+#>   select(CMAUID, CMAPUID, DGUID, DGUIDP, CMANAME, CMATYPE, LANDAREA, PRUID, geometry)
+#> to the query and remove the columns you don't need. This message is shown once per session.
 
 ggplot(data) +
   geom_sf() +
