@@ -68,7 +68,7 @@ geo_attributes |>
   filter(CMAUID == "933") |>
   select(DBUID, DAUID, CSDUID, CSDNAME, Population = DBPOP2021, Dwellings = DBTDWELL2021) |>
   data_to_parquet(private_path, sort_by = "DBUID",
-                  metadata = parquet_metadata(geo_attributes)[c("title_en", "title_fr", "attribution_en", "attribution_fr",
+                  metadata = parquet_metadata(geo_attributes)[c("languages", "title_en", "title_fr", "attribution_en", "attribution_fr",
                                                                 "licence_en", "licence_fr", "licence_url_en", "licence_url_fr")])
 #> Uploading 85.9 kB in 1 parquet file to s3://mountainmath/test/vignette/private/van_db_attributes.parquet.
 ```
@@ -165,10 +165,11 @@ The manifest carries the metadata of the dataset, so `parquet_metadata()` reads 
 
 ``` r
 parquet_metadata(cma_url)
-#> <parquet metadata: 18 entries>
+#> <parquet metadata: 19 entries>
 #>                   en                              fr
 #> licence           Statistics Canada Open Licence  Licence ouverte de Statistiqu…
 #> licence_url       https://www.statcan.gc.ca/en/…  https://www.statcan.gc.ca/fr/…
+#> languages         en, fr
 #> title             2021 Census – Boundary files …  Recensement de 2021 – Fichier…
 #> source_url        https://www12.statcan.gc.ca/c…  https://www12.statcan.gc.ca/c…
 #> reference_guide   https://www12.statcan.gc.ca/c…  https://www12.statcan.gc.ca/c…
