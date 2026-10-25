@@ -13,7 +13,7 @@ accent  <- "#2F7FC1"
 font    <- "Menlo"
 
 hex <- (function(){a <- (90+60*(0:5))*pi/180; m <- cbind(cos(a), sin(a)); st_polygon(list(rbind(m, m[1,])))})()
-hex_in <- st_buffer(hex, -0.035)
+hex_in <- st_buffer(hex, -0.055) # the border sits inside the hex so the canvas holds all of it
 rot <- function(a){a <- a*pi/180; matrix(c(cos(a),-sin(a),sin(a),cos(a)),2)}
 xform <- function(g, angle, s, off)(g*rot(angle))*s + off
 rect <- function(x0,x1,y0,y1)st_polygon(list(cbind(c(x0,x1,x1,x0,x0),c(y0,y0,y1,y1,y0))))
@@ -88,7 +88,7 @@ p <- ggplot() +
   geom_sf(data=st_sfc(band), fill=walnut[1], colour=NA) +
   geom_sf(data=st_sfc(st_intersection(hex_in, st_linestring(cbind(c(-1,1),c(top,top))))), colour=maple, linewidth=0.6) +
   annotate("text", x=0, y=(top-0.62)/2-0.11, label="r2parquet", family=font, fontface="bold", size=4.6, colour=maple) +
-  geom_sf(data=st_sfc(st_difference(st_buffer(hex,0.02), hex_in)), fill=border, colour=NA) +
+  geom_sf(data=st_sfc(st_difference(hex, hex_in)), fill=border, colour=NA) +
   coord_sf(xlim=c(-sqrt(3)/2, sqrt(3)/2), ylim=c(-1,1), expand=FALSE, datum=NA) +
   theme_void() + theme(plot.margin=margin(0,0,0,0), plot.background=element_blank())
 
